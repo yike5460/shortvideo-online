@@ -2,12 +2,13 @@
 
 ## Search Service
 
-### Overall Workflow:
-1. user input multimodal queries (text or image) along with the video path (Youtube url for remote video and local video path for local video) to search video clips with the following options:
-- exact keywords search according to the video image, e.g. hummingbird in the video, or joe biden, caption American 
-- exact keywords search according to the video audio, e.g. make america great again speech in the video
-- fuzzy semantic expression search, e.g. all the slang prompted in the video
-- image search, e.g. find the video clip that contains the image of a hummingbird
+### User Workflow
+1. user input multimodal queries (text, audio, image) along with the video path (Youtube url for remote video and local video path for local video) to search video clips with the following options:
+- exact keywords search according to the video audio or frames, e.g. user input the text "make america great again speech" or "hummingbird"
+- fuzzy semantic expression search according to the video audio or frames, e.g. user input the text "all the slang prompted in the video" or "all the birds in the video"
+- audio search, e.g. user input the audio with voice "make america great again speech"
+- image search, e.g. user input the image of a hummingbird
+- advanced hybrid search, e.g. user input the image of a Joe Biden and the audio of "make america great again speech", setting the weight of the audio to 0.3 and the image to 0.7
 
 2. user will get output inlcude list of (top k) video clips along with the duration timestamp include the queries, in format of json
 ```json
@@ -21,10 +22,10 @@
 }
 ```
 
-### Frontend Module
+### Frontend
 Using Next.js, Tailwind CSS, Shadcn UI to build the frontend UI. The frontend will include a search bar to input the queries and the video path, and a button to trigger the search. The search result will be displayed in grid view for a list of video clips with the timestamp and the duration, user can hover on each video clip to see the detail information and see the preview of the video clip.
 
-### Backend Module
+### Backend Features
 
 ### Download Video
 Using [YoutubeDL](https://github.com/ytdl-org/youtube-dl) to download the video from Youtube URL and store to Amazon S3. To consider the performance, we will use Amazon Cloudwatch Event to trigger the Lambda function to crawl the video specific Youtube category (e.g. trending, music, gaming, etc.) and store to Amazon S3.
@@ -37,128 +38,364 @@ Using S3 event notification to trigger the Lambda function to extract metadata f
 - Using Amazon Bedrock summarize the video content into a short paragraph.
 
 ### Video Metadata Storage
-Using Amazon Opensearch to store the video information and the search result. The schema of the metadata stored in Opensearch is as follows:
+Using Amazon Opensearch to store the video information and enable multimodal search capabilities. The schema is optimized for both exact keyword matching and semantic search across visual and audio content:
+
 ```json
 {
     "video_id": "string",  // Unique identifier for the video
-    "video_path": "string",  // Youtube URL or local video path
-    "s3_path": "string",  // S3 storage location
-    "title": "string",  // Video title
-    "description": "string",  // Original video description
-    "summary": "string",  // AI-generated summary
-    "duration": "string",  // Total video duration in SMPTE format
-    "upload_date": "datetime",
-    "metadata": {
-        "audio_transcript": {
-            "segments": [
-                {
-                    "start_time": "string",  // SMPTE format
-                    "end_time": "string",
-                    "text": "string",
-                    "confidence": "float"
-                }
-            ]
+    "video_original_path": "string",  // Youtube URL or local video path
+    "video_s3_path": "string",  // S3 storage location
+    "video_title": "string",  // Video title
+    "video_description": "string",  // Original video description    
+    "video_duration": "string",  // Total video duration in SMPTE format
+    "video_summary": "string",  // Video summary, AI generated
+    // Detailed segment data, used after finding matches
+    "video_segments": [
+        {
+            "segment_id": "string",
+            "segment_start_time": "string",  // SMPTE format
+            "segment_end_time": "string",    // SMPTE format
+            "segment_duration": "string",  // SMPTE format
+            "segment_audio": {
+                "segment_audio_transcript": "string",  // Raw transcript text
+                "segment_audio_semantic_embedding": [0.0],  // Audio embedding
+                "segment_audio_description": "string"  // Audio description, AI generated
+            },
+            "segment_visual": {
+                "segment_visual_keyframe_path": "string",  // S3 path to keyframe
+                "segment_visual_label": "string",  // Visual object label (e.g., "hummingbird", "person")
+                "segment_visual_description": "string",  // Visual description, AI generated
+                // Object detection if any
+                "segment_visual_objects": [
+                    {
+                        "segment_visual_object_label": "string",  // Visual object label (e.g., "hummingbird", "person")
+                        "segment_visual_object_confidence": "float",
+                        "segment_visual_object_bounding_box": {
+                            "segment_visual_object_bounding_box_left": "float",
+                            "segment_visual_object_bounding_box_top": "float",
+                    "segment_visual_bounding_box_width": "float",
+                            "segment_visual_object_bounding_box_height": "float"
+                        },
+                    }
+                ],
+                // Face detection if any
+                "segment_visual_faces": [
+                    {
+                        "person_name": "string",  // Identified person (e.g., "Joe Biden")
+                        "segment_visual_face_confidence": "float",
+                        "segment_visual_face_bounding_box": {
+                            "segment_visual_face_bounding_box_left": "float",
+                            "segment_visual_face_bounding_box_top": "float",
+                            "segment_visual_face_bounding_box_width": "float",
+                            "segment_visual_face_bounding_box_height": "float"
+                        }
+                    }
+                ],
+                "segment_visual_embedding": [0.0],  // Visual embedding for image similarity search
+                "segment_visual_ocr_text": ["string"]  // Extracted text from images
+            }
+        }
+    ],
+    // Quick search data - used for initial search
+    "video_metadata": {
+        "exact_match_keywords": {
+            "visual": ["string"],  // All visual objects and faces for exact matching
+            "audio": ["string"],   // Important phrases and keywords from audio
+            "text": ["string"]     // OCR and caption text for exact matching
         },
-        "visual_content": {
-            "keyframes": [
-                {
-                    "timestamp": "string",  // SMPTE format
-                    "s3_path": "string",  // Path to stored keyframe
-                    "objects": ["string"],  // Detected objects
-                    "scene_description": "string",  // AI-generated scene description
-                    "embeddings": [0.0]  // Vector embeddings for similarity search
-                }
-            ]
-        },
-        "tags": ["string"],  // Auto-generated and manual tags
-        "categories": ["string"]  // Video categories
-    },
-    "search_vectors": {
-        "text_embedding": [0.0],  // Combined text embeddings
-        "visual_embedding": [0.0]  // Combined visual embeddings
+        "semantic_vectors": {
+            "visual_embedding": [0.0],  // A numerical vector representing the overall visual content of the video. Used for finding visually similar videos or when searching with an image query.
+            "text_embedding": [0.0],    // A numerical vector representing the semantic meaning of all text content. Used for fuzzy text search where exact matches aren't required (e.g., searching for "birds" might match "parrots" or "hummingbirds").
+            "audio_embedding": [0.0]    // A numerical vector representing the audio content. Used for finding videos with similar audio content or when searching with an audio query.
+        }
     }
 }
 ```
 
+### Video Search
+The OpenSearch schema supports:
+1. **Exact Keyword Search**:
+   - Visual objects and faces through `segment_visual_objects.segment_visual_object_label` and `segment_visual_faces.person_name`
+   - Audio content through `segment_audio.segment_audio_transcript`
+   - Text content through `segment_visual.segment_visual_ocr_text`
+   - Pre-extracted keywords through `video_metadata.exact_match_keywords`
+
+2. **Semantic Search**:
+   - Visual similarity search using `segment_visual.segment_visual_embedding` and `video_metadata.semantic_vectors.visual_embedding`
+   - Audio content similarity using `segment_audio.segment_audio_semantic_embedding` and `video_metadata.semantic_vectors.audio_embedding`
+   - Text semantic search using `video_metadata.semantic_vectors.text_embedding`
+   - AI-generated descriptions through `segment_visual.segment_visual_description` and `segment_audio.segment_audio_description`
+
+3. **Multimodal Queries**:
+   - Combined search across visual, audio, and text modalities using respective embeddings
+   - Weighted multi-modal search using combined embeddings from `video_metadata.semantic_vectors`
+
+Best practice for the selection between segment_visual.segment_visual_embedding and search_metadata.semantic_vectors.visual_embedding depends on your search requirements,
+- Start with search_metadata.semantic_vectors.visual_embedding to quickly filter relevant videos
+- Then use segment_visual.segment_visual_embedding to find specific matching segments within those videos
+This two-step approach provides both efficiency and precision. For example, if searching for "a scene with a sunset over the ocean":
+- First use the global embedding to find videos that likely contain sunset scenes
+- Then use segment embeddings to pinpoint the exact moments where sunsets appear
+Same rule for audio and text search.
+
 ### Backend Architecture
 
-#### Data Processing Pipeline
-1. **Video Ingestion Service**
-   - Handles video upload/URL submission
-   - Validates video format and content
-   - Triggers the download process for YouTube videos
-   - Manages S3 storage organization
+1. **Storage Layer**
+   - **Amazon S3**
+     - `raw-videos/`: Original uploaded videos
+     - `processed-videos/`: Processed video segments
+     - `keyframes/`: Extracted video frames
+     - `audio/`: Extracted audio files
+     - `embeddings/`: Pre-computed embeddings
+   - **Amazon OpenSearch**
+     - Video metadata and search indices
+     - Vector embeddings for similarity search
+     - Real-time search capabilities
+   - **Amazon ElastiCache (Redis)**
+     - Search results caching
+     - Hot segment caching
+     - Processing status tracking
 
-2. **Video Processing Service**
-   - Manages distributed video processing tasks
-   - Extracts keyframes using FFMPEG
-   - Generates audio transcripts using Amazon Transcribe
-   - Creates embeddings using Amazon Bedrock
-   - Handles parallel processing for large videos
+2. **Compute Layer**
+   - **Amazon Lambda**
+     - `video-download`: YouTube video download handler
+     - `video-segment`: Video segmentation processor
+     - `embedding-generator`: Generates embeddings for all modalities
+     - `search-handler`: Handles search requests
+     - `metadata-processor`: Processes and indexes video metadata
+   - **Amazon ECS (Fargate)**
+     - Long-running video processing tasks
+     - Heavy computational workloads
+     - Parallel processing orchestration
 
-3. **Search Engine Service**
-   - Manages search queries across different modalities
-   - Implements vector similarity search
-   - Handles text-based search with fuzzy matching
-   - Provides relevance scoring and ranking
-   - Supports multi-modal query processing
+3. **AI/ML Layer**
+   - **Amazon Bedrock**
+     - Text embedding generation
+     - Visual embedding generation
+     - Video content summarization
+   - **Amazon Transcribe**
+     - Audio transcription
+     - Speaker identification
+   - **Amazon Rekognition**
+     - Object detection
+     - Face detection and recognition
+     - Scene analysis
 
-4. **Cache and Performance Layer**
-   - Implements Redis for frequent search results
-   - Caches processed video segments
-   - Manages hot/cold storage optimization
-   - Handles rate limiting and request queuing
+#### Workflow
 
-### System Components
+Overall workflow of the backend service:
+```mermaid
+graph TD
+A[Video Input] --> B[Video Ingestion Service]
+B --> C[S3 Raw Storage]
+C --> D[Video Processing Service]
+D --> |Parallel Processing| E1[Frame Extraction]
+D --> |Parallel Processing| E2[Audio Extraction]
+D --> |Parallel Processing| E3[Metadata Extraction]
+E1 --> F1[Visual Embedding]
+E2 --> F2[Audio Embedding]
+E3 --> F3[Text Embedding]
+F1 --> G[OpenSearch Indexing]
+F2 --> G
+F3 --> G
+G --> H[Search Service]
+H --> I[Cache Layer]
+I --> J[API Gateway]
+```
 
-#### AWS Infrastructure
-- **Amazon S3**
-  - Raw video storage
-  - Processed keyframes
-  - Extracted audio files
-  - Temporary processing artifacts
+Video Injestion:
+```mermaid
+sequenceDiagram
+participant Client
+participant API Gateway
+participant Lambda
+participant S3
+participant SQS
+Client->>API Gateway: Upload Video/URL
+API Gateway->>Lambda: Trigger Ingestion
+Lambda->>S3: Store Raw Video
+Lambda->>SQS: Queue Processing Job
+Lambda->>Client: Return Job ID
+```
 
-- **Amazon OpenSearch**
-  - Video metadata indexing
-  - Vector search capabilities
-  - Full-text search functionality
-  - Real-time analytics
+Video Processing:
+```mermaid
+sequenceDiagram
+    participant SQS
+    participant ECS Task Manager
+    participant Fargate Container
+    participant Rekognition
+    participant Bedrock
+    participant Transcribe
+    participant S3
+    participant OpenSearch
 
-- **Amazon Lambda**
-  - Video processing triggers
-  - Search query handling
-  - Metadata updates
-  - Event-driven processing
-
-- **Amazon ECS/EKS**
-  - Video processing workers
-  - Search API services
-  - Background task processing
-
+    SQS->>ECS Task Manager: Dequeue Processing Job
+    ECS Task Manager->>Fargate Container: Launch Processing Task
+    
+    par Parallel Processing
+        Fargate Container->>S3: Get Raw Video
+        Fargate Container->>Rekognition: Object & Face Detection
+        Fargate Container->>Bedrock: Generate Visual Embeddings
+        Fargate Container->>Transcribe: Generate Audio Transcript
+    end
+    
+    Rekognition-->>Fargate Container: Objects, Faces & Labels
+    Bedrock-->>Fargate Container: Visual & Text Embeddings
+    Transcribe-->>Fargate Container: Audio Transcript
+    
+    Fargate Container->>S3: Store Processed Segments
+    Fargate Container->>OpenSearch: Index Metadata & Embeddings
+    
+    Fargate Container->>ECS Task Manager: Task Complete
+    ECS Task Manager->>SQS: Delete Message
+```
 
 ### RESTful API Endpoints
 
-```plaintext
+#### Video Management
+```http
+# Upload or register new video
 POST /api/v1/videos
-- Upload or register new video
+Content-Type: multipart/form-data
+{
+    "video": binary,           # Video file upload
+    "videoUrl": string,        # YouTube URL
+    "metadata": {
+        "title": string,
+        "description": string,
+        "tags": string[]
+    }
+}
 
-GET /api/v1/videos/{video_id}
-- Retrieve video metadata
+# Get video metadata
+GET /api/v1/videos/{videoId}
+Response: {
+    "videoId": string,
+    "originalPath": string,
+    "s3Path": string,
+    "duration": string,
+    "status": "processing|ready|failed",
+    "metadata": object,
+    "summary": string
+}
 
-POST /api/v1/search
-- Multi-modal search endpoint
-- Supports text, image, and combined queries
-
-GET /api/v1/videos/{video_id}/segments
-- Retrieve video segments matching criteria
-
-POST /api/v1/process
-- Trigger video processing manually
-
-GET /api/v1/status/{job_id}
-- Check processing status
+# Delete video
+DELETE /api/v1/videos/{videoId}
 ```
 
-## Editing Service
+#### Search Operations
+```http
+# Multi-modal search
+POST /api/v1/search
+{
+    "query": {
+        "text": string,          # Text query
+        "image": binary,         # Image query
+        "audio": binary,         # Audio query
+        "weights": {             # Optional weights for multi-modal search
+            "visual": float,
+            "audio": float,
+            "text": float
+        }
+    },
+    "filters": {
+        "duration": {
+            "min": string,
+            "max": string
+        },
+        "objects": string[],     # Required objects
+        "faces": string[],       # Required faces
+        "keywords": string[]     # Required keywords
+    },
+    "pagination": {
+        "offset": integer,
+        "limit": integer
+    }
+}
 
-## Template Service
+# Get video segments
+GET /api/v1/videos/{videoId}/segments
+Response: {
+    "segments": [{
+        "segmentId": string,
+        "startTime": string,
+        "endTime": string,
+        "duration": string,
+        "keyframePath": string,
+        "transcript": string,
+        "objects": object[],
+        "faces": object[]
+    }]
+}
+```
+
+#### Processing Operations
+```http
+# Get processing status
+GET /api/v1/process/{jobId}/status
+Response: {
+    "jobId": string,
+    "status": "queued|processing|completed|failed",
+    "progress": float,           # 0 to 1
+    "currentStage": string,      # e.g., "extracting_frames"
+    "error": string,             # Error message if failed
+    "completedSteps": string[],
+    "remainingSteps": string[]
+}
+
+# Trigger reprocessing
+POST /api/v1/videos/{videoId}/reprocess
+{
+    "steps": string[],          # Optional specific steps to reprocess
+    "force": boolean            # Force reprocessing even if already processed
+}
+```
+
+#### Analytics Operations
+```http
+# Get video analytics
+GET /api/v1/videos/{videoId}/analytics
+Response: {
+    "viewCount": integer,
+    "searchMatches": integer,
+    "popularSegments": [{
+        "segmentId": string,
+        "matchCount": integer,
+        "averageRelevance": float
+    }],
+    "commonQueries": [{
+        "query": string,
+        "count": integer
+    }]
+}
+```
+
+#### Health and Monitoring
+```http
+# System health check
+GET /api/v1/health
+Response: {
+    "status": "healthy|degraded|down",
+    "components": {
+        "storage": {
+            "s3": "healthy|degraded|down",
+            "openSearch": "healthy|degraded|down"
+        },
+        "processing": {
+            "fargate": "healthy|degraded|down",
+            "lambda": "healthy|degraded|down"
+        },
+        "ai": {
+            "bedrock": "healthy|degraded|down",
+            "rekognition": "healthy|degraded|down",
+            "transcribe": "healthy|degraded|down"
+        }
+    },
+    "metrics": {
+        "processingQueueSize": integer,
+        "averageProcessingTime": float,
+        "errorRate": float
+    }
+}
+```
