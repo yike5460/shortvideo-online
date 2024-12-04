@@ -1,0 +1,12 @@
+{
+  "name": "video-processor",
+  "version": "1.0.0",
+  "description": "Video processing service",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "aws-sdk": "^2.1450.0"
+  }
+} 
