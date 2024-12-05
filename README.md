@@ -27,17 +27,17 @@ Using Next.js, Tailwind CSS, Shadcn UI to build the frontend UI. The frontend wi
 
 ### Backend Features
 
-### Download Video
+#### Download Video
 Using [YoutubeDL](https://github.com/ytdl-org/youtube-dl) to download the video from Youtube URL and store to Amazon S3. To consider the performance, we will use Amazon Cloudwatch Event to trigger the Lambda function to crawl the video specific Youtube category (e.g. trending, music, gaming, etc.) and store to Amazon S3.
 
-### Video Extraction
+#### Video Extraction
 Using S3 event notification to trigger the Lambda function to extract metadata from the video, including the raw audio, the raw image, the raw text description of the video and summary of the video.
 - Using FFMPEG to extract the audio from the video.
 - Using Amazon Transcribe to extract the text from the audio.
 - Using FFMPEG to capture the video key frames intervally and send to Amazon Bedrock for image extraction.
 - Using Amazon Bedrock summarize the video content into a short paragraph.
 
-### Video Metadata Storage
+#### Video Metadata Storage
 Using Amazon Opensearch to store the video information and enable multimodal search capabilities. The schema is optimized for both exact keyword matching and semantic search across visual and audio content:
 
 ```json
@@ -49,7 +49,7 @@ Using Amazon Opensearch to store the video information and enable multimodal sea
     "video_description": "string",  // Original video description    
     "video_duration": "string",  // Total video duration in SMPTE format
     "video_summary": "string",  // Video summary, AI generated
-    // Detailed segment data, used after finding matches
+    // Here the video segment is general concept of the video shot, which is "a series of interrelated consecutive pictures taken contiguously by a single camera and representing a continuous action in time and space. "
     "video_segments": [
         {
             "segment_id": "string",
@@ -63,31 +63,30 @@ Using Amazon Opensearch to store the video information and enable multimodal sea
             },
             "segment_visual": {
                 "segment_visual_keyframe_path": "string",  // S3 path to keyframe
-                "segment_visual_label": "string",  // Visual object label (e.g., "hummingbird", "person")
                 "segment_visual_description": "string",  // Visual description, AI generated
-                // Object detection if any
+                // Object detection results
                 "segment_visual_objects": [
                     {
-                        "segment_visual_object_label": "string",  // Visual object label (e.g., "hummingbird", "person")
-                        "segment_visual_object_confidence": "float",
-                        "segment_visual_object_bounding_box": {
-                            "segment_visual_object_bounding_box_left": "float",
-                            "segment_visual_object_bounding_box_top": "float",
-                    "segment_visual_bounding_box_width": "float",
-                            "segment_visual_object_bounding_box_height": "float"
+                        "label": "string",  // Object label (e.g., "hummingbird", "person")
+                        "confidence": "float",
+                        "bounding_box": {
+                            "left": "float",
+                            "top": "float",
+                            "width": "float",
+                            "height": "float"
                         },
                     }
                 ],
-                // Face detection if any
+                // Face detection results
                 "segment_visual_faces": [
                     {
                         "person_name": "string",  // Identified person (e.g., "Joe Biden")
-                        "segment_visual_face_confidence": "float",
-                        "segment_visual_face_bounding_box": {
-                            "segment_visual_face_bounding_box_left": "float",
-                            "segment_visual_face_bounding_box_top": "float",
-                            "segment_visual_face_bounding_box_width": "float",
-                            "segment_visual_face_bounding_box_height": "float"
+                        "confidence": "float",
+                        "bounding_box": {
+                            "left": "float",
+                            "top": "float",
+                            "width": "float",
+                            "height": "float"
                         }
                     }
                 ],
@@ -112,10 +111,11 @@ Using Amazon Opensearch to store the video information and enable multimodal sea
 }
 ```
 
-### Video Search
+#### Video Search
 The OpenSearch schema supports:
 1. **Exact Keyword Search**:
-   - Visual objects and faces through `segment_visual_objects.segment_visual_object_label` and `segment_visual_faces.person_name`
+   - Visual objects through `segment_visual_objects.label`
+   - Face recognition through `segment_visual_faces.person_name`
    - Audio content through `segment_audio.segment_audio_transcript`
    - Text content through `segment_visual.segment_visual_ocr_text`
    - Pre-extracted keywords through `video_metadata.exact_match_keywords`
@@ -130,15 +130,18 @@ The OpenSearch schema supports:
    - Combined search across visual, audio, and text modalities using respective embeddings
    - Weighted multi-modal search using combined embeddings from `video_metadata.semantic_vectors`
 
-Best practice for the selection between segment_visual.segment_visual_embedding and search_metadata.semantic_vectors.visual_embedding depends on your search requirements,
-- Start with search_metadata.semantic_vectors.visual_embedding to quickly filter relevant videos
-- Then use segment_visual.segment_visual_embedding to find specific matching segments within those videos
-This two-step approach provides both efficiency and precision. For example, if searching for "a scene with a sunset over the ocean":
-- First use the global embedding to find videos that likely contain sunset scenes
-- Then use segment embeddings to pinpoint the exact moments where sunsets appear
-Same rule for audio and text search.
+Best practice for the selection between `segment_visual.segment_visual_embedding` and `video_metadata.semantic_vectors.visual_embedding` depends on your search requirements:
+- Start with `video_metadata.semantic_vectors.visual_embedding` to quickly filter relevant videos
+- Then use `segment_visual.segment_visual_embedding` to find specific matching segments within those videos
 
-### Backend Architecture
+This two-step approach provides both efficiency and precision. For example, if searching for "a scene with a sunset over the ocean":
+1. First use the global embedding to find videos that likely contain sunset scenes
+2. Then use segment embeddings to pinpoint the exact moments where sunsets appear
+3. Finally, use `segment_visual_objects.label` and confidence scores to verify the presence of specific objects
+
+Same approach applies for audio and text search, using their respective global and segment-level embeddings.
+
+#### Backend Architecture
 
 1. **Storage Layer**
    - **Amazon S3**
