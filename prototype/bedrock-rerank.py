@@ -1,8 +1,14 @@
+# Check the latest release feture in https://aws.amazon.com/blogs/machine-learning/cohere-rerank-3-5-is-now-available-in-amazon-bedrock-through-rerank-api/
 import boto3
 import json
 from typing import List, Dict
 
-def rerank_documents(query: str, documents: List[Dict[str, str]]) -> Dict:
+bedrock_agent = boto3.client(
+    service_name='bedrock-agent-runtime',
+    region_name='us-west-2'  # specify your region
+)
+
+def rerank_documents(bedrock_agent: boto3.client, query: str, documents: List[Dict[str, str]]) -> Dict:
     """
     Rerank documents using AWS Bedrock Agent Runtime's rerank API.
     
@@ -13,10 +19,7 @@ def rerank_documents(query: str, documents: List[Dict[str, str]]) -> Dict:
     Returns:
         Dict containing the reranked results
     """
-    bedrock_agent = boto3.client(
-        service_name='bedrock-agent-runtime',
-        region_name='us-east-1'  # specify your region
-    )
+
 
     # Prepare the reranking request
     request = {
@@ -25,12 +28,14 @@ def rerank_documents(query: str, documents: List[Dict[str, str]]) -> Dict:
                 "textQuery": {
                     "text": query
                 },
-                "type": "SEMANTIC"
+                # Other possible parameters: SEMANTIC_SEARCH, KEYWORD_SEARCH
+                "type": "TEXT"
             }
         ],
         "sources": [
             {
-                "type": "INLINE_DOCUMENT",
+                # Other possible parameters: INLINE_DOCUMENT, INLINE
+                "type": "INLINE",
                 "inlineDocumentSource": {
                     "type": "TEXT",
                     "textDocument": {
@@ -41,12 +46,13 @@ def rerank_documents(query: str, documents: List[Dict[str, str]]) -> Dict:
             for i, doc in enumerate(documents)
         ],
         "rerankingConfiguration": {
-            "type": "BEDROCK",
+            "type": "BEDROCK_RERANKING_MODEL",
             "bedrockRerankingConfiguration": {
                 "modelConfiguration": {
-                    "modelArn": "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-v2",
+                    "modelArn": "arn:aws:bedrock:us-west-2::foundation-model/cohere.rerank-v3-5:0",
+                    # "modelArn": "arn:aws:bedrock:us-west-2::foundation-model/amazon.rerank-v1:0",
                     "additionalModelRequestFields": {
-                        "maxTokens": 1000
+                        "max_tokens_per_doc": 1000
                     }
                 },
                 "numberOfResults": min(len(documents), 10)
@@ -61,20 +67,16 @@ def rerank_documents(query: str, documents: List[Dict[str, str]]) -> Dict:
             sources=request["sources"],
             rerankingConfiguration=request["rerankingConfiguration"]
         )
-
         # Transform the response into a more usable format
         ranked_results = []
         for result in response.get("results", []):
-            query_results = result.get("citations", [])
-            for item in query_results:
-                # Extract document ID from the text content
-                text = item.get("inlineDocument", {}).get("textDocument", {}).get("text", "")
-                doc_id = text.split("[Document ID: ")[-1].rstrip("]") if "[Document ID: " in text else ""
-                
+            index = result.get("index", 0)
+            if index < len(documents):
+                doc = documents[index]
                 ranked_results.append({
-                    "id": doc_id,
-                    "text": next((doc["text"] for doc in documents if str(doc.get("id", "")) == doc_id), ""),
-                    "score": item.get("score", 0.0)
+                    "id": doc.get("id", f"doc_{index}"),
+                    "text": doc.get("text", ""),
+                    "score": result.get("relevanceScore", 0.0)
                 })
         
         return {
@@ -109,7 +111,7 @@ if __name__ == "__main__":
     test_query = "fox and dog interaction"
     
     try:
-        results = rerank_documents(test_query, test_documents)
+        results = rerank_documents(bedrock_agent, test_query, test_documents)
         print(json.dumps(results, indent=2))
     except Exception as e:
         print(f"Failed to rerank documents: {str(e)}")
