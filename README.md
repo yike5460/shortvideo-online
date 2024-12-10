@@ -23,7 +23,11 @@
 ```
 
 ### Frontend
-Using Next.js, Tailwind CSS, Shadcn UI to build the frontend UI. The frontend will include a search bar to input the queries and the video path, and a button to trigger the search. The search result will be displayed in grid view for a list of video clips with the timestamp and the duration, user can hover on each video clip to see the detail information and see the preview of the video clip.
+- Using Next.js, Tailwind CSS, Shadcn UI to build the frontend UI, the static assets are hosted on Cloudflare Pages and dynamic operation are operated by Cloudflare Workers and Function, leave the backend service to be operated by Amazon API Gateway, Lambda and ECS.
+- The main page include a search bar to input the queries, multiple checkboxes to select the sources (Youtube, S3 etc.), and a button to trigger the search. 
+- The search result will be displayed down below the search bar, in grid view for a list of raw videos with the timestamp and the duration, sorted with the most relevant video clips at the top.
+- The user can hover on each raw video to see the brief video information and see the preview of the raw video, once the user check the checkbox of the raw video in the upper right corner, more details of the raw video will be shown on the right sidebar. Here user will see the detailed video metadata e.g. video title, description, duration, encoding format etc. at the top and the specific video segments that match the query at the bottom. User can click the video segments to play, and user will have the option to select the video segments and download the video segments.
+- The whole theme is neat, concise with a modern look, responsive to different screen sizes.
 
 ### Backend Features
 

@@ -51,3 +51,4 @@ junit.xml
 cdk.context.json
 .parcel-cache/
 !/.projenrc.ts
+.next/
