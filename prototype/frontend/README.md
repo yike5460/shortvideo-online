@@ -134,7 +134,6 @@ User tutorial from input keyword to search video, display result "View by clip" 
   - Confidence indicators (High/Medium)
   - Thumbnail previews
   - Video source information
-  - Feedback prompt at bottom
 - Maintains consistent right sidebar
 
 #### Timeline View (View by video)
@@ -143,7 +142,6 @@ User tutorial from input keyword to search video, display result "View by clip" 
 - Current clip preview with timestamp
 - Confidence level indicators
 - Maintains consistent right sidebar layout
-- Feedback module at bottom
 
 Overall workflow is described below:
 ```mermaid

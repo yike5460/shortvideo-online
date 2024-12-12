@@ -9,13 +9,11 @@ import { VideoResult } from '@/types'
 interface SearchResultsProps {
   results: VideoResult[]
   showConfidenceScores: boolean
-  onFeedback: (videoId: string, isHelpful: boolean) => void
 }
 
 export default function SearchResults({
   results,
-  showConfidenceScores,
-  onFeedback
+  showConfidenceScores
 }: SearchResultsProps) {
   const [selectedView, setSelectedView] = useState<'clip' | 'video'>('clip')
 
@@ -45,23 +43,6 @@ export default function SearchResults({
             <div className="mt-4 flex items-center justify-between text-sm text-gray-600">
               <span>{new Date(result.uploadDate).toLocaleDateString()}</span>
               <span>{Math.floor(result.duration / 60)}:{String(result.duration % 60).padStart(2, '0')}</span>
-            </div>
-            <div className="mt-4 flex items-center justify-between">
-              <div className="text-sm text-gray-600">Was this result helpful?</div>
-              <div className="space-x-2">
-                <button
-                  onClick={() => onFeedback(result.id, true)}
-                  className="px-3 py-1 text-sm text-gray-600 hover:text-gray-900"
-                >
-                  Yes
-                </button>
-                <button
-                  onClick={() => onFeedback(result.id, false)}
-                  className="px-3 py-1 text-sm text-gray-600 hover:text-gray-900"
-                >
-                  No
-                </button>
-              </div>
             </div>
           </div>
         </div>

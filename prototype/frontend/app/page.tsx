@@ -4,6 +4,7 @@ import { useState } from 'react'
 import SearchBar from '@/components/search/SearchBar'
 import SearchSidebar from '@/components/search/SearchSidebar'
 import SearchResults from '@/components/search/SearchResults'
+import FeedbackBar from '@/components/search/FeedbackBar'
 import { VideoResult } from '@/types'
 
 // Mock data for demonstration
@@ -73,10 +74,10 @@ export default function HomePage() {
     }
   }
 
-  const handleFeedback = async (videoId: string, isHelpful: boolean) => {
+  const handleFeedback = async (isHelpful: boolean) => {
     try {
       // TODO: Implement feedback API call
-      console.log('Feedback:', { videoId, isHelpful })
+      console.log('Feedback:', { isHelpful })
     } catch (err) {
       console.error('Failed to submit feedback:', err)
     }
@@ -106,7 +107,6 @@ export default function HomePage() {
             <SearchResults
               results={searchResults}
               showConfidenceScores={searchOptions.showConfidenceScores}
-              onFeedback={handleFeedback}
             />
           ) : (
             <div className="flex items-center justify-center h-full">
@@ -116,6 +116,10 @@ export default function HomePage() {
             </div>
           )}
         </div>
+
+        {searchResults.length > 0 && (
+          <FeedbackBar onFeedback={handleFeedback} />
+        )}
       </div>
 
       <SearchSidebar

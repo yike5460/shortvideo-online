@@ -64,10 +64,9 @@ export default function Sidebar() {
         <div className="bg-blue-50 p-4 rounded-lg">
           <h3 className="text-sm font-medium text-blue-800">Quick Tutorial</h3>
           <ol className="mt-2 text-sm text-blue-700 space-y-2">
-            <li>1. Create a new index</li>
-            <li>2. Select models for analysis</li>
-            <li>3. Upload your videos</li>
-            <li>4. View processing status</li>
+            <li>1. Upload videos to create a new index</li>
+            <li>2. Select models for processing</li>
+            <li>3. Search videos by keyword, image, or audio</li>
           </ol>
         </div>
       </div>

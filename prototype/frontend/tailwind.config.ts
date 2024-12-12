@@ -20,6 +20,7 @@ const config: Config = {
           700: '#0369a1',
           800: '#075985',
           900: '#0c4a6e',
+          950: '#082f49',
         },
         background: 'hsl(var(--background))',
         foreground: 'hsl(var(--foreground))',
@@ -27,12 +28,12 @@ const config: Config = {
       },
       keyframes: {
         'fade-in': {
-          '0%': { opacity: '0' },
-          '100%': { opacity: '1' },
+          '0%': { opacity: '0', transform: 'translate(-50%, 100%)' },
+          '100%': { opacity: '1', transform: 'translate(-50%, 0)' },
         },
       },
       animation: {
-        'fade-in': 'fade-in 0.2s ease-out',
+        'fade-in': 'fade-in 0.3s ease-out',
       },
     },
   },
