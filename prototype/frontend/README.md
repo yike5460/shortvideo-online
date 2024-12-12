@@ -1,4 +1,4 @@
-## Overview:
+## Index Creation Overview:
 User tutorial from upload image/video, set index parameter/embedding model, progress panel for ongoing job and detailed page for indexed image or video. Each step layout and element in detail are described below.
 
 ### Step 1: Upload image/video Page
@@ -34,17 +34,8 @@ User tutorial from upload image/video, set index parameter/embedding model, prog
 - Clean, minimal design with dark mode support
 
 
-
-
-
-
-Let me create a mermaid sequence diagram showing the complete workflow:
-
-````artifact
-id: workflow-diagram
-name: Video Indexing Workflow
-type: mermaid
-content: |-
+Overall workflow is described below:
+```mermaid
   sequenceDiagram
     participant U as User
     participant I as Index Creation
@@ -81,7 +72,7 @@ content: |-
     end
     
     R-->>U: Complete Index Creation
-````
+```
 
 **Complete Process Flow:**
 
@@ -118,5 +109,121 @@ The interface follows a modern, clean design system with:
 - Progressive disclosure
 - Consistent spacing
 - Material design influences
-- Dark mode support
 - Clear feedback mechanisms
+
+## Video Search Overview:
+User tutorial from input keyword to search video, display result "View by clip" and "View by video". Each step layout and element in detail are described below.
+
+### Layout Analysis by Image
+
+#### Search Interface
+- Main search bar with placeholder "What are you looking for?"
+- Search by image option in top-right
+- Video listing with metadata (duration, creation date)
+- Right sidebar with:
+  - Index selector
+  - Search options (Visual/Audio)
+  - Advanced parameters panel
+  - Confidence level slider
+  - Toggle for confidence scores
+
+#### Grid View Results (View by clip by default)
+- Search query example: "GitHub App" with clear option
+- View toggles: "View by clip" / "View by video"
+- Grid layout of search results with:
+  - Confidence indicators (High/Medium)
+  - Thumbnail previews
+  - Video source information
+  - Feedback prompt at bottom
+- Maintains consistent right sidebar
+
+#### Timeline View (View by video)
+- Same search interface but with timeline visualization
+- Video progress bar with segments
+- Current clip preview with timestamp
+- Confidence level indicators
+- Maintains consistent right sidebar layout
+- Feedback module at bottom
+
+Overall workflow is described below:
+```mermaid
+  sequenceDiagram
+    participant U as User
+    participant S as Search Interface
+    participant R as Results Processor
+    participant V as View Controller
+    participant F as Feedback System
+
+    U->>S: Enter Search Query/Upload Image
+    
+    rect rgb(200, 255, 200)
+        note right of S: Search Configuration
+        S->>S: Select Index
+        S->>S: Configure Search Options
+        S->>S: Set Confidence Level
+    end
+
+    S->>R: Process Search
+    
+    rect rgb(200, 220, 255)
+        note right of R: Results Display
+        R-->>V: Generate Results
+        
+        V->>V: View Options
+        alt View by Clip
+            V-->>U: Display Grid Layout
+        else View by Video
+            V-->>U: Display Timeline View
+        end
+    end
+
+    U->>F: Provide Result Feedback
+    
+    rect rgb(255, 220, 200)
+        note right of F: Result Refinement
+        F-->>R: Update Confidence Scores
+        R-->>V: Refresh Results
+        V-->>U: Show Updated Results
+    end
+```
+
+**Complete Search Process Flow:**
+
+1. **Search Initiation**
+   - Text search input
+   - Image-based search option
+   - Index selection
+   - Search option configuration
+
+2. **Search Configuration**
+   - Choose index from dropdown
+   - Toggle Visual/Audio search
+   - Set minimum confidence level
+   - Adjust confidence threshold
+   - Toggle confidence score display
+
+3. **Results Visualization**
+   - View by Clip:
+     - Grid layout
+     - Confidence indicators
+     - Thumbnail previews
+   - View by Video:
+     - Timeline visualization
+     - Segment markers
+     - Current frame preview
+
+4. **Interaction Features**
+   - Result filtering
+   - Confidence level adjustment
+   - Feedback collection
+   - Result refinement
+
+The interface follows a modern, clean design system with:
+- Clear hierarchy
+- Progressive disclosure
+- Consistent spacing
+- Material design influences
+- Clear feedback mechanisms
+- Progress indicators
+- Multiple view options
+- Advanced configuration options

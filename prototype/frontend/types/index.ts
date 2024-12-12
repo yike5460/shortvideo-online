@@ -15,6 +15,7 @@ export interface VideoResult {
   title: string
   description: string
   thumbnailUrl: string
+  previewUrl: string
   duration: number
   source: string
   sourceUrl: string
@@ -23,5 +24,24 @@ export interface VideoResult {
   resolution: string
   fileSize: string
   segments: VideoSegment[]
-  previewUrl: string
+}
+
+export interface SearchOptions {
+  visualSearch: boolean
+  audioSearch: boolean
+  minConfidence: number
+  showConfidenceScores: boolean
+  selectedIndex: string | null
+}
+
+export interface Index {
+  id: string
+  name: string
+  status?: 'processing' | 'ready' | 'error'
+  progress?: number
+  error?: string
+  createdAt?: string
+  updatedAt?: string
+  videoCount?: number
+  totalDuration?: number
 } 
