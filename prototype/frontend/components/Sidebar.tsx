@@ -10,15 +10,15 @@ import {
 } from '@heroicons/react/24/outline'
 
 const navigation = [
+{
+    name: 'Create Index',
+    href: '/create',
+    icon: FolderPlusIcon
+  },
   {
     name: 'Search Videos',
     href: '/',
     icon: MagnifyingGlassIcon
-  },
-  {
-    name: 'Create Index',
-    href: '/create',
-    icon: FolderPlusIcon
   },
   {
     name: 'My Videos',
@@ -65,8 +65,8 @@ export default function Sidebar() {
           <h3 className="text-sm font-medium text-blue-800">Quick Tutorial</h3>
           <ol className="mt-2 text-sm text-blue-700 space-y-2">
             <li>1. Upload videos to create a new index</li>
-            <li>2. Select models for processing</li>
-            <li>3. Search videos by keyword, image, or audio</li>
+            <li>2. Search videos by keyword, image, or audio</li>
+            <li>3. Manage your videos and indexes</li>
           </ol>
         </div>
       </div>
