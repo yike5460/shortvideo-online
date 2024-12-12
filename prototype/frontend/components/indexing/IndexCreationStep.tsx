@@ -18,8 +18,8 @@ interface IndexCreationStepProps {
 
 const AVAILABLE_MODELS: Model[] = [
   {
-    id: 'marengo-2.7',
-    name: 'Marengo 2.7',
+    id: 'Amazon NOVA',
+    name: 'Amazon NOVA',
     description: 'Advanced visual recognition model for detailed scene understanding',
     features: [
       'Object detection',
@@ -30,8 +30,8 @@ const AVAILABLE_MODELS: Model[] = [
     type: 'visual'
   },
   {
-    id: 'pegasus-1.1',
-    name: 'Pegasus 1.1',
+    id: 'transcribe',
+    name: 'Transcribe',
     description: 'High-accuracy audio transcription and analysis model',
     features: [
       'Speech recognition',
@@ -49,14 +49,22 @@ export default function IndexCreationStep({ onNext }: IndexCreationStepProps) {
   const [error, setError] = useState('')
 
   const handleModelSelect = (modelId: string) => {
-    setSelectedModels(prev =>
-      prev.includes(modelId)
+    console.log('Selecting model:', modelId)
+    setSelectedModels(prev => {
+      const newModels = prev.includes(modelId)
         ? prev.filter(id => id !== modelId)
         : [...prev, modelId]
-    )
+      console.log('Updated selected models:', newModels)
+      return newModels
+    })
   }
 
-  const handleSubmit = () => {
+  const handleSubmit = (e: React.MouseEvent) => {
+    e.preventDefault()
+    console.log('Submit clicked')
+    console.log('Index name:', indexName)
+    console.log('Selected models:', selectedModels)
+
     if (!indexName.trim()) {
       setError('Please enter an index name')
       return
@@ -65,11 +73,17 @@ export default function IndexCreationStep({ onNext }: IndexCreationStepProps) {
       setError('Please select at least one model')
       return
     }
-    onNext({ name: indexName.trim(), models: selectedModels })
+
+    try {
+      onNext({ name: indexName.trim(), models: selectedModels })
+    } catch (error) {
+      console.error('Error in handleSubmit:', error)
+      setError('An error occurred while creating the index')
+    }
   }
 
   return (
-    <div className="space-y-8">
+    <form onSubmit={(e) => e.preventDefault()} className="space-y-8">
       {/* Step indicator */}
       <div className="text-center">
         <span className="text-sm font-medium text-gray-500">Step 1/2</span>
@@ -85,7 +99,10 @@ export default function IndexCreationStep({ onNext }: IndexCreationStepProps) {
           type="text"
           id="indexName"
           value={indexName}
-          onChange={(e) => setIndexName(e.target.value)}
+          onChange={(e) => {
+            setIndexName(e.target.value)
+            setError('')
+          }}
           className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
           placeholder="Enter a name for your index"
         />
@@ -112,6 +129,8 @@ export default function IndexCreationStep({ onNext }: IndexCreationStepProps) {
                   : "border-gray-200 hover:border-primary-300"
               )}
               onClick={() => handleModelSelect(model.id)}
+              role="button"
+              tabIndex={0}
             >
               {selectedModels.includes(model.id) && (
                 <CheckCircleIcon className="absolute top-4 right-4 h-6 w-6 text-primary-600" />
@@ -140,12 +159,13 @@ export default function IndexCreationStep({ onNext }: IndexCreationStepProps) {
       {/* Action buttons */}
       <div className="flex justify-end pt-6">
         <button
+          type="button"
           onClick={handleSubmit}
-          className="px-6 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700"
+          className="px-6 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2"
         >
           Next
         </button>
       </div>
-    </div>
+    </form>
   )
 } 

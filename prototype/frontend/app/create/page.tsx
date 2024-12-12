@@ -24,6 +24,7 @@ type Step = 'create' | 'upload' | 'progress'
 export default function CreateIndexPage() {
   const router = useRouter()
   const [step, setStep] = useState<Step>('create')
+  const [error, setError] = useState<string>('')
   const [indexData, setIndexData] = useState<{
     id?: string
     name: string
@@ -31,25 +32,35 @@ export default function CreateIndexPage() {
   } | null>(null)
 
   const handleIndexCreation = async (data: { name: string; models: string[] }) => {
+    console.log('Creating index with data:', data)
     try {
+      // Mock API response for testing
+      const mockResponse = {
+        ok: true,
+        json: () => Promise.resolve({ indexId: 'test-' + Date.now() })
+      }
+
       // TODO: Replace with actual API call
-      const response = await fetch('/api/index', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(data),
-      })
+      const response = await Promise.resolve(mockResponse)
+      // const response = await fetch('/api/index', {
+      //   method: 'POST',
+      //   headers: {
+      //     'Content-Type': 'application/json',
+      //   },
+      //   body: JSON.stringify(data),
+      // })
 
       if (!response.ok) {
         throw new Error('Failed to create index')
       }
 
       const result = await response.json()
+      console.log('Index created:', result)
       setIndexData({ ...data, id: result.indexId })
       setStep('upload')
     } catch (error) {
       console.error('Failed to create index:', error)
+      setError('Failed to create index. Please try again.')
     }
   }
 
@@ -61,10 +72,18 @@ export default function CreateIndexPage() {
       formData.append('indexId', indexData.id)
       files.forEach(file => formData.append('files', file))
 
-      const response = await fetch('/api/index/upload', {
-        method: 'POST',
-        body: formData
-      })
+      // Mock API response for testing
+      const mockResponse = {
+        ok: true,
+        json: () => Promise.resolve({ success: true })
+      }
+
+      // TODO: Replace with actual API call
+      const response = await Promise.resolve(mockResponse)
+      // const response = await fetch('/api/index/upload', {
+      //   method: 'POST',
+      //   body: formData
+      // })
 
       if (!response.ok) {
         throw new Error('Failed to upload files')
@@ -73,6 +92,7 @@ export default function CreateIndexPage() {
       setStep('progress')
     } catch (error) {
       console.error('Failed to upload files:', error)
+      setError('Failed to upload files. Please try again.')
     }
   }
 
@@ -85,6 +105,11 @@ export default function CreateIndexPage() {
   return (
     <main className="min-h-screen bg-gray-50 py-12">
       <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
+        {error && (
+          <div className="mb-4 p-4 bg-red-50 text-red-700 rounded-lg">
+            {error}
+          </div>
+        )}
         <div className="bg-white rounded-lg shadow-sm p-8">
           {step === 'create' && (
             <IndexCreationStep onNext={handleIndexCreation} />

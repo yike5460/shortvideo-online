@@ -57,8 +57,8 @@ content: |-
     
     rect rgb(200, 255, 200)
         note right of M: Step 1/2
-        M->>M: Select Marengo 2.7 and/or
-        M->>M: Select Pegasus 1.1
+        M->>M: Select Amazon NOVA and/or
+        M->>M: Select Transcribe
         M->>M: Configure Model Options
     end
 
@@ -91,7 +91,7 @@ content: |-
 
 2. **Index Creation (Step 1/2)**
    - Enter index name
-   - Select AI models (Marengo 2.7/Pegasus 1.1)
+   - Select AI models (Amazon NOVA/Transcribe)
    - Configure visual/audio options
    - Models cannot be changed after creation
 
