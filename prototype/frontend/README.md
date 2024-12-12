@@ -225,3 +225,56 @@ The interface follows a modern, clean design system with:
 - Progress indicators
 - Multiple view options
 - Advanced configuration options
+
+## Deployment to Cloudflare Pages
+
+### Prerequisites
+
+1. A Cloudflare account
+2. The repository pushed to GitHub
+3. Node.js version 18 or higher
+
+### Deployment Steps
+
+1. Log in to your Cloudflare dashboard
+2. Go to Pages > Create a project
+3. Connect your GitHub repository
+4. Configure the build settings:
+   - Framework preset: Next.js
+   - Build command: `npm run build`
+   - Build output directory: `out`
+   - Node.js version: 18
+   - Root directory: `/prototype/frontend`
+
+5. Configure environment variables in Cloudflare Pages:
+   - Copy variables from `.env.example`
+   - Add them in the Cloudflare Pages dashboard under Settings > Environment variables
+
+### Development
+
+```bash
+# Install dependencies
+npm install
+
+# Run development server
+npm run dev
+
+# Build for production
+npm run build
+
+# Test production build locally
+npx serve out
+```
+
+### Important Notes
+
+1. The app is configured for static export using `next export`
+2. All API calls should use environment variables for the base URL
+3. Images are configured to be unoptimized for static hosting
+4. Client-side routing is handled by the Cloudflare Pages configuration
+
+### Troubleshooting
+
+1. If images don't load, check the `remotePatterns` in `next.config.js`
+2. For routing issues, verify the `pages.config.js` configuration
+3. Environment variables must be prefixed with `NEXT_PUBLIC_` for client-side use
