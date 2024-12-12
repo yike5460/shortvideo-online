@@ -5,14 +5,24 @@ import SearchBar from '@/components/search/SearchBar'
 import SearchSidebar from '@/components/search/SearchSidebar'
 import SearchResults from '@/components/search/SearchResults'
 import FeedbackBar from '@/components/search/FeedbackBar'
-import { VideoResult, SearchOptions } from '@/types'
+import { VideoResult, SearchOptions, Index } from '@/types'
 import { cn } from '@/lib/utils'
 
 // Mock data for demonstration
-const MOCK_INDEXES = [
-  { id: 'index-1', name: 'Main Video Index' },
-  { id: 'index-2', name: 'Training Videos' },
-] as const
+const MOCK_INDEXES: Index[] = [
+  { 
+    id: 'index-1', 
+    name: 'Main Video Index',
+    status: 'ready',
+    videoCount: 1
+  },
+  { 
+    id: 'index-2', 
+    name: 'Training Videos',
+    status: 'ready',
+    videoCount: 1
+  },
+]
 
 // Extended mock data with indexId
 const ALL_MOCK_RESULTS: VideoResult[] = [
@@ -29,7 +39,7 @@ const ALL_MOCK_RESULTS: VideoResult[] = [
     format: 'MP4',
     resolution: '1920x1080',
     fileSize: '1.2 GB',
-    indexId: 'index-1', // Main Video Index
+    indexId: 'index-1',
     segments: [
       {
         startTime: 120,
@@ -58,7 +68,7 @@ const ALL_MOCK_RESULTS: VideoResult[] = [
     format: 'MP4',
     resolution: '1920x1080',
     fileSize: '1.0 GB',
-    indexId: 'index-2', // Training Videos
+    indexId: 'index-2',
     segments: [
       {
         startTime: 180,
@@ -96,14 +106,20 @@ export default function HomePage() {
 
   // Handle error display and fade-out
   useEffect(() => {
-    if (error) {
-      setIsErrorVisible(true)
-      const timer = setTimeout(() => {
-        setIsErrorVisible(false)
-        // Only clear the error after the fade-out animation completes
-        setTimeout(() => setError(''), 300)
-      }, 3000) // Show error for 3 seconds
-      return () => clearTimeout(timer)
+    if (!error) return
+
+    setIsErrorVisible(true)
+    const fadeTimer = setTimeout(() => {
+      setIsErrorVisible(false)
+    }, 3000)
+
+    const clearTimer = setTimeout(() => {
+      setError('')
+    }, 3300)
+
+    return () => {
+      clearTimeout(fadeTimer)
+      clearTimeout(clearTimer)
     }
   }, [error])
 
@@ -134,13 +150,12 @@ export default function HomePage() {
     }
 
     setIsLoading(true)
-    // Simulate API delay
-    const timeoutId = setTimeout(() => {
+    const searchTimer = setTimeout(() => {
       setSearchResults(filterResults())
       setIsLoading(false)
     }, 500)
 
-    return () => clearTimeout(timeoutId)
+    return () => clearTimeout(searchTimer)
   }, [searchQuery, searchOptions.selectedIndex])
 
   const handleSearch = useCallback(async (query: string, imageFile?: File) => {
@@ -158,7 +173,6 @@ export default function HomePage() {
       return
     }
 
-    // Image search would typically be handled differently
     if (imageFile) {
       // TODO: Implement image search
       console.log('Image search with:', imageFile)
@@ -231,7 +245,7 @@ export default function HomePage() {
       <SearchSidebar
         options={searchOptions}
         onOptionsChange={handleOptionsChange}
-        indexes={MOCK_INDEXES as Array<{ id: string; name: string }>}
+        indexes={MOCK_INDEXES}
       />
     </div>
   )
