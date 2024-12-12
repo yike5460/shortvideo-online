@@ -24,7 +24,11 @@ export interface VideoResult {
   resolution: string
   fileSize: string
   segments: VideoSegment[]
+  indexId: string
 }
+
+export type ConfidencePreset = 'low' | 'medium' | 'high'
+export type ConfidenceAdjustment = 'less' | 'default' | 'more'
 
 export interface SearchOptions {
   visualSearch: boolean
@@ -32,6 +36,8 @@ export interface SearchOptions {
   minConfidence: number
   showConfidenceScores: boolean
   selectedIndex: string | null
+  confidencePreset: ConfidencePreset
+  confidenceAdjustment: ConfidenceAdjustment
 }
 
 export interface Index {

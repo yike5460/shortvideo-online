@@ -31,9 +31,20 @@ const config: Config = {
           '0%': { opacity: '0', transform: 'translate(-50%, 100%)' },
           '100%': { opacity: '1', transform: 'translate(-50%, 0)' },
         },
+        'fade-out': {
+          '0%': { opacity: '1' },
+          '100%': { opacity: '0' },
+        },
       },
       animation: {
         'fade-in': 'fade-in 0.3s ease-out',
+        'fade-out': 'fade-out 0.3s ease-out forwards',
+      },
+      transitionDuration: {
+        '300': '300ms',
+      },
+      transitionProperty: {
+        'all': 'all',
       },
     },
   },
