@@ -1,5 +1,6 @@
 ## Overview:
 User tutorial from upload image/video, set index parameter/embedding model, progress panel for ongoing job and detailed page for indexed image or video. Each step layout and element in detail are described below.
+
 ### Step 1: Upload image/video Page
 - Step indicator (2/2)
 - Index selector dropdown
