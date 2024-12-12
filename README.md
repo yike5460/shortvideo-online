@@ -1,5 +1,6 @@
 # shortvideo-online
 
+
 ## Search Service
 
 ### User Workflow
@@ -31,6 +32,7 @@
 
 ### Backend Features
 
+The backend is implemented using AWS CDK with TypeScript, providing a secure and scalable infrastructure.
 #### Download Video
 Using [YoutubeDL](https://github.com/ytdl-org/youtube-dl) to download the video from Youtube URL and store to Amazon S3. To consider the performance, we will use Amazon Cloudwatch Event to trigger the Lambda function to crawl the video specific Youtube category (e.g. trending, music, gaming, etc.) and store to Amazon S3.
 
@@ -145,118 +147,200 @@ This two-step approach provides both efficiency and precision. For example, if s
 
 Same approach applies for audio and text search, using their respective global and segment-level embeddings.
 
-#### Backend Architecture
+### Backend Architecture
 
-1. **Storage Layer**
+1. **Network Architecture**
+   - **VPC Configuration**
+     - Private subnets for secure workloads
+     - Public subnets for internet-facing components
+     - VPC Endpoints for AWS services:
+       - OpenSearch Serverless
+       - S3
+       - SQS
+       - CloudWatch
+     - No NAT Gateways needed due to VPC Endpoint usage
+
+2. **Storage Layer**
    - **Amazon S3**
-     - `raw-videos/`: Original uploaded videos
-     - `processed-videos/`: Processed video segments
-     - `keyframes/`: Extracted video frames
-     - `audio/`: Extracted audio files
-     - `embeddings/`: Pre-computed embeddings
-   - **Amazon OpenSearch**
-     - Video metadata and search indices
-     - Vector embeddings for similarity search
-     - Real-time search capabilities
+     - `RawVideosBucket`: Original videos with versioning
+       - S3-managed encryption
+       - Lifecycle rules for cost optimization
+       - Transition to IA storage after 30 days
+     - `ProcessedVideosBucket`: Processed segments
+       - S3-managed encryption
+       - Retention policies
+   - **Amazon OpenSearch Serverless**
+     - VPC-only access through Interface Endpoints
+     - Collection per environment
+     - Security policies for IAM-based access
+     - Network policies for VPC isolation
    - **Amazon ElastiCache (Redis)**
-     - Search results caching
-     - Hot segment caching
-     - Processing status tracking
+     - Deployed in private subnets
+     - Multi-node configuration
+     - VPC security group controls
 
-2. **Compute Layer**
+3. **Compute Layer**
    - **Amazon Lambda**
-     - `video-download`: YouTube video download handler
-     - `video-segment`: Video segmentation processor
-     - `embedding-generator`: Generates embeddings for all modalities
-     - `search-handler`: Handles search requests
-     - `metadata-processor`: Processes and indexes video metadata
+     - `VideoDownloadHandler`: Processes video uploads
+       - VPC deployment
+       - Private subnet placement
+       - OpenSearch security group
+       - X-Ray tracing enabled
+     - `SearchHandler`: Handles search requests
+       - VPC deployment
+       - Private subnet placement
+       - OpenSearch security group
+       - X-Ray tracing enabled
    - **Amazon ECS (Fargate)**
-     - Long-running video processing tasks
-     - Heavy computational workloads
-     - Parallel processing orchestration
+     - Video processing tasks
+     - Container insights enabled
+     - Private subnet placement
+     - Task roles with least privilege
+     - Auto-scaling capabilities
 
-3. **AI/ML Layer**
-   - **Amazon Bedrock**
-     - Text embedding generation
-     - Visual embedding generation
-     - Video content summarization
-   - **Amazon Transcribe**
-     - Audio transcription
-     - Speaker identification
-   - **Amazon Rekognition**
-     - Object detection
-     - Face detection and recognition
-     - Scene analysis
+4. **Message Queue**
+   - **Amazon SQS**
+     - KMS encryption
+     - 30-minute visibility timeout
+     - 14-day retention period
+     - Dead letter queue support
+
+5. **API Layer**
+   - **Amazon API Gateway**
+     - REST API with stages per environment
+     - CORS configuration
+     - Lambda integration
+     - X-Ray tracing
+     - CloudWatch logging
+
+6. **Security Controls**
+   - **IAM Roles**
+     - Lambda execution roles
+     - ECS task roles
+     - OpenSearch access roles
+   - **Security Groups**
+     - OpenSearch access control
+     - Redis access control
+     - Lambda function access
+   - **VPC Endpoints**
+     - Interface endpoints for AWS services
+     - Private DNS enabled
+     - Security group controls
 
 #### Workflow
 
-Overall workflow of the backend service:
-```mermaid
-graph TD
-A[Video Input] --> B[Video Ingestion Service]
-B --> C[S3 Raw Storage]
-C --> D[Video Processing Service]
-D --> |Parallel Processing| E1[Frame Extraction]
-D --> |Parallel Processing| E2[Audio Extraction]
-D --> |Parallel Processing| E3[Metadata Extraction]
-E1 --> F1[Visual Embedding]
-E2 --> F2[Audio Embedding]
-E3 --> F3[Text Embedding]
-F1 --> G[OpenSearch Indexing]
-F2 --> G
-F3 --> G
-G --> H[Search Service]
-H --> I[Cache Layer]
-I --> J[API Gateway]
-```
-
-Video Injestion:
+1. **Video Upload Flow**
 ```mermaid
 sequenceDiagram
-participant Client
-participant API Gateway
-participant Lambda
-participant S3
-participant SQS
-Client->>API Gateway: Upload Video/URL
-API Gateway->>Lambda: Trigger Ingestion
-Lambda->>S3: Store Raw Video
-Lambda->>SQS: Queue Processing Job
-Lambda->>Client: Return Job ID
+    participant Client
+    participant API Gateway
+    participant VideoDownloadHandler
+    participant S3
+    participant SQS
+    participant OpenSearch
+
+    Client->>API Gateway: Upload Video/URL
+    API Gateway->>VideoDownloadHandler: Trigger Lambda
+    VideoDownloadHandler->>S3: Store Raw Video
+    VideoDownloadHandler->>OpenSearch: Create Initial Index
+    VideoDownloadHandler->>SQS: Queue Processing Job
+    VideoDownloadHandler->>Client: Return Job ID
 ```
 
-Video Processing:
+2. **Video Processing Flow**
 ```mermaid
 sequenceDiagram
     participant SQS
-    participant ECS Task Manager
-    participant Fargate Container
-    participant Rekognition
-    participant Bedrock
-    participant Transcribe
+    participant ECS
     participant S3
     participant OpenSearch
+    participant Redis
 
-    SQS->>ECS Task Manager: Dequeue Processing Job
-    ECS Task Manager->>Fargate Container: Launch Processing Task
-    
-    par Parallel Processing
-        Fargate Container->>S3: Get Raw Video
-        Fargate Container->>Rekognition: Object & Face Detection
-        Fargate Container->>Bedrock: Generate Visual Embeddings
-        Fargate Container->>Transcribe: Generate Audio Transcript
-    end
-    
-    Rekognition-->>Fargate Container: Objects, Faces & Labels
-    Bedrock-->>Fargate Container: Visual & Text Embeddings
-    Transcribe-->>Fargate Container: Audio Transcript
-    
-    Fargate Container->>S3: Store Processed Segments
-    Fargate Container->>OpenSearch: Index Metadata & Embeddings
-    
-    Fargate Container->>ECS Task Manager: Task Complete
-    ECS Task Manager->>SQS: Delete Message
+    SQS->>ECS: Trigger Processing Task
+    ECS->>S3: Read Raw Video
+    ECS->>S3: Store Processed Segments
+    ECS->>OpenSearch: Update Metadata
+    ECS->>Redis: Cache Results
+    ECS->>SQS: Delete Message
 ```
+
+3. **Search Flow**
+```mermaid
+sequenceDiagram
+    participant Client
+    participant API Gateway
+    participant SearchHandler
+    participant Redis
+    participant OpenSearch
+    participant S3
+
+    Client->>API Gateway: Search Request
+    API Gateway->>SearchHandler: Trigger Lambda
+    SearchHandler->>Redis: Check Cache
+    alt Cache Miss
+        SearchHandler->>OpenSearch: Search Query
+        SearchHandler->>Redis: Update Cache
+    end
+    SearchHandler->>S3: Generate Presigned URLs
+    SearchHandler->>Client: Return Results
+```
+
+4. **Network Flow**
+```mermaid
+graph TD
+    subgraph "Public Subnet"
+        APIGW[API Gateway]
+    end
+
+    subgraph "Private Subnet"
+        Lambda[Lambda Functions]
+        ECS[ECS Tasks]
+        VPCEndpoints[VPC Endpoints]
+    end
+
+    subgraph "AWS Services"
+        OS[OpenSearch Serverless]
+        S3[S3]
+        SQS[SQS]
+    end
+
+    APIGW --> Lambda
+    Lambda --> VPCEndpoints
+    ECS --> VPCEndpoints
+    VPCEndpoints --> OS
+    VPCEndpoints --> S3
+    VPCEndpoints --> SQS
+```
+
+5. **Security Flow**
+```mermaid
+graph TD
+    subgraph "IAM & Security"
+        IAM[IAM Roles]
+        SG[Security Groups]
+        VP[VPC Endpoints]
+    end
+
+    subgraph "Services"
+        Lambda[Lambda]
+        ECS[ECS Tasks]
+        OS[OpenSearch]
+    end
+
+    IAM --> Lambda
+    IAM --> ECS
+    SG --> Lambda
+    SG --> ECS
+    SG --> VP
+    VP --> OS
+```
+
+This architecture ensures:
+1. Complete VPC isolation for OpenSearch Serverless
+2. No internet access required for core services
+3. Least privilege access through IAM roles
+4. Network segmentation through security groups
+5. Service-to-service communication through VPC endpoints
 
 ### RESTful API Endpoints
 
