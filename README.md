@@ -33,17 +33,40 @@
 ### Backend Features
 
 The backend is implemented using AWS CDK with TypeScript, providing a secure and scalable infrastructure.
-#### Download Video
-Using [YoutubeDL](https://github.com/ytdl-org/youtube-dl) to download the video from Youtube URL and store to Amazon S3. To consider the performance, we will use Amazon Cloudwatch Event to trigger the Lambda function to crawl the video specific Youtube category (e.g. trending, music, gaming, etc.) and store to Amazon S3.
+#### Upload Video & Download Video
+- Using [YoutubeDL](https://github.com/ytdl-org/youtube-dl) to download the video from Youtube URL and store to Amazon S3. To consider the performance, we will use Amazon Cloudwatch Event to trigger the Lambda function to crawl the video specific Youtube category (e.g. trending, music, gaming, etc.) and store to Amazon S3.
+- Using s3cmd to upload the local video to Amazon S3 in consideration of the performance.
 
-#### Video Extraction
-Using S3 event notification to trigger the Lambda function to extract metadata from the video, including the raw audio, the raw image, the raw text description of the video and summary of the video.
-- Using FFMPEG to extract the audio from the video.
-- Using Amazon Transcribe to extract the text from the audio.
-- Using FFMPEG to capture the video key frames intervally and send to Amazon Bedrock for image extraction.
-- Using Amazon Bedrock summarize the video content into a short paragraph.
+#### Video Indexing
 
-#### Video Metadata Storage
+**Video Metadata Extraction**
+Using S3 event notification to trigger the Lambda function to extract metadata from the video, including the raw audio, the raw image, the raw text description of the video and summary of the video. We first use Amazon Reckgnition to slice the raw video into multiple shots, then we extract the metadata from each shots, transform through the embedding model and store to Amazon OpenSearch.
+
+Raw text, audio and image metadata extraction:
+- Using Amazon Rekognition to slice the raw video into multiple shots and extract the metadata from each shots.
+- Using FFMPEG to extract the audio from the video and store to Amazon S3 (audio).
+- Using Amazon Transcribe to extract the text from the audio and store to Amazon S3 (text).
+- Using FFMPEG to capture the video key frames intervally and store to Amazon S3 (image).
+- Using Amazon Bedrock to extract the text description from the video key frames and store to Amazon S3 (text).
+
+Raw video metadata extraction:
+- Keep the original video resolution and frame rate and store to Amazon S3 (video).
+
+**Video Metadata Embedding**
+Embedding model for text, audio and image metadata extraction:
+- Using BGE model for the text, audio and image metadata extraction.
+```
+hf_names=("InfiniFlow/bce-embedding-base_v1")
+model_names=("bce-embedding-base")
+commit_hashs=("00a7db29f2f740ce3aef3b4ed9653a5bd9b9ce7d")
+```
+
+-  Using alibaba-pai/VideoCLIP-XL for the video metadata embedding.
+```
+https://huggingface.co/alibaba-pai/VideoCLIP-XL/tree/main
+```
+
+**Video Metadata Injection**
 Using Amazon Opensearch to store the video information and enable multimodal search capabilities. The schema is optimized for both exact keyword matching and semantic search across visual and audio content:
 
 ```json
@@ -148,70 +171,56 @@ This two-step approach provides both efficiency and precision. For example, if s
 Same approach applies for audio and text search, using their respective global and segment-level embeddings.
 
 ### Backend Architecture
+1. **AI Services**
+    - Using Amazon Reckognition for the shots detection and object detection.
+    - Using Amazon Bedrock for the video summary and visual description.
+    - Using Amazon Transcribe for the audio transcription.
 
-1. **Network Architecture**
+2. **Network Architecture**
    - **VPC Configuration**
      - Private subnets for secure workloads
-     - Public subnets for internet-facing components
      - VPC Endpoints for AWS services:
        - OpenSearch Serverless
        - S3
        - SQS
-       - CloudWatch
      - No NAT Gateways needed due to VPC Endpoint usage
 
 2. **Storage Layer**
    - **Amazon S3**
-     - `RawVideosBucket`: Original videos with versioning
-       - S3-managed encryption
-       - Lifecycle rules for cost optimization
-       - Transition to IA storage after 30 days
-     - `ProcessedVideosBucket`: Processed segments
-       - S3-managed encryption
-       - Retention policies
+     - Prefix `RawVideos`: Original uploaded videos, e.g. `RawVideos/2024-12-13/video_1.mp4`
+     - Prefix `ShotsVideos`: Prefix under `RawVideos`, processed shots with raw video name as prefix, e.g. `RawVideos/2024-12-13/video_1/ShotsVideos/short_1/short_1.mp4`
+     - Prefix `ShotsVideosMetadata`: Prefix under `ShotsVideos`, processed shots metadata (shot_id, shot_start_time, shot_end_time, shot_duration, shot_audio_transcript, shot_visual_description, shot_visual_objects, shot_visual_faces) with raw video name as prefix, e.g. `RawVideos/2024-12-13/video_1/ShotsVideos/short_1/shot_1_metadata.json`
+     - Prefix `ShotsVideosEmbedding`: Prefix under `ShotsVideos`, processed shots embedding (shot_visual_embedding, shot_text_embedding) with shot_id as prefix, e.g. `RawVideos/2024-12-13/video_1/ShotsVideos/short_1/shot_1_visual_embedding.json`, `RawVideos/2024-12-13/video_1/ShotsVideos/short_1/shot_1_text_embedding.json`
+
    - **Amazon OpenSearch Serverless**
      - VPC-only access through Interface Endpoints
      - Collection per environment
      - Security policies for IAM-based access
      - Network policies for VPC isolation
-   - **Amazon ElastiCache (Redis)**
-     - Deployed in private subnets
-     - Multi-node configuration
-     - VPC security group controls
+
+   - **Amazon Redis**
+     - Cache the search results to Redis for faster retrieval
 
 3. **Compute Layer**
    - **Amazon Lambda**
-     - `VideoDownloadHandler`: Processes video uploads
-       - VPC deployment
-       - Private subnet placement
-       - OpenSearch security group
-       - X-Ray tracing enabled
-     - `SearchHandler`: Handles search requests
-       - VPC deployment
-       - Private subnet placement
-       - OpenSearch security group
-       - X-Ray tracing enabled
+     - `VideoUploadHandler`: Handles video uploads using s3cmd
+     - `VideoSliceHandler`: Triggered by S3 event notification, trigger the Amazon Reckognition to slice the raw video into multiple shots in async mode
+     - `VideoSearchHandler`: Handles search requests to OpenSearch Serverless and cache the results to Redis
    - **Amazon ECS (Fargate)**
-     - Video processing tasks
-     - Container insights enabled
-     - Private subnet placement
-     - Task roles with least privilege
-     - Auto-scaling capabilities
+     - Service `VideoEmbeddingService`: Open Source model hosting and serving with auto-scaling capabilities
+     - Job `VideoProcessingHandler`: Triggered by SQS event notification from Amazon Reckognition, refer the detailed in section **Video metadata extraction** and **Video Metadata Embedding**
 
 4. **Message Queue**
    - **Amazon SQS**
-     - KMS encryption
-     - 30-minute visibility timeout
-     - 14-day retention period
-     - Dead letter queue support
+     - Using SQS to receive the Amazon Reckognition video processing results
+     - 30-minute visibility timeout and 14-day retention period with dead letter queue disabled
 
 5. **API Layer**
    - **Amazon API Gateway**
      - REST API with stages per environment
      - CORS configuration
      - Lambda integration
-     - X-Ray tracing
-     - CloudWatch logging
+     - X-Ray tracing and CloudWatch logging disabled
 
 6. **Security Controls**
    - **IAM Roles**
@@ -247,20 +256,58 @@ sequenceDiagram
     VideoDownloadHandler->>Client: Return Job ID
 ```
 
-2. **Video Processing Flow**
+2. **Video Indexing Flow**
 ```mermaid
 sequenceDiagram
     participant SQS
+    participant Lambda
     participant ECS
+    participant Rekognition
+    participant Transcribe
+    participant FFMPEG
+    participant Bedrock
     participant S3
     participant OpenSearch
-    participant Redis
 
-    SQS->>ECS: Trigger Processing Task
-    ECS->>S3: Read Raw Video
-    ECS->>S3: Store Processed Segments
-    ECS->>OpenSearch: Update Metadata
-    ECS->>Redis: Cache Results
+    SQS->>Lambda: Trigger Processing Task
+    Lambda->>S3: Read Raw Video
+    
+    %% Video Shot Detection and Metadata Extraction
+    Lambda->>Rekognition: Slice Video into Shots
+    Rekognition-->>Lambda: Return Shot Segments
+    
+    par Parallel Processing
+        %% Audio Processing
+        Lambda->>FFMPEG: Extract Audio
+        FFMPEG-->>S3: Store Audio File
+        Lambda->>Transcribe: Process Audio
+        Transcribe-->>S3: Store Transcription
+        
+        %% Visual Processing
+        Lambda->>FFMPEG: Extract Keyframes
+        FFMPEG-->>S3: Store Keyframes
+        Lambda->>Bedrock: Generate Frame Descriptions
+        Bedrock-->>S3: Store Frame Descriptions
+        
+        %% Object & Face Detection
+        Lambda->>Rekognition: Detect Objects & Faces
+        Rekognition-->>Lambda: Return Detections
+    end
+
+    %% Embedding Generation
+    Lambda->>ECS: Start Embedding Task
+    ECS->>ECS: Generate Embeddings
+        note over ECS: BGE Model for Text/Audio
+        note over ECS: VideoCLIP-XL for Video
+    
+    %% Final Processing
+    ECS->>OpenSearch: Store Video Metadata
+        note over OpenSearch: Store Schema:
+        note over OpenSearch: - Video Info
+        note over OpenSearch: - Segment Data
+        note over OpenSearch: - Embeddings
+        note over OpenSearch: - Search Metadata
+    
     ECS->>SQS: Delete Message
 ```
 
@@ -490,3 +537,40 @@ Response: {
     }
 }
 ```
+
+#### Video Processing Flow:
+
+1. **Initial Entry**
+   - User accesses the system
+   - Views existing indexes or starts new creation
+
+2. **Index Creation (Step 1/2)**
+   - Enter index name
+   - Select AI models (Amazon NOVA/Transcribe)
+   - Configure visual/audio options
+   - Models cannot be changed after creation
+
+3. **Upload Process (Step 2/2)**
+   - Select or drag-and-drop video files
+   - System validates:
+     - Duration (4sec-30min/2hr)
+     - Resolution (360p-4k)
+     - File size (≤2GB)
+     - Audio requirements
+
+4. **Processing Stage**
+   - Shows indexing progress
+   - Displays preview thumbnails
+   - Updates status in real-time
+
+5. **Results View**
+   - Displays processed videos
+   - Shows index details
+   - Provides access to video analysis
+
+The interface follows a modern, clean design system with:
+- Clear hierarchy
+- Progressive disclosure
+- Consistent spacing
+- Material design influences
+- Clear feedback mechanisms
