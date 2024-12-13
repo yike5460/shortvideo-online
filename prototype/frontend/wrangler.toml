@@ -1,9 +1,21 @@
 name = "shortvideo-online-frontend"
-compatibility_date = "2023-09-14"
+compatibility_date = "2023-12-13"
 compatibility_flags = ["nodejs_compat"]
 
 [build]
-command = "yarn install && yarn build"
+command = """
+cd prototype/frontend && \
+yarn install && \
+yarn build
+"""
 
 [site]
 bucket = ".vercel/output/static"
+
+[env.production]
+routes = [
+  { pattern = "/*", zone_name = "shortvideo-online.pages.dev" }
+]
+
+[build.upload]
+format = "service-worker"
