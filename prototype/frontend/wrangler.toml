@@ -1,0 +1,11 @@
+name = "shortvideo-online-frontend"
+compatibility_date = "2023-09-14"
+compatibility_flags = ["nodejs_compat"]
+
+[build]
+command = "npx @cloudflare/next-on-pages@1"
+cwd = "prototype/frontend"
+watch_dir = "prototype/frontend"
+
+[site]
+bucket = ".vercel/output/static" 

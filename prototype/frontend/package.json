@@ -1,5 +1,5 @@
 {
-  "name": "video-search-frontend",
+  "name": "shortvideo-online-frontend",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -9,27 +9,30 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "next": "14.1.0",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "@heroicons/react": "^2.1.1",
-    "@headlessui/react": "^1.7.18",
-    "clsx": "^2.1.0",
-    "tailwind-merge": "^2.2.1",
-    "react-player": "^2.14.1",
-    "axios": "^1.6.7",
-    "react-dropzone": "^14.2.3"
+    "@aws-sdk/client-s3": "^3.409.0",
+    "@aws-sdk/s3-presigned-post": "^3.409.0",
+    "@emotion/react": "^11.11.1",
+    "@emotion/styled": "^11.11.0",
+    "@mui/icons-material": "^5.14.8",
+    "@mui/material": "^5.14.8",
+    "@types/node": "20.5.9",
+    "@types/react": "18.2.21",
+    "@types/react-dom": "18.2.7",
+    "autoprefixer": "10.4.15",
+    "axios": "^1.5.0",
+    "next": "13.4.19",
+    "postcss": "8.4.29",
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "react-player": "^2.12.0",
+    "tailwindcss": "3.3.3",
+    "typescript": "5.2.2"
   },
   "devDependencies": {
-    "@types/node": "^20.11.16",
-    "@types/react": "^18.2.52",
-    "@types/react-dom": "^18.2.18",
-    "@types/react-dropzone": "^5.1.0",
-    "autoprefixer": "^10.4.17",
-    "postcss": "^8.4.33",
-    "tailwindcss": "^3.4.1",
-    "typescript": "^5.3.3",
-    "eslint": "^8.56.0",
-    "eslint-config-next": "14.1.0"
+    "@cloudflare/next-on-pages": "^1.6.3",
+    "@cloudflare/workers-types": "^4.20230914.0",
+    "eslint": "8.48.0",
+    "eslint-config-next": "13.4.19",
+    "wrangler": "^3.9.0"
   }
 } 
