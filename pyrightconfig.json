@@ -1,0 +1,16 @@
+{
+  "include": [
+    "src/containers/bge-embedding",
+    "src/containers/videoclip-embedding"
+  ],
+  "exclude": [
+    "**/node_modules",
+    "**/__pycache__"
+  ],
+  "reportMissingImports": false,
+  "reportMissingModuleSource": false,
+  "pythonVersion": "3.9",
+  "pythonPlatform": "Linux",
+  "venvPath": ".",
+  "venv": "venv"
+} 

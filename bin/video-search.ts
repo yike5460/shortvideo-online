@@ -9,7 +9,7 @@ new VideoSearchStack(app, 'VideoSearchStack', {
     account: process.env.CDK_DEFAULT_ACCOUNT,
     region: process.env.CDK_DEFAULT_REGION,
   },
-  environment: process.env.DEPLOYMENT_ENV || 'dev',
+  deploymentEnvironment: process.env.DEPLOYMENT_ENV || 'dev',
   maxAzs: 2,
 });
 
