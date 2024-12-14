@@ -4,7 +4,7 @@
   "description": "Custom resources for video search infrastructure",
   "main": "dist/opensearch-vpc-endpoint.js",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && esbuild dist/opensearch-vpc-endpoint.js --bundle --platform=node --target=node18 --outfile=dist/bundle.js",
     "watch": "tsc -w",
     "clean": "rm -rf dist",
     "prebuild": "npm run clean"
@@ -12,11 +12,13 @@
   "dependencies": {
     "@aws-sdk/client-opensearch": "^3.454.0",
     "@aws-sdk/types": "^3.451.0",
-    "node-fetch": "^3.3.2"
+    "node-fetch": "^2.7.0"
   },
   "devDependencies": {
     "@types/aws-lambda": "^8.10.126",
     "@types/node": "^20.9.1",
+    "@types/node-fetch": "^2.6.9",
+    "esbuild": "^0.19.5",
     "typescript": "~5.2.2",
     "ts-node": "^10.9.1"
   }
