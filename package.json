@@ -15,6 +15,7 @@
     "@aws-sdk/client-rekognition": "^3.709.0",
     "@aws-sdk/client-s3": "^3.709.0",
     "@aws-sdk/client-sqs": "^3.709.0",
+    "@aws-sdk/client-opensearch": "^3.0.0",
     "@aws-sdk/credential-provider-node": "^3.470.0",
     "@opensearch-project/opensearch": "^2.4.0",
     "aws-cdk-lib": "^2.115.0",

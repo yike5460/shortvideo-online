@@ -1,0 +1,23 @@
+{
+  "name": "custom-resources",
+  "version": "1.0.0",
+  "description": "Custom resources for video search infrastructure",
+  "main": "dist/opensearch-vpc-endpoint.js",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "clean": "rm -rf dist",
+    "prebuild": "npm run clean"
+  },
+  "dependencies": {
+    "@aws-sdk/client-opensearch": "^3.454.0",
+    "@aws-sdk/types": "^3.451.0",
+    "node-fetch": "^3.3.2"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.126",
+    "@types/node": "^20.9.1",
+    "typescript": "~5.2.2",
+    "ts-node": "^10.9.1"
+  }
+} 
