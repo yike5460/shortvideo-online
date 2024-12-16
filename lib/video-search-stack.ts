@@ -80,13 +80,13 @@ export class VideoSearchStack extends cdk.Stack {
     });
 
     // Keep only the necessary VPC endpoints
-    vpc.addGatewayEndpoint('S3Endpoint', {
-      service: ec2.GatewayVpcEndpointAwsService.S3,
-    });
+    // vpc.addGatewayEndpoint('S3Endpoint', {
+    //   service: ec2.GatewayVpcEndpointAwsService.S3,
+    // });
 
-    vpc.addInterfaceEndpoint('SQSEndpoint', {
-      service: ec2.InterfaceVpcEndpointAwsService.SQS,
-    });
+    // vpc.addInterfaceEndpoint('SQSEndpoint', {
+    //   service: ec2.InterfaceVpcEndpointAwsService.SQS,
+    // });
 
     return vpc;
   }
@@ -182,6 +182,19 @@ export class VideoSearchStack extends cdk.Stack {
       'Allow HTTPS from VPC'
     );
 
+    // Create encryption policy first
+    const encryptionPolicy = new opensearchserverless.CfnSecurityPolicy(this, 'VideoSearchEncryptionPolicy', {
+      name: `video-search-encryption-${stage}`,
+      type: 'encryption',
+      policy: JSON.stringify({
+        Rules: [{
+          ResourceType: 'collection',
+          Resource: [`collection/video-search-${stage}`] // Exact match for the collection name
+        }],
+        AWSOwnedKey: true
+      })
+    });
+
     // Create OpenSearch Serverless Collection
     const collection = new opensearchserverless.CfnCollection(this, 'VideoSearchCollection', {
       name: `video-search-${stage}`,
@@ -189,54 +202,8 @@ export class VideoSearchStack extends cdk.Stack {
       type: 'SEARCH'
     });
 
-    // Create network policy for VPC access
-    const networkPolicy = new opensearchserverless.CfnSecurityPolicy(this, 'VideoSearchNetworkPolicy', {
-      name: `video-search-network-${stage}`,
-      type: 'network',
-      policy: JSON.stringify([{
-        Rules: [{
-          Resource: [`collection/${collection.attrId}`],
-          ResourceType: 'collection',
-          AllowFromPublic: false
-        }],
-        AllowFromPublic: false,
-        SourceVPCEndpoint: this.vpc.vpcId
-      }])
-    });
-
-    // Create encryption policy
-    const encryptionPolicy = new opensearchserverless.CfnSecurityPolicy(this, 'VideoSearchEncryptionPolicy', {
-      name: `video-search-encryption-${stage}`,
-      type: 'encryption',
-      policy: JSON.stringify([{
-        Rules: [{
-          Resource: [`collection/${collection.attrId}`],
-          ResourceType: 'collection'
-        }],
-        AWSOwnedKey: true
-      }])
-    });
-
-    // Create data access policy
-    const dataAccessPolicy = new opensearchserverless.CfnAccessPolicy(this, 'VideoSearchDataAccessPolicy', {
-      name: `video-search-access-${stage}`,
-      type: 'data',
-      policy: JSON.stringify([{
-        Rules: [{
-          Resource: [`collection/${collection.attrId}`],
-          Permission: [
-            'aoss:CreateCollectionItems',
-            'aoss:DeleteCollectionItems',
-            'aoss:UpdateCollectionItems',
-            'aoss:DescribeCollectionItems'
-          ],
-          ResourceType: 'collection'
-        }],
-        Principal: [
-          this.account // Grant access to current AWS account
-        ]
-      }])
-    });
+    // Add explicit dependency
+    collection.addDependency(encryptionPolicy);
 
     // Create the OpenSearch VPC endpoint using AwsCustomResource
     const openSearchEndpoint = new cr.AwsCustomResource(this, 'OpenSearchVpcEndpoint', {
@@ -258,7 +225,7 @@ export class VideoSearchStack extends cdk.Stack {
         service: 'opensearchserverless',
         action: 'deleteVpcEndpoint',
         parameters: {
-          id: cr.PhysicalResourceId.fromResponse('vpcEndpoint.id')
+          id: cr.PhysicalResourceId.of('${PhysicalResourceId}')
         }
       },
       policy: cr.AwsCustomResourcePolicy.fromStatements([
@@ -276,11 +243,12 @@ export class VideoSearchStack extends cdk.Stack {
             'ec2:DescribeSecurityGroups',
             'ec2:DescribeSubnets',
             'ec2:DescribeVpcs',
+            'ec2:CreateTags',
+            'ec2:DeleteTags',
             'iam:CreateServiceLinkedRole'
           ],
           resources: ['*']
         }),
-        // Add policy for service-linked role
         new iam.PolicyStatement({
           effect: iam.Effect.ALLOW,
           actions: [
@@ -296,21 +264,48 @@ export class VideoSearchStack extends cdk.Stack {
       ])
     });
 
+    // Create network policy for VPC access after endpoint is created
+    const networkPolicy = new opensearchserverless.CfnSecurityPolicy(this, 'VideoSearchNetworkPolicy', {
+      name: `video-search-network-${stage}`,
+      type: 'network',
+      policy: JSON.stringify([{
+        Rules: [{
+          Resource: [`collection/${collection.attrId}`],
+          ResourceType: 'collection'
+        }],
+        SourceVPCEs: [openSearchEndpoint.getResponseField('vpcEndpoint.id')],
+        SourceServices: ['vpc.amazonaws.com']
+      }])
+    });
+
+    // Create data access policy
+    const dataAccessPolicy = new opensearchserverless.CfnAccessPolicy(this, 'VideoSearchDataAccessPolicy', {
+      name: `video-search-access-${stage}`,
+      type: 'data',
+      policy: JSON.stringify([{
+        Rules: [{
+          Resource: [`collection/${collection.attrId}`],
+          Permission: [
+            'aoss:CreateCollectionItems',
+            'aoss:DeleteCollectionItems',
+            'aoss:UpdateCollectionItems',
+            'aoss:DescribeCollectionItems'
+          ],
+          ResourceType: 'collection'
+        }],
+        Principal: [
+          `arn:aws:iam::${this.account}:root` // Grant access to the AWS account root
+        ]
+      }])
+    });
+
     // Add dependencies
+    networkPolicy.node.addDependency(openSearchEndpoint);
     networkPolicy.node.addDependency(collection);
-    encryptionPolicy.node.addDependency(collection);
     dataAccessPolicy.node.addDependency(collection);
-    openSearchEndpoint.node.addDependency(collection);
 
     // Get the collection endpoint
     const collectionEndpoint = `https://${collection.attrId}.${this.region}.aoss.amazonaws.com`;
-
-    // Update environment variables in Lambda functions
-    const commonLambdaProps = {
-      environment: {
-        OPENSEARCH_ENDPOINT: collectionEndpoint
-      }
-    };
 
     // Update stack outputs
     new cdk.CfnOutput(this, 'OpenSearchEndpoint', {
