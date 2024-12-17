@@ -38,8 +38,12 @@ export class VideoSearchStack extends cdk.Stack {
     // Initialize core infrastructure
     this.vpc = this.createVpcInfrastructure();
     this.videoBucket = this.createStorageInfrastructure(deploymentEnv);
+    // Need more debugging for the OpenSearch Serverless Endpoint creation
     this.openSearchCollection = this.createSearchInfrastructure(deploymentEnv);
+
+    // Skip the cache infrastructure for now
     // this.redisCluster = this.createCacheInfrastructure();
+
     // this.cluster = this.createContainerInfrastructure();
     // this.videoProcessingQueue = this.createQueueInfrastructure();
     
@@ -219,7 +223,15 @@ export class VideoSearchStack extends cdk.Stack {
           securityGroupIds: [vpcEndpointSG.securityGroupId],
           clientToken: `create-endpoint-${stage}-${Date.now()}`
         },
-        physicalResourceId: cr.PhysicalResourceId.fromResponse('vpcEndpoint.id')
+        // Refer to the response {
+        //   "createVpcEndpointDetail": { 
+        //       "id": "string",
+        //       "name": "string",
+        //       "status": "string"
+        //   }
+        // }
+        physicalResourceId: cr.PhysicalResourceId.fromResponse('createVpcEndpointDetail.id'),
+        outputPaths: ['*']  // Get all paths
       },
       onDelete: {
         service: 'opensearchserverless',
@@ -264,16 +276,33 @@ export class VideoSearchStack extends cdk.Stack {
       ])
     });
 
+    // Responding 
+    // {
+    //   "Status": "SUCCESS",
+    //   "Reason": "OK",
+    //   "StackId": "arn:aws:cloudformation:us-east-1:705247044519:stack/VideoSearchStack/4cf02980-bbe4-11ef-8b46-0ea15dff965b",
+    //   "RequestId": "f117b5e8-ca27-49ad-b2ab-9ce78947972c",
+    //   "LogicalResourceId": "OpenSearchVpcEndpoint2B9DFE5C",
+    //   "NoEcho": false,
+    //   "Data": {
+    //       "region": "us-east-1",
+    //       "createVpcEndpointDetail.id": "vpce-0eb81e6f7aaebbf2e",
+    //       "createVpcEndpointDetail.name": "video-search-endpoint-dev",
+    //       "createVpcEndpointDetail.status": "PENDING"
+    //   }
+    // }
+    console.log(openSearchEndpoint.getResponseField('createVpcEndpointDetail'));
     // Create network policy for VPC access after endpoint is created
     const networkPolicy = new opensearchserverless.CfnSecurityPolicy(this, 'VideoSearchNetworkPolicy', {
       name: `video-search-network-${stage}`,
       type: 'network',
       policy: JSON.stringify([{
         Rules: [{
-          Resource: [`collection/${collection.attrId}`],
-          ResourceType: 'collection'
+          Resource: [`index/${collection.attrId}/*`],
+          ResourceType: 'index'
         }],
-        SourceVPCEs: [openSearchEndpoint.getResponseField('vpcEndpoint.id')],
+        // Use 
+        SourceVPCEs: [openSearchEndpoint.getResponseField('createVpcEndpointDetail.0.id')],
         SourceServices: ['vpc.amazonaws.com']
       }])
     });
@@ -284,14 +313,16 @@ export class VideoSearchStack extends cdk.Stack {
       type: 'data',
       policy: JSON.stringify([{
         Rules: [{
-          Resource: [`collection/${collection.attrId}`],
+          Resource: [`index/${collection.attrId}/*`],
           Permission: [
-            'aoss:CreateCollectionItems',
-            'aoss:DeleteCollectionItems',
-            'aoss:UpdateCollectionItems',
-            'aoss:DescribeCollectionItems'
+            'aoss:CreateIndex',
+            'aoss:DeleteIndex',
+            'aoss:UpdateIndex',
+            'aoss:DescribeIndex',
+            'aoss:ReadDocument',
+            'aoss:WriteDocument'
           ],
-          ResourceType: 'collection'
+          ResourceType: 'index'
         }],
         Principal: [
           `arn:aws:iam::${this.account}:root` // Grant access to the AWS account root
@@ -369,7 +400,7 @@ export class VideoSearchStack extends cdk.Stack {
 
   private createVideoUploadFunction() {
     const commonLambdaProps = {
-      runtime: lambda.Runtime.NODEJS_18_X,
+      runtime: lambda.Runtime.NODEJS_20_X,
       vpc: this.vpc,
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
       timeout: cdk.Duration.minutes(15),
@@ -393,7 +424,7 @@ export class VideoSearchStack extends cdk.Stack {
 
   private createVideoSliceFunction() {
     const commonLambdaProps = {
-      runtime: lambda.Runtime.NODEJS_18_X,
+      runtime: lambda.Runtime.NODEJS_20_X,
       vpc: this.vpc,
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
       timeout: cdk.Duration.minutes(15),
@@ -417,7 +448,7 @@ export class VideoSearchStack extends cdk.Stack {
 
   private createVideoSearchFunction() {
     const commonLambdaProps = {
-      runtime: lambda.Runtime.NODEJS_18_X,
+      runtime: lambda.Runtime.NODEJS_20_X,
       vpc: this.vpc,
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
       timeout: cdk.Duration.minutes(15),
