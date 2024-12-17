@@ -35,9 +35,6 @@ RUN mkdir -p /app/models && \
     git clone https://huggingface.co/jinaai/jina-clip-v1 . && \
     git checkout main
 
-# Set environment variable for offline model loading
-ENV TRANSFORMERS_OFFLINE=1
-
 # Copy application code
 COPY . /app
 WORKDIR /app
