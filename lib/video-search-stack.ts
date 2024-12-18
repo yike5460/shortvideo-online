@@ -42,31 +42,31 @@ export class VideoSearchStack extends cdk.Stack {
     this.openSearchCollection = this.createSearchInfrastructure(deploymentEnv);
 
     // Skip the cache infrastructure for now
-    // this.redisCluster = this.createCacheInfrastructure();
+    this.redisCluster = this.createCacheInfrastructure();
 
-    // this.cluster = this.createContainerInfrastructure();
-    // this.videoProcessingQueue = this.createQueueInfrastructure();
+    this.cluster = this.createContainerInfrastructure();
+    this.videoProcessingQueue = this.createQueueInfrastructure();
     
-    // const lambdaFunctions = {
-    //   videoUploadFunction: this.createVideoUploadFunction(),
-    //   videoSliceFunction: this.createVideoSliceFunction(),
-    //   videoSearchFunction: this.createVideoSearchFunction()
-    // };
+    const lambdaFunctions = {
+      videoUploadFunction: this.createVideoUploadFunction(),
+      videoSliceFunction: this.createVideoSliceFunction(),
+      videoSearchFunction: this.createVideoSearchFunction()
+    };
 
-    // // Create embedding service
-    // const embeddingService = this.createEmbeddingService();
+    // Create embedding service
+    const embeddingService = this.createEmbeddingService();
 
-    // // Initialize API Gateway
-    // const api = this.createApiGateway(lambdaFunctions);
+    // Initialize API Gateway
+    const api = this.createApiGateway(lambdaFunctions);
 
-    // // Set up permissions
-    // this.setupPermissions(lambdaFunctions, embeddingService, this.videoProcessingQueue);
+    // Set up permissions
+    this.setupPermissions(lambdaFunctions, embeddingService, this.videoProcessingQueue);
 
     // // Create CloudWatch Event Rules for monitoring
     // this.createMonitoringInfrastructure(lambdaFunctions, embeddingService);
 
-    // // Create stack outputs
-    // this.createStackOutputs(api);
+    // Create stack outputs
+    this.createStackOutputs(api);
   }
 
   private createVpcInfrastructure(): ec2.Vpc {
@@ -84,13 +84,13 @@ export class VideoSearchStack extends cdk.Stack {
     });
 
     // Keep only the necessary VPC endpoints
-    // vpc.addGatewayEndpoint('S3Endpoint', {
-    //   service: ec2.GatewayVpcEndpointAwsService.S3,
-    // });
+    vpc.addGatewayEndpoint('S3Endpoint', {
+      service: ec2.GatewayVpcEndpointAwsService.S3,
+    });
 
-    // vpc.addInterfaceEndpoint('SQSEndpoint', {
-    //   service: ec2.InterfaceVpcEndpointAwsService.SQS,
-    // });
+    vpc.addInterfaceEndpoint('SQSEndpoint', {
+      service: ec2.InterfaceVpcEndpointAwsService.SQS,
+    });
 
     return vpc;
   }
@@ -209,101 +209,111 @@ export class VideoSearchStack extends cdk.Stack {
     // Add explicit dependency
     collection.addDependency(encryptionPolicy);
 
-    // Create the OpenSearch VPC endpoint using AwsCustomResource
-    const openSearchEndpoint = new cr.AwsCustomResource(this, 'OpenSearchVpcEndpoint', {
-      onCreate: {
-        service: 'opensearchserverless',
-        action: 'createVpcEndpoint',
-        parameters: {
-          name: `video-search-endpoint-${stage}`,
-          vpcId: this.vpc.vpcId,
-          subnetIds: this.vpc.selectSubnets({
-            subnetType: ec2.SubnetType.PRIVATE_ISOLATED
-          }).subnetIds,
-          securityGroupIds: [vpcEndpointSG.securityGroupId],
-          clientToken: `create-endpoint-${stage}-${Date.now()}`
-        },
-        // Refer to the response {
-        //   "createVpcEndpointDetail": { 
-        //       "id": "string",
-        //       "name": "string",
-        //       "status": "string"
-        //   }
-        // }
-        physicalResourceId: cr.PhysicalResourceId.fromResponse('createVpcEndpointDetail.id'),
-        outputPaths: ['*']  // Get all paths
-      },
-      onDelete: {
-        service: 'opensearchserverless',
-        action: 'deleteVpcEndpoint',
-        parameters: {
-          id: cr.PhysicalResourceId.of('${PhysicalResourceId}')
-        }
-      },
-      policy: cr.AwsCustomResourcePolicy.fromStatements([
-        new iam.PolicyStatement({
-          effect: iam.Effect.ALLOW,
-          actions: [
-            'aoss:CreateVpcEndpoint',
-            'aoss:DeleteVpcEndpoint',
-            'aoss:ListVpcEndpoints',
-            'aoss:GetVpcEndpoint',
-            'ec2:CreateVpcEndpoint',
-            'ec2:DeleteVpcEndpoints',
-            'ec2:DescribeVpcEndpoints',
-            'ec2:ModifyVpcEndpoint',
-            'ec2:DescribeSecurityGroups',
-            'ec2:DescribeSubnets',
-            'ec2:DescribeVpcs',
-            'ec2:CreateTags',
-            'ec2:DeleteTags',
-            'iam:CreateServiceLinkedRole'
-          ],
-          resources: ['*']
-        }),
-        new iam.PolicyStatement({
-          effect: iam.Effect.ALLOW,
-          actions: [
-            'iam:CreateServiceLinkedRole'
-          ],
-          resources: [`arn:aws:iam::${this.account}:role/aws-service-role/aoss.amazonaws.com/AWSServiceRoleForAmazonOpenSearchServerless`],
-          conditions: {
-            StringLike: {
-              'iam:AWSServiceName': 'aoss.amazonaws.com'
-            }
-          }
-        })
-      ])
+    // Create the OpenSearch VPC endpoint using AwsCustomResource, obsoleted
+    // const openSearchVPCEndpointCustomResource = new cr.AwsCustomResource(this, 'OpenSearchVpcEndpointCustomResource', {
+    //   onCreate: {
+    //     service: 'opensearchserverless',
+    //     action: 'createVpcEndpoint',
+    //     parameters: {
+    //       name: `video-search-endpoint-${stage}`,
+    //       vpcId: this.vpc.vpcId,
+    //       subnetIds: this.vpc.selectSubnets({
+    //         subnetType: ec2.SubnetType.PRIVATE_ISOLATED
+    //       }).subnetIds,
+    //       securityGroupIds: [vpcEndpointSG.securityGroupId],
+    //       clientToken: `create-endpoint-${stage}-${Date.now()}`
+    //     },
+    //     // Refer to the response {
+    //     //   "createVpcEndpointDetail": { 
+    //     //       "id": "string",
+    //     //       "name": "string",
+    //     //       "status": "string"
+    //     //   }
+    //     // }
+    //     physicalResourceId: cr.PhysicalResourceId.fromResponse('createVpcEndpointDetail.id'),
+    //     outputPaths: ['*']  // Get all paths
+    //   },
+    //   onDelete: {
+    //     service: 'opensearchserverless',
+    //     action: 'deleteVpcEndpoint',
+    //     parameters: {
+    //       id: cr.PhysicalResourceId.of('${PhysicalResourceId}')
+    //     }
+    //   },
+    //   policy: cr.AwsCustomResourcePolicy.fromStatements([
+    //     new iam.PolicyStatement({
+    //       effect: iam.Effect.ALLOW,
+    //       actions: [
+    //         'aoss:CreateVpcEndpoint',
+    //         'aoss:DeleteVpcEndpoint',
+    //         'aoss:ListVpcEndpoints',
+    //         'aoss:GetVpcEndpoint',
+    //         'ec2:CreateVpcEndpoint',
+    //         'ec2:DeleteVpcEndpoints',
+    //         'ec2:DescribeVpcEndpoints',
+    //         'ec2:ModifyVpcEndpoint',
+    //         'ec2:DescribeSecurityGroups',
+    //         'ec2:DescribeSubnets',
+    //         'ec2:DescribeVpcs',
+    //         'ec2:CreateTags',
+    //         'ec2:DeleteTags',
+    //         'iam:CreateServiceLinkedRole'
+    //       ],
+    //       resources: ['*']
+    //     }),
+    //     new iam.PolicyStatement({
+    //       effect: iam.Effect.ALLOW,
+    //       actions: [
+    //         'iam:CreateServiceLinkedRole'
+    //       ],
+    //       resources: [`arn:aws:iam::${this.account}:role/aws-service-role/aoss.amazonaws.com/AWSServiceRoleForAmazonOpenSearchServerless`],
+    //       conditions: {
+    //         StringLike: {
+    //           'iam:AWSServiceName': 'aoss.amazonaws.com'
+    //         }
+    //       }
+    //     })
+    //   ])
+    // });
+
+    // Custom Resource Responding Format:
+    //   {
+    //     "Status": "SUCCESS",
+    //     "Reason": "OK",
+    //     "PhysicalResourceId": "vpce-015883d051b260af7",
+    //     "StackId": "arn:aws:cloudformation:us-east-1:705247044519:stack/VideoSearchStack/e7afe090-bc30-11ef-914f-0e36817187a3",
+    //     "RequestId": "9e6df8f2-1c31-4a0f-8688-11f3fc789038",
+    //     "LogicalResourceId": "OpenSearchVpcEndpoint2B9DFE5C",
+    //     "NoEcho": false,
+    //     "Data": {}
+    //    }
+
+    // Create the OpenSearch VPC endpoint using CloudFormation: https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_opensearchserverless.CfnVpcEndpoint.html
+    const openSearchVpcEndpointCloudFormation = new opensearchserverless.CfnVpcEndpoint(this, 'OpenSearchVpcEndpointCloudFormation', {
+      name: `video-search-endpoint-${stage}`,
+      subnetIds: this.vpc.selectSubnets({
+        subnetType: ec2.SubnetType.PRIVATE_ISOLATED
+      }).subnetIds,
+      vpcId: this.vpc.vpcId,
+      securityGroupIds: [vpcEndpointSG.securityGroupId],  
     });
 
-    // Responding 
-    // {
-    //   "Status": "SUCCESS",
-    //   "Reason": "OK",
-    //   "StackId": "arn:aws:cloudformation:us-east-1:705247044519:stack/VideoSearchStack/4cf02980-bbe4-11ef-8b46-0ea15dff965b",
-    //   "RequestId": "f117b5e8-ca27-49ad-b2ab-9ce78947972c",
-    //   "LogicalResourceId": "OpenSearchVpcEndpoint2B9DFE5C",
-    //   "NoEcho": false,
-    //   "Data": {
-    //       "region": "us-east-1",
-    //       "createVpcEndpointDetail.id": "vpce-0eb81e6f7aaebbf2e",
-    //       "createVpcEndpointDetail.name": "video-search-endpoint-dev",
-    //       "createVpcEndpointDetail.status": "PENDING"
-    //   }
-    // }
-    console.log(openSearchEndpoint.getResponseField('createVpcEndpointDetail'));
-    // Create network policy for VPC access after endpoint is created
+    // Create network policy for VPC access after endpoint is created, allow Lambda to access the endpoint, refer to https://docs.aws.amazon.com/opensearch-service/latest/developerguide/serverless-security.html for more details
     const networkPolicy = new opensearchserverless.CfnSecurityPolicy(this, 'VideoSearchNetworkPolicy', {
       name: `video-search-network-${stage}`,
       type: 'network',
+      description: 'Only VPC endpoint access to the collection, No public access and No dashboards access',
       policy: JSON.stringify([{
         Rules: [{
-          Resource: [`index/${collection.attrId}/*`],
-          ResourceType: 'index'
+          Resource: [`collection/${collection.name}`],
+          ResourceType: 'collection'
         }],
-        // Use 
-        SourceVPCEs: [openSearchEndpoint.getResponseField('createVpcEndpointDetail.0.id')],
-        SourceServices: ['vpc.amazonaws.com']
+        // Using CloudFormation VPC endpoint ID
+        SourceVPCEs: [openSearchVpcEndpointCloudFormation.attrId],
+        // Using Custom Resource VPC endpoint ID
+        // SourceVPCEs: [openSearchVPCEndpointCustomResource.getResponseField('PhysicalResourceId')],
+        // Not used, since ONLY Bedrock supported in SourceServices, refer to: https://docs.aws.amazon.com/opensearch-service/latest/developerguide/serverless-network.html
+        // SourceServices: ["lambda.amazonaws.com"]
       }])
     });
 
@@ -313,16 +323,15 @@ export class VideoSearchStack extends cdk.Stack {
       type: 'data',
       policy: JSON.stringify([{
         Rules: [{
-          Resource: [`index/${collection.attrId}/*`],
+          Resource: [`collection/${collection.name}`],
           Permission: [
-            'aoss:CreateIndex',
-            'aoss:DeleteIndex',
-            'aoss:UpdateIndex',
-            'aoss:DescribeIndex',
-            'aoss:ReadDocument',
-            'aoss:WriteDocument'
+            'aoss:CreateCollectionItems',
+            'aoss:DeleteCollectionItems',
+            'aoss:UpdateCollectionItems',
+            'aoss:DescribeCollectionItems',
+            'aoss:*'
           ],
-          ResourceType: 'index'
+          ResourceType: 'collection'
         }],
         Principal: [
           `arn:aws:iam::${this.account}:root` // Grant access to the AWS account root
@@ -331,18 +340,19 @@ export class VideoSearchStack extends cdk.Stack {
     });
 
     // Add dependencies
-    networkPolicy.node.addDependency(openSearchEndpoint);
+    // networkPolicy.node.addDependency(openSearchVPCEndpointCustomResource);
+    networkPolicy.node.addDependency(openSearchVpcEndpointCloudFormation);
     networkPolicy.node.addDependency(collection);
     dataAccessPolicy.node.addDependency(collection);
 
-    // Get the collection endpoint
-    const collectionEndpoint = `https://${collection.attrId}.${this.region}.aoss.amazonaws.com`;
+    // // Get the collection endpoint
+    // const collectionEndpoint = `https://${collection.attrId}.${this.region}.aoss.amazonaws.com`;
 
-    // Update stack outputs
-    new cdk.CfnOutput(this, 'OpenSearchEndpoint', {
-      value: collectionEndpoint,
-      description: 'OpenSearch Serverless collection endpoint'
-    });
+    // // Update stack outputs
+    // new cdk.CfnOutput(this, 'OpenSearchEndpoint', {
+    //   value: collectionEndpoint,
+    //   description: 'OpenSearch Serverless collection endpoint'
+    // });
 
     return collection;
   }
@@ -416,7 +426,7 @@ export class VideoSearchStack extends cdk.Stack {
       ...commonLambdaProps,
       code: lambda.Code.fromAsset('src/lambdas/video-upload'),
       handler: 'index.handler',
-      memorySize: 1024,
+      memorySize: 4096,
     });
 
     return videoUploadHandler;
@@ -440,7 +450,7 @@ export class VideoSearchStack extends cdk.Stack {
       ...commonLambdaProps,
       code: lambda.Code.fromAsset('src/lambdas/video-slice'),
       handler: 'index.handler',
-      memorySize: 2048,
+      memorySize: 4096,
     });
 
     return videoSliceHandler;
@@ -471,11 +481,27 @@ export class VideoSearchStack extends cdk.Stack {
   }
 
   private createEmbeddingService(): ecs.FargateService {
+    // Create task definition with increased resources for ML workload
     const taskDefinition = new ecs.FargateTaskDefinition(this, 'EmbeddingTaskDef', {
-      memoryLimitMiB: 4096,
-      cpu: 2048,
+      memoryLimitMiB: 8192, // 8GB memory for ML model
+      cpu: 4096, // 4 vCPU
     });
 
+    // Create security group for the service
+    const embeddingServiceSG = new ec2.SecurityGroup(this, 'EmbeddingServiceSG', {
+      vpc: this.vpc,
+      description: 'Security group for embedding service',
+      allowAllOutbound: true,
+    });
+
+    // Allow inbound traffic on service port
+    embeddingServiceSG.addIngressRule(
+      ec2.Peer.ipv4(this.vpc.vpcCidrBlock),
+      ec2.Port.tcp(8000),
+      'Allow inbound from VPC'
+    );
+
+    // Add container to task definition
     const container = taskDefinition.addContainer('EmbeddingContainer', {
       image: ecs.ContainerImage.fromAsset('src/containers/bge-embedding'),
       logging: ecs.LogDrivers.awsLogs({
@@ -484,15 +510,33 @@ export class VideoSearchStack extends cdk.Stack {
       }),
       environment: {
         VIDEO_BUCKET: this.videoBucket.bucketName,
-        OPENSEARCH_ENDPOINT: `https://${this.openSearchCollection.attrId}.${this.region}.aoss.amazonaws.com`,
+        OPENSEARCH_ENDPOINT: this.openSearchCollection.attrId,
+        AWS_REGION: this.region,
+        PORT: '8000',
+        HOST: '0.0.0.0',
+        WORKERS: '2',
+        MODEL_PATH: '/app/models/bce-embedding-base_v1'
       },
+      healthCheck: {
+        command: [
+          'CMD-SHELL',
+          'curl -f http://localhost:8000/health || exit 1'
+        ],
+        interval: cdk.Duration.seconds(30),
+        timeout: cdk.Duration.seconds(5),
+        retries: 3,
+        startPeriod: cdk.Duration.seconds(60)
+      }
     });
 
+    // Add port mappings
     container.addPortMappings({
       containerPort: 8000,
+      protocol: ecs.Protocol.TCP
     });
 
-    return new ecs.FargateService(this, 'EmbeddingService', {
+    // Create service
+    const service = new ecs.FargateService(this, 'EmbeddingService', {
       cluster: this.cluster,
       taskDefinition,
       desiredCount: 2,
@@ -500,7 +544,35 @@ export class VideoSearchStack extends cdk.Stack {
       maxHealthyPercent: 200,
       assignPublicIp: false,
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+      securityGroups: [embeddingServiceSG],
+      capacityProviderStrategies: [
+        {
+          capacityProvider: 'FARGATE_SPOT',
+          weight: 1
+        }
+      ],
+      circuitBreaker: { rollback: true },
+      enableExecuteCommand: true // Enable ECS Exec for debugging
     });
+
+    // Grant permissions
+    this.videoBucket.grantRead(service.taskDefinition.taskRole);
+    
+    // Add OpenSearch permissions
+    service.taskDefinition.addToTaskRolePolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'aoss:APIAccessAll',
+          'aoss:DescribeCollection'
+        ],
+        resources: [
+          `arn:aws:aoss:${this.region}:${this.account}:collection/${this.openSearchCollection.attrId}`
+        ]
+      })
+    );
+
+    return service;
   }
 
   private createApiGateway(lambdaFunctions: {
