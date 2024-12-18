@@ -4,6 +4,7 @@ import subprocess
 import sys
 import tempfile
 from typing import List, Optional, Union
+import logging
 
 import boto3
 import cv2
@@ -18,6 +19,14 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from torchvision import transforms
 from transformers import AutoModel
 
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Check CUDA availability
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+logger.info(f"Using device: {DEVICE}")
+
 model_path = "/app/models/VideoCLIP-XL"
 sys.path.append(model_path)
 from modeling import VideoCLIP_XL
@@ -25,35 +34,55 @@ from utils.text_encoder import text_encoder
 
 app = FastAPI()
 
-# Initialize AWS clients
-s3 = boto3.client('s3')
-credentials = boto3.Session().get_credentials()
-awsauth = AWS4Auth(
-    credentials.access_key,
-    credentials.secret_key,
-    os.environ.get('AWS_REGION', 'us-east-1'),
-    'es',
-    session_token=credentials.token
-)
+try:
+    # Initialize AWS clients
+    logger.info("Initializing AWS clients...")
+    s3 = boto3.client('s3')
+    credentials = boto3.Session().get_credentials()
+    awsauth = AWS4Auth(
+        credentials.access_key,
+        credentials.secret_key,
+        os.environ.get('AWS_REGION', 'us-east-1'),
+        'es',
+        session_token=credentials.token
+    )
 
-# Initialize OpenSearch client
-opensearch = OpenSearch(
-    hosts=[{'host': os.environ['OPENSEARCH_DOMAIN'], 'port': 443}],
-    http_auth=awsauth,
-    use_ssl=True,
-    verify_certs=True,
-    connection_class=RequestsHttpConnection
-)
+    # Get OpenSearch endpoint from environment
+    opensearch_endpoint = os.environ.get('OPENSEARCH_ENDPOINT')
+    if not opensearch_endpoint:
+        raise ValueError("OPENSEARCH_ENDPOINT environment variable not set")
+    
+    # Extract host from endpoint URL
+    from urllib.parse import urlparse
+    opensearch_host = urlparse(opensearch_endpoint).netloc
+    logger.info(f"Connecting to OpenSearch at {opensearch_host}")
 
-# Load VideoCLIP model
-videoclip_model = VideoCLIP_XL()
-state_dict = torch.load(os.path.join(model_path, "VideoCLIP-XL.bin"), map_location="cpu")
-videoclip_model.load_state_dict(state_dict)
-videoclip_model.cuda().eval()
+    # Initialize OpenSearch client
+    opensearch = OpenSearch(
+        hosts=[{'host': opensearch_host, 'port': 443}],
+        http_auth=awsauth,
+        use_ssl=True,
+        verify_certs=True,
+        connection_class=RequestsHttpConnection
+    )
 
-# Initialize Jina-CLIP model
-image_model = AutoModel.from_pretrained('/app/models/jina-clip-v1', trust_remote_code=True)
-image_model.cuda().eval()
+    # Load VideoCLIP model
+    logger.info("Loading VideoCLIP model...")
+    videoclip_model = VideoCLIP_XL()
+    state_dict = torch.load(os.path.join(model_path, "VideoCLIP-XL.bin"), map_location=DEVICE)
+    videoclip_model.load_state_dict(state_dict)
+    videoclip_model.to(DEVICE).eval()
+
+    # Initialize Jina-CLIP model
+    logger.info("Loading Jina-CLIP model...")
+    image_model = AutoModel.from_pretrained('/app/models/jina-clip-v1', trust_remote_code=True)
+    image_model.to(DEVICE).eval()
+
+    logger.info("All models loaded successfully")
+
+except Exception as e:
+    logger.error(f"Initialization error: {str(e)}")
+    raise
 
 # 定义标准化转换
 normalize = transforms.Normalize(
@@ -169,7 +198,7 @@ async def process_video(request: VideoEmbeddingRequest):
                 
                 # Generate video embedding
                 with torch.no_grad():
-                    video_inputs = processed_frames.float().cuda()
+                    video_inputs = processed_frames.float().to(DEVICE)
                     video_features = videoclip_model.vision_model.get_vid_features(video_inputs).float()
                     video_embedding = (video_features / video_features.norm(dim=-1, keepdim=True)).cpu().numpy().tolist()[0]
                 
@@ -238,7 +267,7 @@ async def embed_video(video: UploadFile = File(...)):
             
             # Generate video embedding using VideoCLIP
             with torch.no_grad():
-                video_inputs = processed_frames.float().cuda()
+                video_inputs = processed_frames.float().to(DEVICE)
                 video_features = videoclip_model.vision_model.get_vid_features(video_inputs).float()
                 video_embedding = (video_features / video_features.norm(dim=-1, keepdim=True)).cpu().numpy().tolist()[0]
             
@@ -269,7 +298,7 @@ async def embed_text_for_video(request: TextEmbeddingRequest):
         texts = [request.texts] if is_single_text else request.texts
         
         with torch.no_grad():
-            text_inputs = text_encoder.tokenize(texts, truncate=True).cuda()
+            text_inputs = text_encoder.tokenize(texts, truncate=True).to(DEVICE)
             text_features = videoclip_model.text_model.encode_text(text_inputs).float()
             text_embeddings = (text_features / text_features.norm(dim=-1, keepdim=True)).cpu().numpy().tolist()
             if is_single_text:
