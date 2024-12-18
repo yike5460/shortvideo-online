@@ -38,12 +38,8 @@ export class VideoSearchStack extends cdk.Stack {
     // Initialize core infrastructure
     this.vpc = this.createVpcInfrastructure();
     this.videoBucket = this.createStorageInfrastructure(deploymentEnv);
-    // Need more debugging for the OpenSearch Serverless Endpoint creation
     this.openSearchCollection = this.createSearchInfrastructure(deploymentEnv);
-
-    // Skip the cache infrastructure for now
     this.redisCluster = this.createCacheInfrastructure();
-
     this.cluster = this.createContainerInfrastructure();
     this.videoProcessingQueue = this.createQueueInfrastructure();
     
@@ -53,17 +49,19 @@ export class VideoSearchStack extends cdk.Stack {
       videoSearchFunction: this.createVideoSearchFunction()
     };
 
-    // Create embedding service
-    const embeddingService = this.createEmbeddingService();
+    // Create text and video embedding services, skip the BGE-embedding service for now
+    // const textEmbeddingService = this.createTextEmbeddingService();
+    const videoEmbeddingService = this.createVideoEmbeddingService();
 
     // Initialize API Gateway
     const api = this.createApiGateway(lambdaFunctions);
 
     // Set up permissions
-    this.setupPermissions(lambdaFunctions, embeddingService, this.videoProcessingQueue);
+    // this.setupPermissions(lambdaFunctions, textEmbeddingService, videoEmbeddingService, this.videoProcessingQueue);
+    this.setupPermissions(lambdaFunctions, videoEmbeddingService, this.videoProcessingQueue);
 
-    // // Create CloudWatch Event Rules for monitoring
-    // this.createMonitoringInfrastructure(lambdaFunctions, embeddingService);
+    // Create CloudWatch Event Rules for monitoring
+    // this.createMonitoringInfrastructure(lambdaFunctions, textEmbeddingService, videoEmbeddingService);
 
     // Create stack outputs
     this.createStackOutputs(api);
@@ -480,12 +478,28 @@ export class VideoSearchStack extends cdk.Stack {
     return videoSearchHandler;
   }
 
-  private createEmbeddingService(): ecs.FargateService {
+  private createTextEmbeddingService(): ecs.FargateService {
     // Create task definition with increased resources for ML workload
     const taskDefinition = new ecs.FargateTaskDefinition(this, 'EmbeddingTaskDef', {
       memoryLimitMiB: 8192, // 8GB memory for ML model
       cpu: 4096, // 4 vCPU
     });
+
+    // Add execution role permissions for ECR and CloudWatch Logs
+    taskDefinition.addToExecutionRolePolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'ecr:GetAuthorizationToken',
+          'ecr:BatchCheckLayerAvailability',
+          'ecr:GetDownloadUrlForLayer',
+          'ecr:BatchGetImage',
+          'logs:CreateLogStream',
+          'logs:PutLogEvents'
+        ],
+        resources: ['*']
+      })
+    );
 
     // Create security group for the service
     const embeddingServiceSG = new ec2.SecurityGroup(this, 'EmbeddingServiceSG', {
@@ -504,17 +518,18 @@ export class VideoSearchStack extends cdk.Stack {
     // Add container to task definition
     const container = taskDefinition.addContainer('EmbeddingContainer', {
       image: ecs.ContainerImage.fromAsset('src/containers/bge-embedding'),
-      logging: ecs.LogDrivers.awsLogs({
+      logging: new ecs.AwsLogDriver({
         streamPrefix: 'embedding-service',
         logRetention: logs.RetentionDays.ONE_WEEK,
+        mode: ecs.AwsLogDriverMode.NON_BLOCKING
       }),
       environment: {
         VIDEO_BUCKET: this.videoBucket.bucketName,
-        OPENSEARCH_ENDPOINT: this.openSearchCollection.attrId,
+        OPENSEARCH_ENDPOINT: `https://${this.openSearchCollection.attrId}.${this.region}.aoss.amazonaws.com`,
         AWS_REGION: this.region,
         PORT: '8000',
         HOST: '0.0.0.0',
-        WORKERS: '2',
+        WORKERS: '1',
         MODEL_PATH: '/app/models/bce-embedding-base_v1'
       },
       healthCheck: {
@@ -523,54 +538,142 @@ export class VideoSearchStack extends cdk.Stack {
           'curl -f http://localhost:8000/health || exit 1'
         ],
         interval: cdk.Duration.seconds(30),
-        timeout: cdk.Duration.seconds(5),
+        timeout: cdk.Duration.seconds(10),
         retries: 3,
-        startPeriod: cdk.Duration.seconds(60)
-      }
+        startPeriod: cdk.Duration.seconds(120)  // Give more time for model loading
+      },
+      linuxParameters: new ecs.LinuxParameters(this, 'LinuxParams', {
+        initProcessEnabled: true,
+      })
     });
 
     // Add port mappings
     container.addPortMappings({
       containerPort: 8000,
-      protocol: ecs.Protocol.TCP
+      protocol: ecs.Protocol.TCP,
+      hostPort: 8000
     });
 
     // Create service
     const service = new ecs.FargateService(this, 'EmbeddingService', {
       cluster: this.cluster,
       taskDefinition,
-      desiredCount: 2,
-      minHealthyPercent: 50,
+      desiredCount: 1, // Start with 1 task for initial deployment
+      minHealthyPercent: 100,
       maxHealthyPercent: 200,
       assignPublicIp: false,
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
       securityGroups: [embeddingServiceSG],
       capacityProviderStrategies: [
         {
-          capacityProvider: 'FARGATE_SPOT',
+          capacityProvider: 'FARGATE',  // Use regular FARGATE for stability
           weight: 1
         }
       ],
       circuitBreaker: { rollback: true },
-      enableExecuteCommand: true // Enable ECS Exec for debugging
+      enableExecuteCommand: true, // Enable ECS Exec for debugging
+      healthCheckGracePeriod: cdk.Duration.seconds(120) // Give more time for health checks
     });
 
-    // Grant permissions
-    this.videoBucket.grantRead(service.taskDefinition.taskRole);
-    
-    // Add OpenSearch permissions
-    service.taskDefinition.addToTaskRolePolicy(
+    return service;
+  }
+
+  private createVideoEmbeddingService(): ecs.FargateService {
+    // Create task definition with increased resources for ML workload
+    const taskDefinition = new ecs.FargateTaskDefinition(this, 'VideoEmbeddingTaskDef', {
+      memoryLimitMiB: 16384, // 16GB memory for video model
+      cpu: 4096, // 4 vCPU
+    });
+
+    // Add execution role permissions for ECR and CloudWatch Logs
+    taskDefinition.addToExecutionRolePolicy(
       new iam.PolicyStatement({
         effect: iam.Effect.ALLOW,
         actions: [
-          'aoss:APIAccessAll',
-          'aoss:DescribeCollection'
+          'ecr:GetAuthorizationToken',
+          'ecr:BatchCheckLayerAvailability',
+          'ecr:GetDownloadUrlForLayer',
+          'ecr:BatchGetImage',
+          'logs:CreateLogStream',
+          'logs:PutLogEvents'
         ],
-        resources: [
-          `arn:aws:aoss:${this.region}:${this.account}:collection/${this.openSearchCollection.attrId}`
-        ]
+        resources: ['*']
       })
     );
+
+    // Create security group for the service
+    const videoEmbeddingServiceSG = new ec2.SecurityGroup(this, 'VideoEmbeddingServiceSG', {
+      vpc: this.vpc,
+      description: 'Security group for video embedding service',
+      allowAllOutbound: true,
+    });
+
+    // Allow inbound traffic on service port
+    videoEmbeddingServiceSG.addIngressRule(
+      ec2.Peer.ipv4(this.vpc.vpcCidrBlock),
+      ec2.Port.tcp(8001),
+      'Allow inbound from VPC'
+    );
+
+    // Add container to task definition
+    const container = taskDefinition.addContainer('VideoEmbeddingContainer', {
+      image: ecs.ContainerImage.fromAsset('src/containers/videoclip-embedding'),
+      logging: new ecs.AwsLogDriver({
+        streamPrefix: 'video-embedding-service',
+        logRetention: logs.RetentionDays.ONE_WEEK,
+        mode: ecs.AwsLogDriverMode.NON_BLOCKING
+      }),
+      environment: {
+        VIDEO_BUCKET: this.videoBucket.bucketName,
+        OPENSEARCH_ENDPOINT: `https://${this.openSearchCollection.attrId}.${this.region}.aoss.amazonaws.com`,
+        AWS_REGION: this.region,
+        PORT: '8001',
+        HOST: '0.0.0.0',
+        WORKERS: '1',
+        MODEL_PATH: '/app/models/videoclip'
+      },
+      healthCheck: {
+        command: [
+          'CMD-SHELL',
+          'curl -f http://localhost:8001/health || exit 1'
+        ],
+        interval: cdk.Duration.seconds(30),
+        timeout: cdk.Duration.seconds(10),
+        retries: 3,
+        startPeriod: cdk.Duration.seconds(180)  // Give more time for video model loading
+      },
+      linuxParameters: new ecs.LinuxParameters(this, 'VideoLinuxParams', {
+        initProcessEnabled: true,
+      })
+    });
+
+    // Add port mappings
+    container.addPortMappings({
+      containerPort: 8001,
+      protocol: ecs.Protocol.TCP,
+      hostPort: 8001
+    });
+
+    // Create service
+    const service = new ecs.FargateService(this, 'VideoEmbeddingService', {
+      cluster: this.cluster,
+      taskDefinition,
+      desiredCount: 1, // Start with 1 task for initial deployment
+      minHealthyPercent: 100,
+      maxHealthyPercent: 200,
+      assignPublicIp: false,
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+      securityGroups: [videoEmbeddingServiceSG],
+      capacityProviderStrategies: [
+        {
+          capacityProvider: 'FARGATE',  // Use regular FARGATE for stability
+          weight: 1
+        }
+      ],
+      circuitBreaker: { rollback: true },
+      enableExecuteCommand: true, // Enable ECS Exec for debugging
+      healthCheckGracePeriod: cdk.Duration.seconds(180) // Give more time for health checks
+    });
 
     return service;
   }
@@ -606,7 +709,8 @@ export class VideoSearchStack extends cdk.Stack {
       videoSliceFunction: lambda.Function;
       videoSearchFunction: lambda.Function;
     },
-    _embeddingService: ecs.FargateService,
+    // textEmbeddingService: ecs.FargateService,
+    videoEmbeddingService: ecs.FargateService,
     queue: sqs.Queue
   ) {
     // S3 permissions
@@ -663,6 +767,14 @@ export class VideoSearchStack extends cdk.Stack {
     });
 
     lambdaFunctions.videoSliceFunction.addToRolePolicy(aiServicePolicy);
+
+    // Grant permissions to embedding services to access OpenSearch
+    // textEmbeddingService.taskDefinition.addToTaskRolePolicy(openSearchReadOnlyPolicy);
+    videoEmbeddingService.taskDefinition.addToTaskRolePolicy(openSearchReadOnlyPolicy);
+
+    // Grant permissions to embedding services to access S3
+    // this.videoBucket.grantRead(textEmbeddingService.taskDefinition.taskRole);
+    this.videoBucket.grantRead(videoEmbeddingService.taskDefinition.taskRole);
   }
 
   private createMonitoringInfrastructure(
@@ -671,7 +783,8 @@ export class VideoSearchStack extends cdk.Stack {
       videoSliceFunction: lambda.Function;
       videoSearchFunction: lambda.Function;
     },
-    embeddingService: ecs.FargateService
+    textEmbeddingService: ecs.FargateService,
+    videoEmbeddingService: ecs.FargateService
   ) {
     // Create CloudWatch Event Rule for Lambda errors
     const lambdaErrorRule = new events.Rule(this, 'LambdaErrorRule', {

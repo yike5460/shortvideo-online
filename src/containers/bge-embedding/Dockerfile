@@ -1,10 +1,11 @@
-FROM 763104351884.dkr.ecr.us-east-1.amazonaws.com/djl-inference:0.21.0-deepspeed0.8.3-cu117
+FROM pytorch/pytorch:2.1.0-cuda11.8-cudnn8-runtime
 
 # Install system dependencies
 RUN apt-get update && \
     apt-get install -y \
     git \
     git-lfs \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
@@ -31,4 +32,4 @@ COPY . .
 EXPOSE 8000
 
 # Run the application
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
