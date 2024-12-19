@@ -1,6 +1,8 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import { useRouter } from 'next/navigation'
+import { useAuth } from '@/lib/auth/AuthContext'
 import SearchBar from '@/components/search/SearchBar'
 import SearchSidebar from '@/components/search/SearchSidebar'
 import SearchResults from '@/components/search/SearchResults'
@@ -97,12 +99,26 @@ const initialSearchOptions: SearchOptions = {
 }
 
 export default function HomePage() {
+  const { state } = useAuth()
+  const router = useRouter()
   const [searchOptions, setSearchOptions] = useState<SearchOptions>(initialSearchOptions)
   const [searchResults, setSearchResults] = useState<VideoResult[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string>('')
   const [searchQuery, setSearchQuery] = useState('')
   const [isErrorVisible, setIsErrorVisible] = useState(false)
+
+  useEffect(() => {
+    // Redirect to landing page if not authenticated
+    if (!state.session && !state.isLoading) {
+      router.push('/landing')
+    }
+  }, [state.session, state.isLoading, router])
+
+  // Show nothing while checking authentication
+  if (state.isLoading || !state.session) {
+    return null
+  }
 
   // Handle error display and fade-out
   useEffect(() => {
