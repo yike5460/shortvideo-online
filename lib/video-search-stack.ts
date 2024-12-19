@@ -51,14 +51,14 @@ export class VideoSearchStack extends cdk.Stack {
 
     // Create text and video embedding services, skip the BGE-embedding service for now
     // const textEmbeddingService = this.createTextEmbeddingService();
-    const videoEmbeddingService = this.createVideoEmbeddingService();
+    // const videoEmbeddingService = this.createVideoEmbeddingService();
 
     // Initialize API Gateway
     const api = this.createApiGateway(lambdaFunctions);
 
     // Set up permissions
     // this.setupPermissions(lambdaFunctions, textEmbeddingService, videoEmbeddingService, this.videoProcessingQueue);
-    this.setupPermissions(lambdaFunctions, videoEmbeddingService, this.videoProcessingQueue);
+    this.setupPermissions(lambdaFunctions, this.videoProcessingQueue);
 
     // Create CloudWatch Event Rules for monitoring
     // this.createMonitoringInfrastructure(lambdaFunctions, textEmbeddingService, videoEmbeddingService);
@@ -710,7 +710,7 @@ export class VideoSearchStack extends cdk.Stack {
       videoSearchFunction: lambda.Function;
     },
     // textEmbeddingService: ecs.FargateService,
-    videoEmbeddingService: ecs.FargateService,
+    // videoEmbeddingService: ecs.FargateService,
     queue: sqs.Queue
   ) {
     // S3 permissions
@@ -770,11 +770,11 @@ export class VideoSearchStack extends cdk.Stack {
 
     // Grant permissions to embedding services to access OpenSearch
     // textEmbeddingService.taskDefinition.addToTaskRolePolicy(openSearchReadOnlyPolicy);
-    videoEmbeddingService.taskDefinition.addToTaskRolePolicy(openSearchReadOnlyPolicy);
+    // videoEmbeddingService.taskDefinition.addToTaskRolePolicy(openSearchReadOnlyPolicy);
 
     // Grant permissions to embedding services to access S3
     // this.videoBucket.grantRead(textEmbeddingService.taskDefinition.taskRole);
-    this.videoBucket.grantRead(videoEmbeddingService.taskDefinition.taskRole);
+    // this.videoBucket.grantRead(videoEmbeddingService.taskDefinition.taskRole);
   }
 
   private createMonitoringInfrastructure(
