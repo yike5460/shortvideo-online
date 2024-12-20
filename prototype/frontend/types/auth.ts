@@ -18,6 +18,8 @@ export interface AuthState {
   session: Session | null;
   isLoading: boolean;
   error: string | null;
+  verificationRequired: boolean;
+  registrationEmail: string | null;
 }
 
 export interface LoginCredentials {

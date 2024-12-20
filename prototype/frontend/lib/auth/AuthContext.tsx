@@ -25,6 +25,8 @@ const initialState: AuthState = {
   session: null,
   isLoading: true,
   error: null,
+  verificationRequired: false,
+  registrationEmail: null,
 }
 
 const AuthContext = createContext<{
@@ -33,12 +35,14 @@ const AuthContext = createContext<{
   register: (credentials: RegisterCredentials) => Promise<void>;
   logout: () => Promise<void>;
   clearError: () => void;
+  resendVerification: () => Promise<void>;
 }>({
   state: initialState,
   login: async () => {},
   register: async () => {},
   logout: async () => {},
   clearError: () => {},
+  resendVerification: async () => {},
 })
 
 // Mock API delay
@@ -73,33 +77,44 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       setState(prev => ({ ...prev, isLoading: true, error: null }))
       
-      // Simulate API delay
-      await mockApiDelay()
+      // For test account, bypass verification
+      if (credentials.email === TEST_ACCOUNT.email && credentials.password === TEST_ACCOUNT.password) {
+        const session: Session = {
+          token: 'mock-jwt-token-' + Date.now(),
+          user: MOCK_USER,
+          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+        }
+        
+        if (credentials.rememberMe) {
+          localStorage.setItem('session', JSON.stringify(session))
+        }
 
-      // Check test account credentials
-      if (credentials.email !== TEST_ACCOUNT.email || credentials.password !== TEST_ACCOUNT.password) {
-        throw new Error('Invalid credentials. Use test@example.com / password123')
+        setState(prev => ({
+          ...prev,
+          user: session.user,
+          session,
+          isLoading: false,
+          verificationRequired: false,
+          registrationEmail: null,
+        }))
+
+        router.push('/')
+        return
       }
 
-      // Create mock session
-      const session: Session = {
-        token: 'mock-jwt-token-' + Date.now(),
-        user: MOCK_USER,
-        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), // 24 hours from now
-      }
-      
-      if (credentials.rememberMe) {
-        localStorage.setItem('session', JSON.stringify(session))
+      // For other accounts, check verification status
+      if (!credentials.email.endsWith('@example.com')) {
+        setState(prev => ({
+          ...prev,
+          error: 'Please verify your email before logging in.',
+          verificationRequired: true,
+          registrationEmail: credentials.email,
+          isLoading: false,
+        }))
+        return
       }
 
-      setState(prev => ({
-        ...prev,
-        user: session.user,
-        session,
-        isLoading: false,
-      }))
-
-      router.push('/')
+      throw new Error('Invalid credentials. Use test@example.com / password123')
     } catch (error) {
       setState(prev => ({
         ...prev,
@@ -113,35 +128,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       setState(prev => ({ ...prev, isLoading: true, error: null }))
 
-      // Simulate API delay
       await mockApiDelay()
 
-      // Create mock user and session
-      const user: User = {
-        id: 'user-' + Date.now(),
-        email: credentials.email,
-        createdAt: new Date().toISOString(),
-        lastLogin: new Date().toISOString(),
-        verificationStatus: true,
-        twoFactorEnabled: false,
-      }
-
-      const session: Session = {
-        token: 'mock-jwt-token-' + Date.now(),
-        user,
-        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), // 24 hours from now
-      }
-
-      localStorage.setItem('session', JSON.stringify(session))
-
+      // Simulate sending verification email
       setState(prev => ({
         ...prev,
-        user: session.user,
-        session,
+        verificationRequired: true,
+        registrationEmail: credentials.email,
+        error: null,
         isLoading: false,
       }))
 
-      router.push('/')
+      // Show verification required message
+      router.push('/auth/verify-email')
     } catch (error) {
       setState(prev => ({
         ...prev,
@@ -151,21 +150,49 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
+  const resendVerification = async () => {
+    try {
+      setState(prev => ({ ...prev, isLoading: true, error: null }))
+      
+      await mockApiDelay()
+
+      setState(prev => ({
+        ...prev,
+        error: 'Verification email resent. Please check your inbox.',
+        isLoading: false,
+      }))
+    } catch (error) {
+      setState(prev => ({
+        ...prev,
+        error: error instanceof Error ? error.message : 'Failed to resend verification email',
+        isLoading: false,
+      }))
+    }
+  }
+
   const logout = async () => {
     try {
       setState(prev => ({ ...prev, isLoading: true }))
       
-      // Simulate API delay
       await mockApiDelay()
 
       localStorage.removeItem('session')
-      setState({ ...initialState, isLoading: false })
+      setState({ 
+        ...initialState, 
+        isLoading: false,
+        verificationRequired: false,
+        registrationEmail: null,
+      })
       router.push('/landing')
     } catch (error) {
       console.error('Logout error:', error)
-      // Still clear the session even if the API call fails
       localStorage.removeItem('session')
-      setState({ ...initialState, isLoading: false })
+      setState({ 
+        ...initialState, 
+        isLoading: false,
+        verificationRequired: false,
+        registrationEmail: null,
+      })
       router.push('/landing')
     }
   }
@@ -175,7 +202,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ state, login, register, logout, clearError }}>
+    <AuthContext.Provider value={{ 
+      state, 
+      login, 
+      register, 
+      logout, 
+      clearError,
+      resendVerification,
+    }}>
       {children}
     </AuthContext.Provider>
   )

@@ -406,6 +406,22 @@ const rateLimit = {
 
 The implementation provides a secure, performant authentication system that can be easily extended or migrated to more complex solutions like Amazon Cognito when needed. The use of Cloudflare's edge functions and D1 database ensures low-latency responses while maintaining high security standards.
 
+NOTE: Below are the mock process on current:
+1. When a new user registers:
+    - They fill out the registration form
+    - On submit, they're redirected to the verification page
+    - A verification email would be sent (mocked in this version)
+    - They must verify their email before they can log in
+2. When a user tries to log in:
+    - If using test account (test@example.com/password123), they get immediate access
+    - If using a registered but unverified account, they see a verification required message
+    - If using an invalid account, they see an error message
+3. On the verification page:
+    - Users see their registration email
+    - They can request a new verification email
+    - They can return to the login page
+    - If they try to access the verification page directly without registering, they're redirected to landing
+
 ## Deployment to Cloudflare Pages
 
 ### Prerequisites
