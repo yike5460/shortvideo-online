@@ -15,8 +15,8 @@ export default function Sidebar() {
   const pathname = usePathname()
   const { logout, state } = useAuth()
 
-  // Don't render sidebar on landing page
-  if (pathname === '/landing') {
+  // Don't render sidebar if not authenticated or on landing page
+  if (!state.session || pathname === '/landing') {
     return null
   }
 
@@ -54,32 +54,30 @@ export default function Sidebar() {
             )
           })}
         </nav>
-        {state.user && (
-          <div className="flex flex-shrink-0 border-t border-gray-700 p-4">
-            <div className="group block w-full flex-shrink-0">
-              <div className="flex items-center">
-                <div>
-                  <div className="h-9 w-9 rounded-full bg-gray-700 flex items-center justify-center">
-                    <span className="text-sm font-medium text-white">
-                      {state.user.email[0].toUpperCase()}
-                    </span>
-                  </div>
+        <div className="flex flex-shrink-0 border-t border-gray-700 p-4">
+          <div className="group block w-full flex-shrink-0">
+            <div className="flex items-center">
+              <div>
+                <div className="h-9 w-9 rounded-full bg-gray-700 flex items-center justify-center">
+                  <span className="text-sm font-medium text-white">
+                    {state.user?.email[0].toUpperCase()}
+                  </span>
                 </div>
-                <div className="ml-3 flex-grow">
-                  <p className="text-sm font-medium text-white">
-                    {state.user.email}
-                  </p>
-                </div>
-                <button
-                  onClick={() => logout()}
-                  className="ml-2 rounded-md bg-gray-700 p-1 text-gray-300 hover:text-white"
-                >
-                  <LogoutIcon className="h-5 w-5" aria-hidden="true" />
-                </button>
               </div>
+              <div className="ml-3 flex-grow">
+                <p className="text-sm font-medium text-white">
+                  {state.user?.email}
+                </p>
+              </div>
+              <button
+                onClick={() => logout()}
+                className="ml-2 rounded-md bg-gray-700 p-1 text-gray-300 hover:text-white"
+              >
+                <LogoutIcon className="h-5 w-5" aria-hidden="true" />
+              </button>
             </div>
           </div>
-        )}
+        </div>
       </div>
     </div>
   )

@@ -9,12 +9,16 @@ export function middleware(request: NextRequest) {
   const publicPaths = ['/landing']
   const isPublicPath = publicPaths.includes(pathname)
 
-  // If accessing root path or authenticated paths without session, redirect to landing
-  if (!session && (pathname === '/' || !isPublicPath)) {
+  // Protected paths that require authentication
+  const protectedPaths = ['/', '/videos', '/create']
+  const isProtectedPath = protectedPaths.includes(pathname)
+
+  // If user is not authenticated and trying to access protected path
+  if (!session && isProtectedPath) {
     return NextResponse.redirect(new URL('/landing', request.url))
   }
 
-  // If accessing public paths with session, redirect to home
+  // If user is authenticated and trying to access public path
   if (session && isPublicPath) {
     return NextResponse.redirect(new URL('/', request.url))
   }
