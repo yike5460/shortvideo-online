@@ -14,9 +14,12 @@ const navigation = [
 export default function Sidebar() {
   const pathname = usePathname()
   const { logout, state } = useAuth()
+  const isAuthenticated = !!state.session && !state.isLoading
+  const isLandingPage = pathname === '/landing'
+  const shouldRender = isAuthenticated && !isLandingPage
 
-  // Don't render sidebar if not authenticated or on landing page
-  if (!state.session || pathname === '/landing') {
+  // Always use hooks before any conditional returns
+  if (!shouldRender) {
     return null
   }
 

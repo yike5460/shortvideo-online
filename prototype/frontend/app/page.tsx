@@ -108,19 +108,14 @@ export default function HomePage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [isErrorVisible, setIsErrorVisible] = useState(false)
 
+  // Authentication check effect
   useEffect(() => {
-    // Redirect to landing page if not authenticated
     if (!state.session && !state.isLoading) {
       router.push('/landing')
     }
   }, [state.session, state.isLoading, router])
 
-  // Show nothing while checking authentication
-  if (state.isLoading || !state.session) {
-    return null
-  }
-
-  // Handle error display and fade-out
+  // Error display effect
   useEffect(() => {
     if (!error) return
 
@@ -139,7 +134,7 @@ export default function HomePage() {
     }
   }, [error])
 
-  // Filter results whenever search query or selected index changes
+  // Search results effect
   useEffect(() => {
     if (!searchQuery) {
       setSearchResults([])
@@ -148,19 +143,14 @@ export default function HomePage() {
 
     const filterResults = () => {
       return ALL_MOCK_RESULTS.filter(result => {
-        // First, check if the video belongs to the selected index
         if (searchOptions.selectedIndex && result.indexId !== searchOptions.selectedIndex) {
           return false
         }
-
-        // Then check if the video matches the search query
         const query = searchQuery.toLowerCase()
         return (
           result.title.toLowerCase().includes(query) ||
           result.description.toLowerCase().includes(query) ||
-          result.segments.some(segment => 
-            segment.text.toLowerCase().includes(query)
-          )
+          result.segments.some(segment => segment.text.toLowerCase().includes(query))
         )
       })
     }
@@ -190,14 +180,12 @@ export default function HomePage() {
     }
 
     if (imageFile) {
-      // TODO: Implement image search
       console.log('Image search with:', imageFile)
     }
   }, [searchOptions.selectedIndex])
 
   const handleFeedback = useCallback(async (isHelpful: boolean) => {
     try {
-      // TODO: Implement feedback API call
       console.log('Feedback:', { isHelpful })
     } catch (err) {
       console.error('Failed to submit feedback:', err)
@@ -213,6 +201,13 @@ export default function HomePage() {
     setSearchOptions(newOptions)
   }, [])
 
+  // Loading or not authenticated
+  if (state.isLoading || !state.session) {
+    return <div className="flex items-center justify-center h-screen">
+      <div className="text-gray-600">Loading...</div>
+    </div>
+  }
+
   return (
     <div className="flex min-h-screen bg-gray-50">
       <div className="flex-1 flex flex-col">
@@ -220,7 +215,6 @@ export default function HomePage() {
           <SearchBar onSearch={handleSearch} onClear={handleClear} />
         </div>
 
-        {/* Error message with improved animation */}
         <div className={cn(
           "px-8 mb-4 transition-all duration-300",
           isErrorVisible ? "opacity-100" : "opacity-0 pointer-events-none"
