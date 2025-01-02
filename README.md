@@ -574,3 +574,9 @@ The interface follows a modern, clean design system with:
 - Consistent spacing
 - Material design influences
 - Clear feedback mechanisms
+
+## Todo list
+- [frontend] itegration with backend, start from video upload, then indexing (embedding), finally the hybrid search with backend aoss
+- [frontend] more content including product description, image/video for quick toturial and price categories and possible support for google adsense etc. in the landing page
+- [backend] issue in amazon ecs and aoss debugging
+- [backend] add key frame sample and use nova/claude model to extract video summary as metadata
