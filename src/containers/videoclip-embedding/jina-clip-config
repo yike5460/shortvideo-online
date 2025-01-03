@@ -1,0 +1,71 @@
+{
+  "_name_or_path": "jinaai/jina-clip-v1",
+  "add_projections": false,
+  "architectures": [
+    "JinaCLIPModel"
+  ],
+  "auto_map": {
+    "AutoConfig": "configuration_clip.JinaCLIPConfig",
+    "AutoModel": "modeling_clip.JinaCLIPModel"
+  },
+  "initializer_factor": 1.0,
+  "logit_scale_init_value": 2.6592,
+  "model_type": "jina_clip",
+  "projection_dim": 768,
+  "text_config": {
+    "_name_or_path": "",
+    "embed_dim": 768,
+    "hf_model_config_kwargs": {
+      "use_flash_attn": false
+    },
+    "hf_model_name_or_path": "/app/models/jinaai/jina-bert-flash-implementation",
+    "model_type": "jina_clip_text",
+    "output_attentions": false,
+    "output_hidden_states": false,
+    "output_scores": false,
+    "pad_token_id": null,
+    "pooler_type": "mean_pooler",
+    "proj_bias": false,
+    "proj_type": null,
+    "transformers_version": "4.36.2",
+    "use_bfloat16": false
+  },
+  "torch_dtype": "float32",
+  "transformers_version": null,
+  "vision_config": {
+    "_name_or_path": "",
+    "embed_dim": 768,
+    "fused_layer_norm": false,
+    "head_width": 64,
+    "image_size": 224,
+    "intp_freq": false,
+    "layers": 12,
+    "ls_init_value": null,
+    "mlp_ratio": 2.6667,
+    "model_type": "jina_clip_vision",
+    "naive_swiglu": true,
+    "output_attentions": false,
+    "output_hidden_states": false,
+    "output_scores": false,
+    "pad_token_id": null,
+    "patch_dropout": 0.1,
+    "patch_size": 16,
+    "post_norm": false,
+    "prefix": null,
+    "problem_type": null,
+    "proj_type": null,
+    "pruned_heads": {},
+    "pt_hw_seq_len": 14,
+    "qkv_bias": true,
+    "remove_invalid_values": false,
+    "return_dict": true,
+    "return_dict_in_generate": false,
+    "rope_embeddings": true,
+    "subln": true,
+    "tie_word_embeddings": true,
+    "transformers_version": "4.36.2",
+    "use_bfloat16": false,
+    "width": 768,
+    "x_attention": false
+  }
+}

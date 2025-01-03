@@ -40,24 +40,29 @@ RUN mkdir -p /app/models && \
     git checkout main && \
     cd .. && \
     # Download VideoCLIP-XL-v2 weights
-    git clone https://huggingface.co/alibaba-pai/VideoCLIP-XL-v2 && \
-    cd VideoCLIP-XL-v2 && \
-    git checkout main && \
-    # Copy v2 weights to VideoCLIP-XL directory
-    cp VideoCLIP-XL-v2.bin ../VideoCLIP-XL/ && \
-    cd .. && \
+#     git clone https://huggingface.co/alibaba-pai/VideoCLIP-XL-v2 && \
+#     cd VideoCLIP-XL-v2 && \
+#     git checkout main && \
+#     # Copy v2 weights to VideoCLIP-XL directory
+#     cp VideoCLIP-XL-v2.bin ../VideoCLIP-XL/ && \
+#     cd .. && \
     # Clean up v2 repo to save space
     rm -rf VideoCLIP-XL-v2 && \
     # Download Jina-CLIP model
     mkdir -p jina-clip-v1 && \
     cd jina-clip-v1 && \
     git clone https://huggingface.co/jinaai/jina-clip-v1 . && \
-    git checkout main
+    git checkout main && \
+    git clone https://huggingface.co/jinaai/jina-clip-implementation /app/models/jinaai/jina-clip-implementation && \
+    cp /app/models/jinaai/jina-clip-implementation/* /app/models/jina-clip-v1/ && \
+    git clone https://huggingface.co/jinaai/jina-bert-flash-implementation /app/models/jinaai/jina-bert-flash-implementation
+    
 
 # Copy application code
 COPY . /app
 WORKDIR /app
-
+RUN mv jina-clip-config /app/models/jina-clip-v1/config.json && \
+    mv jina-bert-config /app/models/jinaai/jina-bert-flash-implementation/config.json
 # Environment variables for CUDA
 ENV NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility \

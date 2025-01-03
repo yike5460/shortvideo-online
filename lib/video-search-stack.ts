@@ -51,15 +51,14 @@ export class VideoSearchStack extends cdk.Stack {
 
     // Create text and video embedding services, skip the BGE-embedding service for now
     // const textEmbeddingService = this.createTextEmbeddingService();
-    // const videoEmbeddingService = this.createVideoEmbeddingService();
+    const videoEmbeddingService = this.createVideoEmbeddingService();
 
     // Initialize API Gateway
     const api = this.createApiGateway(lambdaFunctions);
 
     // Set up permissions
     // this.setupPermissions(lambdaFunctions, textEmbeddingService, videoEmbeddingService, this.videoProcessingQueue);
-    this.setupPermissions(lambdaFunctions, this.videoProcessingQueue);
-
+    this.setupPermissions(lambdaFunctions, videoEmbeddingService, this.videoProcessingQueue);
     // Create CloudWatch Event Rules for monitoring
     // this.createMonitoringInfrastructure(lambdaFunctions, textEmbeddingService, videoEmbeddingService);
 
@@ -88,6 +87,20 @@ export class VideoSearchStack extends cdk.Stack {
 
     vpc.addInterfaceEndpoint('SQSEndpoint', {
       service: ec2.InterfaceVpcEndpointAwsService.SQS,
+    });
+
+    // Add ECR endpoints
+    vpc.addInterfaceEndpoint('ECRDockerEndpoint', {
+      service: ec2.InterfaceVpcEndpointAwsService.ECR_DOCKER,
+    });
+
+    vpc.addInterfaceEndpoint('ECREndpoint', {
+      service: ec2.InterfaceVpcEndpointAwsService.ECR,
+    });
+
+    // Add CloudWatch Logs endpoint for container logging
+    vpc.addInterfaceEndpoint('CloudWatchLogsEndpoint', {
+      service: ec2.InterfaceVpcEndpointAwsService.CLOUDWATCH_LOGS,
     });
 
     return vpc;
@@ -378,7 +391,7 @@ export class VideoSearchStack extends cdk.Stack {
       cacheNodeType: 'cache.t4g.medium',
       numCacheNodes: 1,
       vpcSecurityGroupIds: [redisSecurityGroup.securityGroupId],
-      cacheSubnetGroupName: redisSubnetGroup.ref,
+      cacheSubnetGroupName: redisSubnetGroup.ref
     });
   }
 
@@ -494,6 +507,7 @@ export class VideoSearchStack extends cdk.Stack {
           'ecr:BatchCheckLayerAvailability',
           'ecr:GetDownloadUrlForLayer',
           'ecr:BatchGetImage',
+          'ecr:*',
           'logs:CreateLogStream',
           'logs:PutLogEvents'
         ],
@@ -583,6 +597,7 @@ export class VideoSearchStack extends cdk.Stack {
     const taskDefinition = new ecs.FargateTaskDefinition(this, 'VideoEmbeddingTaskDef', {
       memoryLimitMiB: 16384, // 16GB memory for video model
       cpu: 4096, // 4 vCPU
+      ephemeralStorageGiB: 50 // Add 50GB ephemeral storage
     });
 
     // Add execution role permissions for ECR and CloudWatch Logs
@@ -594,6 +609,7 @@ export class VideoSearchStack extends cdk.Stack {
           'ecr:BatchCheckLayerAvailability',
           'ecr:GetDownloadUrlForLayer',
           'ecr:BatchGetImage',
+          'ecr:*',
           'logs:CreateLogStream',
           'logs:PutLogEvents'
         ],
@@ -617,7 +633,7 @@ export class VideoSearchStack extends cdk.Stack {
 
     // Add container to task definition
     const container = taskDefinition.addContainer('VideoEmbeddingContainer', {
-      image: ecs.ContainerImage.fromAsset('src/containers/videoclip-embedding'),
+      image: ecs.ContainerImage.fromRegistry('119067974288.dkr.ecr.us-west-2.amazonaws.com/videoclip-embedding:latest'),
       logging: new ecs.AwsLogDriver({
         streamPrefix: 'video-embedding-service',
         logRetention: logs.RetentionDays.ONE_WEEK,
@@ -632,16 +648,16 @@ export class VideoSearchStack extends cdk.Stack {
         WORKERS: '1',
         MODEL_PATH: '/app/models/videoclip'
       },
-      healthCheck: {
-        command: [
-          'CMD-SHELL',
-          'curl -f http://localhost:8001/health || exit 1'
-        ],
-        interval: cdk.Duration.seconds(30),
-        timeout: cdk.Duration.seconds(10),
-        retries: 3,
-        startPeriod: cdk.Duration.seconds(180)  // Give more time for video model loading
-      },
+      // healthCheck: {
+      //   command: [
+      //     'CMD-SHELL',
+      //     'curl -f http://localhost:8001/health || exit 1'
+      //   ],
+      //   interval: cdk.Duration.seconds(30),
+      //   timeout: cdk.Duration.seconds(10),
+      //   retries: 3,
+      //   startPeriod: cdk.Duration.seconds(180)  // Give more time for video model loading
+      // },
       linuxParameters: new ecs.LinuxParameters(this, 'VideoLinuxParams', {
         initProcessEnabled: true,
       })
@@ -710,7 +726,7 @@ export class VideoSearchStack extends cdk.Stack {
       videoSearchFunction: lambda.Function;
     },
     // textEmbeddingService: ecs.FargateService,
-    // videoEmbeddingService: ecs.FargateService,
+    videoEmbeddingService: ecs.FargateService,
     queue: sqs.Queue
   ) {
     // S3 permissions
@@ -770,11 +786,11 @@ export class VideoSearchStack extends cdk.Stack {
 
     // Grant permissions to embedding services to access OpenSearch
     // textEmbeddingService.taskDefinition.addToTaskRolePolicy(openSearchReadOnlyPolicy);
-    // videoEmbeddingService.taskDefinition.addToTaskRolePolicy(openSearchReadOnlyPolicy);
+    videoEmbeddingService.taskDefinition.addToTaskRolePolicy(openSearchReadOnlyPolicy);
 
     // Grant permissions to embedding services to access S3
     // this.videoBucket.grantRead(textEmbeddingService.taskDefinition.taskRole);
-    // this.videoBucket.grantRead(videoEmbeddingService.taskDefinition.taskRole);
+    this.videoBucket.grantRead(videoEmbeddingService.taskDefinition.taskRole);
   }
 
   private createMonitoringInfrastructure(
