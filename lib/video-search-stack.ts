@@ -633,7 +633,7 @@ export class VideoSearchStack extends cdk.Stack {
 
     // Add container to task definition
     const container = taskDefinition.addContainer('VideoEmbeddingContainer', {
-      image: ecs.ContainerImage.fromRegistry('119067974288.dkr.ecr.us-west-2.amazonaws.com/videoclip-embedding:latest'),
+      image: ecs.ContainerImage.fromAsset('src/containers/videoclip-embedding'),
       logging: new ecs.AwsLogDriver({
         streamPrefix: 'video-embedding-service',
         logRetention: logs.RetentionDays.ONE_WEEK,
