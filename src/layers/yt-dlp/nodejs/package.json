@@ -1,0 +1,7 @@
+{
+  "name": "yt-dlp-layer",
+  "version": "1.0.0",
+  "description": "Lambda layer containing yt-dlp binary",
+  "author": "Aaron Yi",
+  "license": "MIT"
+}

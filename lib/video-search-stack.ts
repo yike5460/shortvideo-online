@@ -433,14 +433,35 @@ export class VideoSearchStack extends cdk.Stack {
       },
     };
 
+    // Create yt-dlp layer
+    const ytDlpLayer = new lambda.LayerVersion(this, 'YtDlpLayer', {
+      code: lambda.Code.fromAsset('src/layers/yt-dlp'),
+      description: 'yt-dlp binary for downloading YouTube videos',
+      compatibleRuntimes: [lambda.Runtime.NODEJS_20_X],
+      compatibleArchitectures: [lambda.Architecture.X86_64],
+    });
+
     const videoUploadHandler = new lambda.Function(this, 'VideoUploadHandler', {
       ...commonLambdaProps,
       code: lambda.Code.fromAsset('src/lambdas/video-upload'),
       handler: 'index.handler',
-      memorySize: 4096,
+      memorySize: 2048,
     });
 
-    return videoUploadHandler;
+    const youtubeUploadHandler = new lambda.Function(this, 'YouTubeUploadHandler', {
+      ...commonLambdaProps,
+      code: lambda.Code.fromAsset('src/lambdas/video-upload'),
+      handler: 'youtube.handler',
+      memorySize: 4096,
+      timeout: cdk.Duration.minutes(15), // Longer timeout for YouTube downloads
+      environment: {
+        ...commonLambdaProps.environment,
+        TEMP_PATH: '/tmp' // Temp directory for YouTube downloads
+      },
+      layers: [ytDlpLayer], // Add the yt-dlp layer
+    });
+
+    return { videoUploadHandler, youtubeUploadHandler };
   }
 
   private createVideoSliceFunction() {
@@ -695,7 +716,7 @@ export class VideoSearchStack extends cdk.Stack {
   }
 
   private createApiGateway(lambdaFunctions: {
-    videoUploadFunction: lambda.Function;
+    videoUploadFunction: { videoUploadHandler: lambda.Function; youtubeUploadHandler: lambda.Function };
     videoSliceFunction: lambda.Function;
     videoSearchFunction: lambda.Function;
   }): apigateway.RestApi {
@@ -710,10 +731,21 @@ export class VideoSearchStack extends cdk.Stack {
 
     const videos = api.root.addResource('videos');
     const search = api.root.addResource('search');
-    const status = videos.addResource('{videoId}').addResource('status');
 
-    videos.addMethod('POST', new apigateway.LambdaIntegration(lambdaFunctions.videoUploadFunction));
+    // Video upload endpoints
+    const presign = videos.addResource('presign');
+    const complete = videos.addResource('complete');
+    const youtube = videos.addResource('youtube');
+
+    presign.addMethod('POST', new apigateway.LambdaIntegration(lambdaFunctions.videoUploadFunction.videoUploadHandler));
+    complete.addMethod('POST', new apigateway.LambdaIntegration(lambdaFunctions.videoUploadFunction.videoUploadHandler));
+    youtube.addMethod('POST', new apigateway.LambdaIntegration(lambdaFunctions.videoUploadFunction.youtubeUploadHandler));
+
+    // Search endpoint
     search.addMethod('POST', new apigateway.LambdaIntegration(lambdaFunctions.videoSearchFunction));
+
+    // Status endpoint
+    const status = videos.addResource('{videoId}').addResource('status');
     status.addMethod('GET', new apigateway.LambdaIntegration(lambdaFunctions.videoSliceFunction));
 
     return api;
@@ -721,7 +753,7 @@ export class VideoSearchStack extends cdk.Stack {
 
   private setupPermissions(
     lambdaFunctions: {
-      videoUploadFunction: lambda.Function;
+      videoUploadFunction: { videoUploadHandler: lambda.Function; youtubeUploadHandler: lambda.Function };
       videoSliceFunction: lambda.Function;
       videoSearchFunction: lambda.Function;
     },
@@ -730,12 +762,12 @@ export class VideoSearchStack extends cdk.Stack {
     queue: sqs.Queue
   ) {
     // S3 permissions
-    this.videoBucket.grantReadWrite(lambdaFunctions.videoUploadFunction);
+    this.videoBucket.grantReadWrite(lambdaFunctions.videoUploadFunction.videoUploadHandler);
     this.videoBucket.grantRead(lambdaFunctions.videoSearchFunction);
     this.videoBucket.grantReadWrite(lambdaFunctions.videoSliceFunction);
 
     // SQS permissions
-    queue.grantSendMessages(lambdaFunctions.videoUploadFunction);
+    queue.grantSendMessages(lambdaFunctions.videoUploadFunction.videoUploadHandler);
     queue.grantConsumeMessages(lambdaFunctions.videoSliceFunction);
 
     // OpenSearch Serverless permissions
@@ -764,7 +796,7 @@ export class VideoSearchStack extends cdk.Stack {
       ]
     });
 
-    lambdaFunctions.videoUploadFunction.addToRolePolicy(openSearchPolicy);
+    lambdaFunctions.videoUploadFunction.videoUploadHandler.addToRolePolicy(openSearchPolicy);
     lambdaFunctions.videoSliceFunction.addToRolePolicy(openSearchPolicy);
     lambdaFunctions.videoSearchFunction.addToRolePolicy(openSearchReadOnlyPolicy);
 
@@ -795,7 +827,7 @@ export class VideoSearchStack extends cdk.Stack {
 
   private createMonitoringInfrastructure(
     lambdaFunctions: {
-      videoUploadFunction: lambda.Function;
+      videoUploadFunction: { videoUploadHandler: lambda.Function; youtubeUploadHandler: lambda.Function };
       videoSliceFunction: lambda.Function;
       videoSearchFunction: lambda.Function;
     },

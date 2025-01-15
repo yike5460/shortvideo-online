@@ -33,9 +33,159 @@
 ### Backend Features
 
 The backend is implemented using AWS CDK with TypeScript, providing a secure and scalable infrastructure.
+
 #### Upload Video & Download Video
-- Using [YoutubeDL](https://github.com/ytdl-org/youtube-dl) to download the video from Youtube URL and store to Amazon S3. To consider the performance, we will use Amazon Cloudwatch Event to trigger the Lambda function to crawl the video specific Youtube category (e.g. trending, music, gaming, etc.) and store to Amazon S3.
-- Using s3cmd to upload the local video to Amazon S3 in consideration of the performance.
+
+1. **Local Video Upload Flow**
+```mermaid
+sequenceDiagram
+    participant Client
+    participant API Gateway
+    participant Lambda
+    participant S3
+    participant SQS
+    participant OpenSearch
+
+    %% Get pre-signed URL
+    Client->>API Gateway: Request pre-signed URL
+    API Gateway->>Lambda: Generate pre-signed URL
+    Lambda->>Client: Return pre-signed URL + videoId
+
+    %% Direct upload using s3cmd
+    Client->>S3: Upload video using s3cmd
+    Note over Client,S3: Direct upload for better performance
+
+    %% Notify completion
+    Client->>API Gateway: Notify upload complete
+    API Gateway->>Lambda: Process upload completion
+    Lambda->>OpenSearch: Create initial index
+    Lambda->>SQS: Queue processing job
+    Lambda->>Client: Return success status
+```
+
+2. **YouTube URL Upload Flow**
+```mermaid
+sequenceDiagram
+    participant Client
+    participant API Gateway
+    participant Lambda
+    participant S3
+    participant SQS
+    participant OpenSearch
+
+    Client->>API Gateway: Submit YouTube URL
+    API Gateway->>Lambda: Download video
+    Lambda->>S3: Store video
+    Lambda->>OpenSearch: Create initial index
+    Lambda->>SQS: Queue processing job
+    Lambda->>Client: Return success status
+```
+
+3. **API Endpoints**
+```http
+# Get pre-signed URL for local video upload
+POST /api/v1/videos/presign
+Content-Type: application/json
+{
+    "fileName": string,
+    "fileType": string,
+    "metadata": {
+        "title": string,
+        "description": string,
+        "tags": string[]
+    }
+}
+Response: {
+    "uploadUrl": string,  # Pre-signed S3 URL
+    "videoId": string     # Unique video identifier
+}
+
+# Notify upload completion
+POST /api/v1/videos/{videoId}/complete
+Response: {
+    "status": "success",
+    "jobId": string      # Processing job identifier
+}
+
+# Upload YouTube video
+POST /api/v1/videos/youtube
+Content-Type: application/json
+{
+    "videoUrl": string,  # YouTube URL
+    "metadata": {
+        "title": string,
+        "description": string,
+        "tags": string[]
+    }
+}
+Response: {
+    "videoId": string,
+    "jobId": string
+}
+```
+
+4. **Implementation Details**
+
+- **Local Video Upload**
+  - Uses s3cmd for direct S3 upload
+  - Better performance for large files
+  - No API Gateway payload limitations
+  - Progress tracking through s3cmd
+  - Pre-signed URLs for secure uploads
+
+- **YouTube Video Upload**
+  - Handled through API Gateway
+  - Uses YoutubeDL for downloading
+  - Automatic metadata extraction
+  - Queue-based processing
+
+- **Common Processing**
+  - Both flows converge to same processing pipeline
+  - SQS queuing for async processing
+  - OpenSearch indexing for search capabilities
+  - Progress tracking through job status
+
+5. **Storage Structure**
+```
+s3://bucket-name/
+├── RawVideos/
+│   └── YYYY-MM-DD/
+│       └── video_id/
+│           ├── original.mp4
+│           └── metadata.json
+├── ProcessedVideos/
+│   └── video_id/
+│       ├── segments/
+│       │   ├── segment_001.mp4
+│       │   └── segment_002.mp4
+│       └── metadata/
+│           ├── visual_embeddings.json
+│           └── audio_embeddings.json
+└── Thumbnails/
+    └── video_id/
+        ├── thumb_001.jpg
+        └── thumb_002.jpg
+```
+
+6. **Security & Performance**
+
+- **Upload Security**
+  - Pre-signed URLs with short expiration
+  - Client-side file validation
+  - Server-side virus scanning
+  - Content type verification
+
+- **Access Control**
+  - IAM roles for Lambda functions
+  - Bucket policies for S3 access
+  - API Gateway authentication
+  - CORS configuration
+
+- **Performance Optimization**
+  - Multipart uploads for large files
+  - s3cmd configuration tuning
+  - Concurrent uploads
+  - Progress monitoring
 
 #### Video Indexing
 

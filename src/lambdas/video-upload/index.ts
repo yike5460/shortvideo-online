@@ -1,13 +1,12 @@
 import { APIGatewayProxyEvent } from 'aws-lambda';
-import { LambdaContext, LambdaResponse, VideoUploadRequest } from '../../types/aws-lambda';
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { LambdaContext, LambdaResponse } from '../../types/aws-lambda';
+import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { Client } from '@opensearch-project/opensearch';
 import { defaultProvider } from '@aws-sdk/credential-provider-node';
 import { AwsSigv4Signer } from '@opensearch-project/opensearch/aws';
 import { v4 as uuidv4 } from 'uuid';
-import { spawn } from 'child_process';
-import { createReadStream } from 'fs';
 import * as path from 'path';
 
 // Initialize clients
@@ -22,8 +21,22 @@ const openSearch = new Client({
       return credentialsProvider();
     },
   }),
-  node: process.env.OPENSEARCH_DOMAIN
+  node: process.env.OPENSEARCH_ENDPOINT
 });
+
+interface PresignRequest {
+  fileName: string;
+  fileType: string;
+  metadata: {
+    title?: string;
+    description?: string;
+    tags?: string[];
+  };
+}
+
+interface CompleteUploadRequest {
+  videoId: string;
+}
 
 export const handler = async (event: APIGatewayProxyEvent, _context: LambdaContext): Promise<LambdaResponse> => {
   try {
@@ -34,69 +47,22 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
       };
     }
 
-    const request: VideoUploadRequest = JSON.parse(event.body);
-    const videoId = uuidv4();
-    const timestamp = new Date().toISOString().split('T')[0];
-    const s3Key = `RawVideos/${timestamp}/${videoId}/${path.basename(request.path)}`;
-
-    // Create initial OpenSearch document
-    await openSearch.index({
-      index: 'videos',
-      id: videoId,
-      body: {
-        video_id: videoId,
-        video_original_path: request.path,
-        video_s3_path: s3Key,
-        video_title: request.metadata?.title || path.basename(request.path),
-        video_description: request.metadata?.description || '',
-        status: 'uploading',
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      }
-    });
-
-    if (request.source === 'youtube') {
-      // Download from YouTube using youtube-dl
-      await downloadFromYoutube(request.path, videoId, s3Key);
+    // Handle different endpoints based on the path
+    const path = event.path.toLowerCase();
+    
+    if (path.endsWith('/presign')) {
+      return handlePresignRequest(event);
+    } else if (path.endsWith('/complete')) {
+      return handleCompleteUpload(event);
     } else {
-      // Upload local file to S3
-      await uploadLocalFile(request.path, s3Key);
+      return {
+        statusCode: 404,
+        body: JSON.stringify({ error: 'Invalid endpoint' })
+      };
     }
 
-    // Update OpenSearch status
-    await openSearch.update({
-      index: 'videos',
-      id: videoId,
-      body: {
-        doc: {
-          status: 'uploaded',
-          updated_at: new Date().toISOString()
-        }
-      }
-    });
-
-    // Trigger video processing
-    await sqs.send(new SendMessageCommand({
-      QueueUrl: process.env.VIDEO_PROCESSING_QUEUE_URL,
-      MessageBody: JSON.stringify({
-        videoId,
-        bucket: process.env.VIDEO_BUCKET,
-        key: s3Key,
-        metadata: request.metadata
-      })
-    }));
-
-    return {
-      statusCode: 200,
-      body: JSON.stringify({
-        message: 'Video upload initiated',
-        videoId,
-        status: 'processing'
-      })
-    };
-
   } catch (error) {
-    console.error('Upload error:', error);
+    console.error('Error:', error);
     return {
       statusCode: 500,
       body: JSON.stringify({
@@ -107,61 +73,98 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
   }
 };
 
-async function downloadFromYoutube(url: string, videoId: string, s3Key: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const tempPath = `/tmp/${videoId}`;
-    const ytdl = spawn('youtube-dl', [
-      '--format', 'best',
-      '--output', tempPath,
-      url
-    ]);
+async function handlePresignRequest(event: APIGatewayProxyEvent): Promise<LambdaResponse> {
+  const request: PresignRequest = JSON.parse(event.body!);
+  const videoId = uuidv4();
+  const timestamp = new Date().toISOString().split('T')[0];
+  const s3Key = `RawVideos/${timestamp}/${videoId}/original${path.extname(request.fileName)}`;
 
-    ytdl.stderr.on('data', (data) => {
-      console.error(`youtube-dl error: ${data}`);
-    });
-
-    ytdl.on('close', async (code) => {
-      if (code !== 0) {
-        reject(new Error(`youtube-dl process exited with code ${code}`));
-        return;
-      }
-
-      try {
-        // Upload downloaded file to S3
-        const fileStream = createReadStream(tempPath);
-        await s3.send(new PutObjectCommand({
-          Bucket: process.env.VIDEO_BUCKET,
-          Key: s3Key,
-          Body: fileStream
-        }));
-
-        resolve();
-      } catch (error) {
-        reject(error);
-      }
-    });
+  // Create initial OpenSearch document
+  await openSearch.index({
+    index: 'videos',
+    id: videoId,
+    body: {
+      video_id: videoId,
+      video_s3_path: s3Key,
+      video_title: request.metadata?.title || path.basename(request.fileName),
+      video_description: request.metadata?.description || '',
+      video_tags: request.metadata?.tags || [],
+      status: 'awaiting_upload',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    }
   });
+
+  // Generate pre-signed URL
+  const command = new PutObjectCommand({
+    Bucket: process.env.VIDEO_BUCKET,
+    Key: s3Key,
+    ContentType: request.fileType,
+    Metadata: {
+      'video-id': videoId,
+      'title': request.metadata?.title || '',
+      'description': request.metadata?.description || '',
+      'tags': request.metadata?.tags ? JSON.stringify(request.metadata.tags) : '[]'
+    }
+  });
+
+  const uploadUrl = await getSignedUrl(s3, command, { expiresIn: 3600 }); // URL expires in 1 hour
+
+  return {
+    statusCode: 200,
+    body: JSON.stringify({
+      uploadUrl,
+      videoId,
+      expiresIn: 3600
+    })
+  };
 }
 
-async function uploadLocalFile(localPath: string, s3Key: string): Promise<void> {
-  const s3cmd = spawn('s3cmd', [
-    'put',
-    localPath,
-    `s3://${process.env.VIDEO_BUCKET}/${s3Key}`,
-    '--quiet'
-  ]);
+async function handleCompleteUpload(event: APIGatewayProxyEvent): Promise<LambdaResponse> {
+  const request: CompleteUploadRequest = JSON.parse(event.body!);
+  const { videoId } = request;
 
-  return new Promise((resolve, reject) => {
-    s3cmd.stderr.on('data', (data) => {
-      console.error(`s3cmd error: ${data}`);
-    });
-
-    s3cmd.on('close', (code) => {
-      if (code === 0) {
-        resolve();
-      } else {
-        reject(new Error(`s3cmd process exited with code ${code}`));
-      }
-    });
+  // Verify the video exists in OpenSearch
+  const { body: searchResult } = await openSearch.get({
+    index: 'videos',
+    id: videoId
   });
+
+  if (!searchResult.found) {
+    return {
+      statusCode: 404,
+      body: JSON.stringify({ error: 'Video not found' })
+    };
+  }
+
+  // Update OpenSearch status
+  await openSearch.update({
+    index: 'videos',
+    id: videoId,
+    body: {
+      doc: {
+        status: 'processing',
+        updated_at: new Date().toISOString()
+      }
+    }
+  });
+
+  // Queue processing job
+  await sqs.send(new SendMessageCommand({
+    QueueUrl: process.env.QUEUE_URL,
+    MessageBody: JSON.stringify({
+      videoId,
+      bucket: process.env.VIDEO_BUCKET,
+      key: searchResult._source.video_s3_path
+    })
+  }));
+
+  return {
+    statusCode: 200,
+    body: JSON.stringify({
+      message: 'Upload completed successfully',
+      videoId,
+      status: 'processing'
+    })
+  };
 } 

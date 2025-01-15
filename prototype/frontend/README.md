@@ -2,14 +2,6 @@
 User tutorial from upload image/video, set index parameter/embedding model, progress panel for ongoing job and detailed page for indexed image or video. Each step layout and element in detail are described below.
 
 ### Step 1: Upload image/video Page
-- Step indicator (2/2)
-- Index selector dropdown
-- Large drop zone for file upload
-- Detailed specification panel
-- Upload requirements clearly listed
-- Action buttons at bottom
-
-### Step 2: Index Creation Page
 - Step indicator (1/2)
 - Form layout with:
   - Text input for index name
@@ -17,6 +9,14 @@ User tutorial from upload image/video, set index parameter/embedding model, prog
   - Model selection cards with detailed specifications
   - Navigation buttons (Cancel/Next)
 - Clear visual hierarchy with cards and icons
+
+### Step 2: Index Creation Page
+- Step indicator (2/2)
+- Index selector dropdown
+- Large drop zone for file upload
+- Detailed specification panel
+- Upload requirements clearly listed
+- Action buttons at bottom
 
 ### Step 3: Progress Panel
 - Tab navigation between "My videos" and "Sample videos"
