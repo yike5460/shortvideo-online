@@ -4,25 +4,35 @@ import { useState, useCallback } from 'react'
 import { useDropzone } from 'react-dropzone'
 import { CloudArrowUpIcon, XMarkIcon } from '@heroicons/react/24/outline'
 import { cn } from '@/lib/utils'
+import axios from 'axios'
+
+// API configuration
+const API_ENDPOINT = process.env.NEXT_PUBLIC_API_URL || ''
 
 interface UploadStepProps {
-  onNext: (files: File[]) => void
+  onNext: (files: File[], uploadIds: string[]) => void
   onBack: () => void
+}
+
+interface UploadProgress {
+  progress: number
+  status: 'pending' | 'uploading' | 'completed' | 'error'
+  error?: string
 }
 
 export default function UploadStep({ onNext, onBack }: UploadStepProps) {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
   const [error, setError] = useState<string>('')
+  const [uploadProgress, setUploadProgress] = useState<Record<string, UploadProgress>>({})
+  const [isUploading, setIsUploading] = useState(false)
 
   const validateFile = (file: File) => {
-    // Duration check will be done on server side
     const maxSize = 2 * 1024 * 1024 * 1024 // 2GB
     
     if (file.size > maxSize) {
       throw new Error('File size must be less than 2GB')
     }
 
-    // Basic video format validation
     const validFormats = ['video/mp4', 'video/quicktime', 'video/x-msvideo']
     if (!validFormats.includes(file.type)) {
       throw new Error('Invalid file format. Please upload MP4, MOV, or AVI files')
@@ -33,6 +43,12 @@ export default function UploadStep({ onNext, onBack }: UploadStepProps) {
     try {
       acceptedFiles.forEach(validateFile)
       setSelectedFiles(prev => [...prev, ...acceptedFiles])
+      acceptedFiles.forEach(file => {
+        setUploadProgress(prev => ({
+          ...prev,
+          [file.name]: { progress: 0, status: 'pending' }
+        }))
+      })
       setError('')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Invalid file')
@@ -44,11 +60,98 @@ export default function UploadStep({ onNext, onBack }: UploadStepProps) {
     accept: {
       'video/*': ['.mp4', '.mov', '.avi']
     },
-    maxSize: 2 * 1024 * 1024 * 1024 // 2GB
+    maxSize: 2 * 1024 * 1024 * 1024, // 2GB
+    disabled: isUploading
   })
 
   const removeFile = (index: number) => {
+    const fileToRemove = selectedFiles[index]
     setSelectedFiles(prev => prev.filter((_, i) => i !== index))
+    setUploadProgress(prev => {
+      const newProgress = { ...prev }
+      delete newProgress[fileToRemove.name]
+      return newProgress
+    })
+  }
+
+  const uploadFile = async (file: File): Promise<string> => {
+    try {
+      // Get pre-signed URL
+      const response = await axios.post(`${API_ENDPOINT}/videos/upload`, {
+        fileName: file.name,
+        fileType: file.type,
+        fileSize: file.size
+      }, {
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      })
+
+      const { uploadUrl, uploadId } = response.data
+
+      // Upload to S3 using pre-signed URL
+      await axios.put(uploadUrl, file, {
+        headers: {
+          'Content-Type': file.type
+        },
+        onUploadProgress: (progressEvent) => {
+          const progress = progressEvent.loaded / progressEvent.total! * 100
+          setUploadProgress(prev => ({
+            ...prev,
+            [file.name]: { 
+              ...prev[file.name],
+              progress,
+              status: 'uploading'
+            }
+          }))
+        }
+      })
+
+      // Notify backend that upload is complete
+      await axios.post(`${API_ENDPOINT}/videos/${uploadId}/complete`, {
+        fileName: file.name,
+        fileSize: file.size,
+        fileType: file.type
+      })
+
+      setUploadProgress(prev => ({
+        ...prev,
+        [file.name]: { 
+          ...prev[file.name],
+          progress: 100,
+          status: 'completed'
+        }
+      }))
+
+      return uploadId
+
+    } catch (err) {
+      console.error('Upload error:', err)
+      setUploadProgress(prev => ({
+        ...prev,
+        [file.name]: { 
+          ...prev[file.name],
+          status: 'error',
+          error: err instanceof Error ? err.message : 'Upload failed'
+        }
+      }))
+      throw err
+    }
+  }
+
+  const handleUpload = async () => {
+    setIsUploading(true)
+    setError('')
+    
+    try {
+      const uploadPromises = selectedFiles.map(file => uploadFile(file))
+      const uploadIds = await Promise.all(uploadPromises)
+      onNext(selectedFiles, uploadIds)
+    } catch (err) {
+      setError('Failed to upload one or more files. Please try again.')
+    } finally {
+      setIsUploading(false)
+    }
   }
 
   return (
@@ -64,16 +167,17 @@ export default function UploadStep({ onNext, onBack }: UploadStepProps) {
         {...getRootProps()}
         className={cn(
           "border-2 border-dashed rounded-lg p-12 text-center cursor-pointer transition-colors",
-          isDragActive ? "border-primary-500 bg-primary-50" : "border-gray-300 hover:border-primary-400"
+          isDragActive ? "border-primary-500 bg-primary-50" : "border-gray-300 hover:border-primary-400",
+          isUploading && "opacity-50 cursor-not-allowed"
         )}
       >
         <input {...getInputProps()} />
         <CloudArrowUpIcon className="mx-auto h-12 w-12 text-gray-400" />
         <p className="mt-4 text-lg font-medium text-gray-900">
-          Drag and drop your videos here
+          {isUploading ? "Upload in progress..." : "Drag and drop your videos here"}
         </p>
         <p className="mt-2 text-sm text-gray-500">
-          or click to browse files
+          {isUploading ? "Please wait while we upload your videos" : "or click to browse files"}
         </p>
       </div>
 
@@ -98,18 +202,40 @@ export default function UploadStep({ onNext, onBack }: UploadStepProps) {
                 key={index}
                 className="flex items-center justify-between bg-white p-4 rounded-lg border"
               >
-                <div>
+                <div className="flex-1">
                   <p className="font-medium text-gray-900">{file.name}</p>
                   <p className="text-sm text-gray-500">
                     {(file.size / (1024 * 1024)).toFixed(2)} MB
                   </p>
+                  {uploadProgress[file.name] && (
+                    <div className="mt-2">
+                      <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+                        <div 
+                          className={cn(
+                            "h-full transition-all duration-300",
+                            uploadProgress[file.name].status === 'completed' ? 'bg-green-500' :
+                            uploadProgress[file.name].status === 'error' ? 'bg-red-500' :
+                            'bg-primary-500'
+                          )}
+                          style={{ width: `${uploadProgress[file.name].progress}%` }}
+                        />
+                      </div>
+                      {uploadProgress[file.name].error && (
+                        <p className="text-sm text-red-500 mt-1">
+                          {uploadProgress[file.name].error}
+                        </p>
+                      )}
+                    </div>
+                  )}
                 </div>
-                <button
-                  onClick={() => removeFile(index)}
-                  className="p-2 text-gray-400 hover:text-gray-600"
-                >
-                  <XMarkIcon className="h-5 w-5" />
-                </button>
+                {!isUploading && (
+                  <button
+                    onClick={() => removeFile(index)}
+                    className="p-2 text-gray-400 hover:text-gray-600"
+                  >
+                    <XMarkIcon className="h-5 w-5" />
+                  </button>
+                )}
               </div>
             ))}
           </div>
@@ -127,16 +253,20 @@ export default function UploadStep({ onNext, onBack }: UploadStepProps) {
       <div className="flex justify-between pt-6">
         <button
           onClick={onBack}
-          className="px-6 py-2 text-gray-600 hover:text-gray-900"
+          disabled={isUploading}
+          className="px-6 py-2 text-gray-600 hover:text-gray-900 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Back
         </button>
         <button
-          onClick={() => onNext(selectedFiles)}
-          disabled={selectedFiles.length === 0}
-          className="px-6 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
+          onClick={handleUpload}
+          disabled={selectedFiles.length === 0 || isUploading}
+          className={cn(
+            "px-6 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed",
+            isUploading && "bg-primary-400"
+          )}
         >
-          Start Indexing
+          {isUploading ? "Uploading..." : "Start Indexing"}
         </button>
       </div>
     </div>

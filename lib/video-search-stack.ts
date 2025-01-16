@@ -720,33 +720,115 @@ export class VideoSearchStack extends cdk.Stack {
     videoSliceFunction: lambda.Function;
     videoSearchFunction: lambda.Function;
   }): apigateway.RestApi {
+    // Create the API
     const api = new apigateway.RestApi(this, 'VideoSearchApi', {
       restApiName: 'Video Search Service',
       description: 'API for video search and processing',
-      defaultCorsPreflightOptions: {
-        allowOrigins: apigateway.Cors.ALL_ORIGINS,
-        allowMethods: apigateway.Cors.ALL_METHODS,
-      },
+      deploy: true,
+      deployOptions: {
+        stageName: 'prod',
+        tracingEnabled: true,
+      }
     });
 
+    // Add Gateway Responses for CORS
+    new apigateway.GatewayResponse(this, 'Gateway4XXResponse', {
+      restApi: api,
+      type: apigateway.ResponseType.DEFAULT_4XX,
+      responseHeaders: {
+        'Access-Control-Allow-Origin': "'*'",
+        'Access-Control-Allow-Headers': "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'",
+        'Access-Control-Allow-Methods': "'GET,POST,PUT,DELETE,OPTIONS'"
+      }
+    });
+
+    new apigateway.GatewayResponse(this, 'Gateway5XXResponse', {
+      restApi: api,
+      type: apigateway.ResponseType.DEFAULT_5XX,
+      responseHeaders: {
+        'Access-Control-Allow-Origin': "'*'",
+        'Access-Control-Allow-Headers': "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'",
+        'Access-Control-Allow-Methods': "'GET,POST,PUT,DELETE,OPTIONS'"
+      }
+    });
+
+    // Main resources
     const videos = api.root.addResource('videos');
     const search = api.root.addResource('search');
-
-    // Video upload endpoints
-    const presign = videos.addResource('presign');
-    const complete = videos.addResource('complete');
+    const upload = videos.addResource('upload');
     const youtube = videos.addResource('youtube');
 
-    presign.addMethod('POST', new apigateway.LambdaIntegration(lambdaFunctions.videoUploadFunction.videoUploadHandler));
-    complete.addMethod('POST', new apigateway.LambdaIntegration(lambdaFunctions.videoUploadFunction.videoUploadHandler));
-    youtube.addMethod('POST', new apigateway.LambdaIntegration(lambdaFunctions.videoUploadFunction.youtubeUploadHandler));
+    // Helper function to add method with CORS
+    const addMethodWithCors = (resource: apigateway.Resource, httpMethod: string, lambdaFn: lambda.Function) => {
+      // Add the actual method
+      const methodResponse: apigateway.MethodResponse = {
+        statusCode: '200',
+        responseParameters: {
+          'method.response.header.Access-Control-Allow-Origin': true,
+          'method.response.header.Access-Control-Allow-Headers': true,
+          'method.response.header.Access-Control-Allow-Methods': true
+        }
+      };
 
-    // Search endpoint
-    search.addMethod('POST', new apigateway.LambdaIntegration(lambdaFunctions.videoSearchFunction));
+      const integrationResponse: apigateway.IntegrationResponse = {
+        statusCode: '200',
+        responseParameters: {
+          'method.response.header.Access-Control-Allow-Origin': "'*'",
+          'method.response.header.Access-Control-Allow-Headers': "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'",
+          'method.response.header.Access-Control-Allow-Methods': "'GET,POST,PUT,DELETE,OPTIONS'"
+        }
+      };
 
-    // Status endpoint
-    const status = videos.addResource('{videoId}').addResource('status');
-    status.addMethod('GET', new apigateway.LambdaIntegration(lambdaFunctions.videoSliceFunction));
+      // Add the main method
+      resource.addMethod(httpMethod, new apigateway.LambdaIntegration(lambdaFn, {
+        proxy: true,
+        integrationResponses: [integrationResponse]
+      }), {
+        methodResponses: [methodResponse]
+      });
+
+      // Add OPTIONS method
+      const optionsResponse: apigateway.MethodResponse = {
+        statusCode: '200',
+        responseParameters: {
+          'method.response.header.Access-Control-Allow-Origin': true,
+          'method.response.header.Access-Control-Allow-Headers': true,
+          'method.response.header.Access-Control-Allow-Methods': true
+        }
+      };
+
+      const optionsIntegration = new apigateway.MockIntegration({
+        integrationResponses: [{
+          statusCode: '200',
+          responseParameters: {
+            'method.response.header.Access-Control-Allow-Origin': "'*'",
+            'method.response.header.Access-Control-Allow-Headers': "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'",
+            'method.response.header.Access-Control-Allow-Methods': "'GET,POST,PUT,DELETE,OPTIONS'"
+          }
+        }],
+        passthroughBehavior: apigateway.PassthroughBehavior.NEVER,
+        requestTemplates: {
+          'application/json': '{"statusCode": 200}'
+        }
+      });
+
+      resource.addMethod('OPTIONS', optionsIntegration, {
+        methodResponses: [optionsResponse]
+      });
+    };
+
+    // Add endpoints with CORS
+    addMethodWithCors(upload, 'POST', lambdaFunctions.videoUploadFunction.videoUploadHandler);
+    addMethodWithCors(youtube, 'POST', lambdaFunctions.videoUploadFunction.youtubeUploadHandler);
+
+    const uploadComplete = upload.addResource('{uploadId}').addResource('complete');
+    addMethodWithCors(uploadComplete, 'POST', lambdaFunctions.videoUploadFunction.videoUploadHandler);
+
+    addMethodWithCors(search, 'POST', lambdaFunctions.videoSearchFunction);
+
+    const status = videos.addResource('status');
+    const videoStatus = status.addResource('{videoId}');
+    addMethodWithCors(videoStatus, 'GET', lambdaFunctions.videoSliceFunction);
 
     return api;
   }

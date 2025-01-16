@@ -49,7 +49,7 @@ sequenceDiagram
     %% Get pre-signed URL
     Client->>API Gateway: Request pre-signed URL
     API Gateway->>Lambda: Generate pre-signed URL
-    Lambda->>Client: Return pre-signed URL + videoId
+    Lambda->>Client: Return pre-signed URL + uploadId
 
     %% Direct upload using s3cmd
     Client->>S3: Upload video using s3cmd
@@ -82,33 +82,44 @@ sequenceDiagram
 ```
 
 3. **API Endpoints**
+Overall API Path:
+```http
+   /videos/upload                         POST - Start upload
+   /videos/upload/{uploadId}/complete     POST - Complete upload
+   /videos/youtube                        POST - YouTube upload
+   /videos/status/{videoId}              GET  - Check status
+   /search                               POST - Search videos
+```
+
 ```http
 # Get pre-signed URL for local video upload
-POST /api/v1/videos/presign
+POST /videos/upload
 Content-Type: application/json
 {
     "fileName": string,
     "fileType": string,
-    "metadata": {
-        "title": string,
-        "description": string,
-        "tags": string[]
-    }
+    "fileSize": number
 }
 Response: {
     "uploadUrl": string,  # Pre-signed S3 URL
-    "videoId": string     # Unique video identifier
+    "uploadId": string    # Unique upload identifier
 }
 
 # Notify upload completion
-POST /api/v1/videos/{videoId}/complete
+POST /videos/upload/{uploadId}/complete
+Content-Type: application/json
+{
+    "fileName": string,
+    "fileSize": number,
+    "fileType": string
+}
 Response: {
     "status": "success",
-    "jobId": string      # Processing job identifier
+    "videoId": string    # Video identifier for status checking
 }
 
 # Upload YouTube video
-POST /api/v1/videos/youtube
+POST /videos/youtube
 Content-Type: application/json
 {
     "videoUrl": string,  # YouTube URL
@@ -120,7 +131,15 @@ Content-Type: application/json
 }
 Response: {
     "videoId": string,
-    "jobId": string
+    "status": "processing"
+}
+
+# Check video processing status
+GET /videos/status/{videoId}
+Response: {
+    "status": "processing|completed|failed",
+    "progress": number,  # 0-100
+    "error": string     # Error message if failed
 }
 ```
 
