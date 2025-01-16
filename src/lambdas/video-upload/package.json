@@ -1,13 +1,16 @@
 {
   "name": "video-upload-lambda",
   "version": "1.0.0",
-  "description": "Lambda function for handling video uploads",
-  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist"
+  },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.0.0",
-    "@aws-sdk/s3-request-presigner": "^3.0.0",
     "@aws-sdk/client-sqs": "^3.0.0",
     "@aws-sdk/credential-provider-node": "^3.0.0",
+    "@aws-sdk/s3-request-presigner": "^3.0.0",
     "@opensearch-project/opensearch": "^2.0.0",
     "uuid": "^9.0.0"
   },
@@ -15,6 +18,7 @@
     "@types/aws-lambda": "^8.10.0",
     "@types/node": "^20.0.0",
     "@types/uuid": "^9.0.0",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "esbuild": "^0.19.0"
   }
 } 

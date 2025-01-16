@@ -38,7 +38,7 @@ interface CompleteUploadRequest {
   videoId: string;
 }
 
-export const handler = async (event: APIGatewayProxyEvent, _context: LambdaContext): Promise<LambdaResponse> => {
+export const handler = async (event: APIGatewayProxyEvent): Promise<LambdaResponse> => {
   try {
     if (!event.body) {
       return {

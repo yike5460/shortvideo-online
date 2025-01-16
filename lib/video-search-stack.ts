@@ -16,6 +16,7 @@ import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import { Construct } from 'constructs';
 import * as cr from 'aws-cdk-lib/custom-resources';
+import * as nodejslambda from 'aws-cdk-lib/aws-lambda-nodejs';
 
 interface VideoSearchStackProps extends cdk.StackProps {
   maxAzs: number;
@@ -431,6 +432,17 @@ export class VideoSearchStack extends cdk.Stack {
         OPENSEARCH_ENDPOINT: `https://${this.openSearchCollection.attrId}.${this.region}.aoss.amazonaws.com`,
         REDIS_ENDPOINT: this.redisCluster.attrRedisEndpointAddress,
       },
+      bundling: {
+        minify: true,
+        sourceMap: true,
+        target: 'node20',
+        format: nodejslambda.OutputFormat.ESM,
+        mainFields: ['module', 'main'],
+        esbuild: {
+          bundle: true,
+          platform: 'node'
+        }
+      }
     };
 
     // Create yt-dlp layer
@@ -441,17 +453,18 @@ export class VideoSearchStack extends cdk.Stack {
       compatibleArchitectures: [lambda.Architecture.X86_64],
     });
 
-    const videoUploadHandler = new lambda.Function(this, 'VideoUploadHandler', {
+    const videoUploadHandler = new nodejslambda.NodejsFunction(this, 'VideoUploadHandler', {
       ...commonLambdaProps,
-      code: lambda.Code.fromAsset('src/lambdas/video-upload'),
-      handler: 'index.handler',
+      entry: 'src/lambdas/video-upload/index.ts',
+      handler: 'handler',
       memorySize: 2048,
+      depsLockFilePath: 'src/lambdas/video-upload/package-lock.json'
     });
 
-    const youtubeUploadHandler = new lambda.Function(this, 'YouTubeUploadHandler', {
+    const youtubeUploadHandler = new nodejslambda.NodejsFunction(this, 'YouTubeUploadHandler', {
       ...commonLambdaProps,
-      code: lambda.Code.fromAsset('src/lambdas/video-upload'),
-      handler: 'youtube.handler',
+      entry: 'src/lambdas/video-upload/youtube.ts',
+      handler: 'handler',
       memorySize: 4096,
       timeout: cdk.Duration.minutes(15), // Longer timeout for YouTube downloads
       environment: {
@@ -459,6 +472,7 @@ export class VideoSearchStack extends cdk.Stack {
         TEMP_PATH: '/tmp' // Temp directory for YouTube downloads
       },
       layers: [ytDlpLayer], // Add the yt-dlp layer
+      depsLockFilePath: 'src/lambdas/video-upload/package-lock.json'
     });
 
     return { videoUploadHandler, youtubeUploadHandler };
