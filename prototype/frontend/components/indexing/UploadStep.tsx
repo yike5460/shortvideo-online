@@ -20,8 +20,16 @@ interface UploadProgress {
   error?: string
 }
 
+interface YouTubeUpload {
+  url: string
+  title?: string
+  description?: string
+  tags?: string[]
+}
+
 export default function UploadStep({ onNext, onBack }: UploadStepProps) {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
+  const [youtubeUrl, setYoutubeUrl] = useState('')
   const [error, setError] = useState<string>('')
   const [uploadProgress, setUploadProgress] = useState<Record<string, UploadProgress>>({})
   const [isUploading, setIsUploading] = useState(false)
@@ -76,18 +84,25 @@ export default function UploadStep({ onNext, onBack }: UploadStepProps) {
 
   const uploadFile = async (file: File): Promise<string> => {
     try {
+      console.log('Uploading file:', file.name, 'to endpoint:', `${API_ENDPOINT}/videos/upload`)
       // Get pre-signed URL
       const response = await axios.post(`${API_ENDPOINT}/videos/upload`, {
         fileName: file.name,
         fileType: file.type,
-        fileSize: file.size
+        fileSize: file.size,
+        metadata: {
+          title: file.name,
+          description: '',
+          tags: []
+        }
       }, {
         headers: {
           'Content-Type': 'application/json'
         }
       })
 
-      const { uploadUrl, uploadId } = response.data
+      console.log('Pre-signed URL response:', response.data)
+      const { uploadUrl, videoId } = response.data
 
       // Upload to S3 using pre-signed URL
       await axios.put(uploadUrl, file, {
@@ -108,10 +123,14 @@ export default function UploadStep({ onNext, onBack }: UploadStepProps) {
       })
 
       // Notify backend that upload is complete
-      await axios.post(`${API_ENDPOINT}/videos/${uploadId}/complete`, {
+      await axios.post(`${API_ENDPOINT}/videos/upload/${videoId}/complete`, {
         fileName: file.name,
         fileSize: file.size,
         fileType: file.type
+      }, {
+        headers: {
+          'Content-Type': 'application/json'
+        }
       })
 
       setUploadProgress(prev => ({
@@ -123,7 +142,7 @@ export default function UploadStep({ onNext, onBack }: UploadStepProps) {
         }
       }))
 
-      return uploadId
+      return videoId
 
     } catch (err) {
       console.error('Upload error:', err)
@@ -139,12 +158,47 @@ export default function UploadStep({ onNext, onBack }: UploadStepProps) {
     }
   }
 
+  const uploadYouTubeVideo = async (youtubeUrl: string): Promise<string> => {
+    try {
+      console.log('Uploading YouTube video:', youtubeUrl)
+      const response = await axios.post(`${API_ENDPOINT}/videos/youtube`, {
+        videoUrl: youtubeUrl,
+        metadata: {
+          title: '',
+          description: '',
+          tags: []
+        }
+      }, {
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      })
+
+      console.log('YouTube upload response:', response.data)
+      return response.data.videoId
+    } catch (err) {
+      console.error('YouTube upload error:', err)
+      throw err
+    }
+  }
+
   const handleUpload = async () => {
     setIsUploading(true)
     setError('')
     
     try {
-      const uploadPromises = selectedFiles.map(file => uploadFile(file))
+      const uploadPromises: Promise<string>[] = []
+
+      // Handle local file uploads
+      if (selectedFiles.length > 0) {
+        uploadPromises.push(...selectedFiles.map(file => uploadFile(file)))
+      }
+
+      // Handle YouTube upload
+      if (youtubeUrl) {
+        uploadPromises.push(uploadYouTubeVideo(youtubeUrl))
+      }
+
       const uploadIds = await Promise.all(uploadPromises)
       onNext(selectedFiles, uploadIds)
     } catch (err) {
@@ -162,23 +216,41 @@ export default function UploadStep({ onNext, onBack }: UploadStepProps) {
         <h2 className="mt-2 text-2xl font-bold text-gray-900">Upload Videos</h2>
       </div>
 
+      {/* YouTube URL input */}
+      <div className="space-y-4">
+        <h3 className="text-lg font-medium text-gray-900">Upload from YouTube</h3>
+        <div className="flex gap-4">
+          <input
+            type="text"
+            value={youtubeUrl}
+            onChange={(e) => setYoutubeUrl(e.target.value)}
+            placeholder="Enter YouTube URL"
+            className="flex-1 rounded-lg border border-gray-300 px-4 py-2 focus:border-primary-500 focus:ring-primary-500"
+            disabled={isUploading}
+          />
+        </div>
+      </div>
+
       {/* Upload zone */}
-      <div
-        {...getRootProps()}
-        className={cn(
-          "border-2 border-dashed rounded-lg p-12 text-center cursor-pointer transition-colors",
-          isDragActive ? "border-primary-500 bg-primary-50" : "border-gray-300 hover:border-primary-400",
-          isUploading && "opacity-50 cursor-not-allowed"
-        )}
-      >
-        <input {...getInputProps()} />
-        <CloudArrowUpIcon className="mx-auto h-12 w-12 text-gray-400" />
-        <p className="mt-4 text-lg font-medium text-gray-900">
-          {isUploading ? "Upload in progress..." : "Drag and drop your videos here"}
-        </p>
-        <p className="mt-2 text-sm text-gray-500">
-          {isUploading ? "Please wait while we upload your videos" : "or click to browse files"}
-        </p>
+      <div className="space-y-4">
+        <h3 className="text-lg font-medium text-gray-900">Or Upload Local Files</h3>
+        <div
+          {...getRootProps()}
+          className={cn(
+            "border-2 border-dashed rounded-lg p-12 text-center cursor-pointer transition-colors",
+            isDragActive ? "border-primary-500 bg-primary-50" : "border-gray-300 hover:border-primary-400",
+            isUploading && "opacity-50 cursor-not-allowed"
+          )}
+        >
+          <input {...getInputProps()} />
+          <CloudArrowUpIcon className="mx-auto h-12 w-12 text-gray-400" />
+          <p className="mt-4 text-lg font-medium text-gray-900">
+            {isUploading ? "Upload in progress..." : "Drag and drop your videos here"}
+          </p>
+          <p className="mt-2 text-sm text-gray-500">
+            {isUploading ? "Please wait while we upload your videos" : "or click to browse files"}
+          </p>
+        </div>
       </div>
 
       {/* Requirements */}
@@ -260,7 +332,7 @@ export default function UploadStep({ onNext, onBack }: UploadStepProps) {
         </button>
         <button
           onClick={handleUpload}
-          disabled={selectedFiles.length === 0 || isUploading}
+          disabled={(selectedFiles.length === 0 && !youtubeUrl) || isUploading}
           className={cn(
             "px-6 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed",
             isUploading && "bg-primary-400"

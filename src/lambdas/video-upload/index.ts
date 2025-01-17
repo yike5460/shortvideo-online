@@ -50,7 +50,15 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<LambdaRespon
     // Handle different endpoints based on the path
     const path = event.path.toLowerCase();
     
-    if (path.endsWith('/presign')) {
+    // Overall API Path:
+    // ```http
+    //   /videos/upload                         POST - Start upload
+    //   /videos/upload/{uploadId}/complete     POST - Complete upload
+    //   /videos/youtube                        POST - YouTube upload
+    //   /videos/status/{videoId}              GET  - Check status
+    //   /search                               POST - Search videos
+    // ```
+    if (path.endsWith('/upload')) {
       return handlePresignRequest(event);
     } else if (path.endsWith('/complete')) {
       return handleCompleteUpload(event);

@@ -436,8 +436,7 @@ export class VideoSearchStack extends cdk.Stack {
         minify: true,
         sourceMap: true,
         target: 'node20',
-        format: nodejslambda.OutputFormat.ESM,
-        mainFields: ['module', 'main'],
+        format: nodejslambda.OutputFormat.CJS,
         esbuild: {
           bundle: true,
           platform: 'node'
