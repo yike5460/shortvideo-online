@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { Tab } from '@headlessui/react'
 import { cn } from '@/lib/utils'
 import { VideoResult, Index } from '@/types'
@@ -74,9 +74,37 @@ const MOCK_VIDEOS: VideoResult[] = [
   },
 ]
 
+// Add API configuration
+const API_ENDPOINT = process.env.NEXT_PUBLIC_API_URL
+
 export default function VideosPage() {
   const [selectedIndex, setSelectedIndex] = useState<string | null>(null)
-  const [videos] = useState<VideoResult[]>(MOCK_VIDEOS)
+  const [videos, setVideos] = useState<VideoResult[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string>('')
+
+  // Add fetch function for videos
+  useEffect(() => {
+    const fetchVideos = async () => {
+      try {
+        const response = await fetch(`${API_ENDPOINT}/videos${selectedIndex ? `?indexId=${selectedIndex}` : ''}`)
+        
+        if (!response.ok) {
+          throw new Error('Failed to fetch videos')
+        }
+
+        const data = await response.json()
+        setVideos(data)
+      } catch (err) {
+        console.error('Error fetching videos:', err)
+        setError('Failed to load videos')
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    fetchVideos()
+  }, [selectedIndex])
 
   const videosByIndex = useMemo(() => {
     return videos.reduce((acc, video) => {
@@ -87,6 +115,24 @@ export default function VideosPage() {
       return acc
     }, {} as Record<string, VideoResult[]>)
   }, [videos])
+
+  // Add loading state
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-gray-600">Loading videos...</div>
+      </div>
+    )
+  }
+
+  // Add error state
+  if (error) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-red-600">{error}</div>
+      </div>
+    )
+  }
 
   return (
     <main className="min-h-screen bg-gray-50 py-12">

@@ -15,7 +15,7 @@ const sqs = new SQSClient({});
 const openSearch = new Client({
   ...AwsSigv4Signer({
     region: process.env.AWS_REGION || 'us-east-1',
-    service: 'es',
+    service: 'aoss',
     getCredentials: () => {
       const credentialsProvider = defaultProvider();
       return credentialsProvider();
@@ -102,6 +102,16 @@ async function handlePresignRequest(event: APIGatewayProxyEvent): Promise<Lambda
       updated_at: new Date().toISOString()
     }
   });
+
+  // Test the OpenSearch connection
+  const { body: testResult } = await openSearch.search({
+    index: 'videos',
+    body: {
+      query: { match_all: {} }
+    }
+  });
+
+  console.log('OpenSearch test result:', testResult);
 
   // Generate pre-signed URL
   const command = new PutObjectCommand({

@@ -6,8 +6,8 @@ import { CloudArrowUpIcon, XMarkIcon } from '@heroicons/react/24/outline'
 import { cn } from '@/lib/utils'
 import axios from 'axios'
 
-// API configuration
-const API_ENDPOINT = process.env.NEXT_PUBLIC_API_URL || ''
+// Update API configuration
+const API_ENDPOINT = process.env.NEXT_PUBLIC_API_URL
 
 interface UploadStepProps {
   onNext: (files: File[], uploadIds: string[]) => void

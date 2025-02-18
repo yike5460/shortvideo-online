@@ -112,7 +112,7 @@ export class VideoSearchStack extends cdk.Stack {
   // Storage infrastructure can be critical in cost and operational complexity, configure all the parameters explicitly
   private createStorageInfrastructure(stage: string): s3.Bucket {
     return new s3.Bucket(this, 'VideoBucket', {
-      bucketName: `video-search-${stage}-${this.account}`,
+      bucketName: `video-search-${stage}-${this.region}`,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       autoDeleteObjects: true,
       lifecycleRules: [
@@ -194,10 +194,17 @@ export class VideoSearchStack extends cdk.Stack {
       allowAllOutbound: true,
     });
 
+    // Allow HTTPS and HTTP from VPC
     vpcEndpointSG.addIngressRule(
       ec2.Peer.ipv4(this.vpc.vpcCidrBlock),
       ec2.Port.tcp(443),
       'Allow HTTPS from VPC'
+    );
+
+    vpcEndpointSG.addIngressRule(
+      ec2.Peer.ipv4(this.vpc.vpcCidrBlock),
+      ec2.Port.tcp(80),
+      'Allow HTTP from VPC'
     );
 
     // Create VPC endpoint for OpenSearch
@@ -331,15 +338,31 @@ export class VideoSearchStack extends cdk.Stack {
   }
 
   private createVideoUploadFunction() {
+    // Create the Lambda security group with proper egress and ingress rules
+    const lambdaSG = new ec2.SecurityGroup(this, 'LambdaSecurityGroup', {
+      vpc: this.vpc,
+      description: 'Security group for Lambdas accessing OpenSearch via VPC endpoint',
+      allowAllOutbound: true,
+    });
+
+    // Allow outbound connections to HTTP and HTTPS (already needed)
+    lambdaSG.addEgressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(443), 'Allow HTTPS outbound');
+    lambdaSG.addEgressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(80), 'Allow HTTP outbound');
+
+    // Now add ingress rules to allow incoming traffic on HTTP and HTTPS (needed for VPC endpoint access)
+    lambdaSG.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(443), 'Allow HTTPS inbound');
+    lambdaSG.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(80), 'Allow HTTP inbound');
+
     const commonLambdaProps = {
       runtime: lambda.Runtime.NODEJS_20_X,
       vpc: this.vpc,
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+      securityGroups: [lambdaSG],
       timeout: cdk.Duration.minutes(15),
       environment: {
         VIDEO_BUCKET: this.videoBucket.bucketName,
         QUEUE_URL: this.videoProcessingQueue.queueUrl,
-        OPENSEARCH_ENDPOINT: `https://video-search-${this.region}.${this.region}.aoss.amazonaws.com`,
+        OPENSEARCH_ENDPOINT: `https://${this.openSearchCollection.attrId}.${this.region}.aoss.amazonaws.com`,
         REDIS_ENDPOINT: this.redisCluster.attrRedisEndpointAddress,
       },
       bundling: {
@@ -780,24 +803,24 @@ export class VideoSearchStack extends cdk.Stack {
       effect: iam.Effect.ALLOW,
       actions: [
         'aoss:APIAccessAll',
-        'aoss:DescribeCollection',
         'aoss:CreateCollection',
+        'aoss:ListCollections',
+        'aoss:BatchGetCollection',
         'aoss:UpdateCollection',
         'aoss:DeleteCollection',
-        'aoss:CreateIndex',
-        'aoss:DeleteIndex',
-        'aoss:UpdateIndex',
-        'aoss:DescribeIndex',
-        'aoss:ReadDocument',
-        'aoss:WriteDocument',
-        'es:ESHttpPost',
-        'es:ESHttpPut',
-        'es:ESHttpGet',
-        'es:ESHttpDelete'
+        'aoss:CreateAccessPolicy',
+        'aoss:CreateSecurityPolicy',
+        'aoss:UpdateSecurityPolicy',
+        'aoss:GetSecurityPolicy',
+        'aoss:CreateAccessPolicy',
+        'aoss:GetAccessPolicy',
+        'aoss:UpdateAccessPolicy',
+        'es:ESHttp*'  // Add full HTTP access
       ],
       resources: [
-        `arn:aws:aoss:${this.region}:${this.account}:collection/${this.openSearchCollection.attrId}`,
-        `arn:aws:aoss:${this.region}:${this.account}:collection/${this.openSearchCollection.attrId}/*`
+        `arn:aws:aoss:${this.region}:${this.account}:collection/*`,
+        `arn:aws:aoss:${this.region}:${this.account}:security-policy/*`,
+        `arn:aws:aoss:${this.region}:${this.account}:access-policy/*`
       ]
     });
 
@@ -812,6 +835,7 @@ export class VideoSearchStack extends cdk.Stack {
       ]
     });
 
+    // Add policies to Lambda roles
     lambdaFunctions.videoUploadFunction.videoUploadHandler.addToRolePolicy(openSearchPolicy);
     lambdaFunctions.videoSliceFunction.addToRolePolicy(openSearchPolicy);
     lambdaFunctions.videoSearchFunction.addToRolePolicy(openSearchReadOnlyPolicy);
@@ -833,11 +857,10 @@ export class VideoSearchStack extends cdk.Stack {
     lambdaFunctions.videoSliceFunction.addToRolePolicy(aiServicePolicy);
 
     // Grant permissions to embedding services to access OpenSearch
-    // textEmbeddingService.taskDefinition.addToTaskRolePolicy(openSearchReadOnlyPolicy);
-    videoEmbeddingService.taskDefinition.addToTaskRolePolicy(openSearchReadOnlyPolicy);
+    // textEmbeddingService.taskDefinition.addToTaskRolePolicy(openSearchPolicy);
+    videoEmbeddingService.taskDefinition.addToTaskRolePolicy(openSearchPolicy);
 
     // Grant permissions to embedding services to access S3
-    // this.videoBucket.grantRead(textEmbeddingService.taskDefinition.taskRole);
     this.videoBucket.grantRead(videoEmbeddingService.taskDefinition.taskRole);
   }
 

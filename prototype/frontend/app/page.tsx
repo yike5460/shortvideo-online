@@ -98,6 +98,9 @@ const initialSearchOptions: SearchOptions = {
   confidenceAdjustment: 'default',
 }
 
+// Add API configuration
+const API_ENDPOINT = process.env.NEXT_PUBLIC_API_URL
+
 export default function HomePage() {
   const { state } = useAuth()
   const router = useRouter()
@@ -179,10 +182,53 @@ export default function HomePage() {
       return
     }
 
-    if (imageFile) {
-      console.log('Image search with:', imageFile)
+    try {
+      setIsLoading(true)
+      
+      let searchResponse
+      if (imageFile) {
+        // Handle image search
+        const formData = new FormData()
+        formData.append('image', imageFile)
+        formData.append('indexId', searchOptions.selectedIndex)
+        
+        searchResponse = await fetch(`${API_ENDPOINT}/search/image`, {
+          method: 'POST',
+          body: formData
+        })
+      } else {
+        // Handle text search
+        searchResponse = await fetch(`${API_ENDPOINT}/search`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            query,
+            indexId: searchOptions.selectedIndex,
+            options: {
+              visualSearch: searchOptions.visualSearch,
+              audioSearch: searchOptions.audioSearch,
+              minConfidence: searchOptions.minConfidence
+            }
+          })
+        })
+      }
+
+      if (!searchResponse.ok) {
+        throw new Error('Search failed')
+      }
+
+      const results = await searchResponse.json()
+      setSearchResults(results)
+    } catch (err) {
+      console.error('Search error:', err)
+      setError('Failed to perform search. Please try again.')
+      setSearchResults([])
+    } finally {
+      setIsLoading(false)
     }
-  }, [searchOptions.selectedIndex])
+  }, [searchOptions])
 
   const handleFeedback = useCallback(async (isHelpful: boolean) => {
     try {
