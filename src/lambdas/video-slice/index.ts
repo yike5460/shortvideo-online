@@ -10,9 +10,37 @@ import {
   SegmentDetection
 } from '@aws-sdk/client-rekognition';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
+import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
+import { Client } from '@opensearch-project/opensearch';
+import { defaultProvider } from '@aws-sdk/credential-provider-node';
+import { AwsSigv4Signer } from '@opensearch-project/opensearch/aws';
 
 const rekognition = new RekognitionClient({});
 const sqs = new SQSClient({});
+const s3 = new S3Client({});
+const openSearch = new Client({
+  ...AwsSigv4Signer({
+    region: process.env.AWS_REGION || 'us-east-1',
+    service: 'aoss',
+    getCredentials: () => {
+      const credentialsProvider = defaultProvider();
+      return credentialsProvider();
+    },
+  }),
+  node: process.env.OPENSEARCH_ENDPOINT
+});
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token',
+  'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
+  'Access-Control-Allow-Credentials': 'true'
+};
+
+interface VideoProcessingJob {
+  videoId: string;
+  bucket: string;
+  key: string;
+}
 
 export const handler = async (event: S3Event | SQSEvent, _context: LambdaContext): Promise<LambdaResponse> => {
   try {
@@ -26,6 +54,7 @@ export const handler = async (event: S3Event | SQSEvent, _context: LambdaContext
         process.stdout.write('Skipping non-raw video file: ' + key + '\n');
         return {
           statusCode: 200,
+          headers: corsHeaders,
           body: JSON.stringify({ message: 'Skipped non-raw video file' })
         };
       }
@@ -84,6 +113,7 @@ export const handler = async (event: S3Event | SQSEvent, _context: LambdaContext
 
       return {
         statusCode: 200,
+        headers: corsHeaders,
         body: JSON.stringify({
           message: 'Video processing started',
           videoId,
@@ -136,6 +166,7 @@ export const handler = async (event: S3Event | SQSEvent, _context: LambdaContext
 
         return {
           statusCode: 200,
+          headers: corsHeaders,
           body: JSON.stringify({
             message: 'Shot detection completed',
             videoId,
@@ -148,6 +179,7 @@ export const handler = async (event: S3Event | SQSEvent, _context: LambdaContext
     // If we get here, we didn't handle the event type
     return {
       statusCode: 400,
+      headers: corsHeaders,
       body: JSON.stringify({ error: 'Unsupported event type' })
     };
 
@@ -155,10 +187,115 @@ export const handler = async (event: S3Event | SQSEvent, _context: LambdaContext
     console.error('Error processing video:', error);
     return {
       statusCode: 500,
+      headers: corsHeaders,
       body: JSON.stringify({
         error: 'Internal server error',
         details: error instanceof Error ? error.message : 'Unknown error'
       })
     };
   }
-}; 
+};
+
+async function processVideoJob(record: SQSEvent): Promise<void> {
+  try {
+    const job: VideoProcessingJob = JSON.parse(record.Records[0].body);
+    console.log('Processing video job:', job);
+
+    // Update status to processing
+    await updateVideoStatus(job.videoId, 'processing');
+
+    // Start segment detection
+    const segmentDetectionResponse = await rekognition.send(new StartSegmentDetectionCommand({
+      Video: {
+        S3Object: {
+          Bucket: job.bucket,
+          Name: job.key
+        }
+      },
+      SegmentTypes: ['SHOT', 'TECHNICAL_CUE'],
+      Filters: {
+        TechnicalCueFilter: {
+          BlackFrame: { MaxPixelThreshold: 0.2, MinCoveragePercentage: 95 }
+        }
+      }
+    }));
+
+    const jobId = segmentDetectionResponse.JobId;
+    if (!jobId) {
+      throw new Error('Failed to start segment detection job');
+    }
+
+    // Poll for job completion
+    let segments = await pollSegmentDetection(jobId);
+    console.log('Detected segments:', segments);
+
+    // Process segments and update OpenSearch
+    const processedSegments = segments.map((segment, index) => ({
+      segment_id: `${job.videoId}_${index}`,
+      video_id: job.videoId,
+      start_time: segment.StartTimestampMillis,
+      end_time: segment.EndTimestampMillis,
+      duration: segment.DurationMillis,
+      type: segment.Type,
+      confidence: segment.ModelConfidence
+    }));
+
+    // Batch index segments to OpenSearch
+    const body = processedSegments.flatMap(segment => [
+      { index: { _index: 'video_segments', _id: segment.segment_id } },
+      segment
+    ]);
+
+    await openSearch.bulk({ body });
+
+    // Update video status to completed
+    await updateVideoStatus(job.videoId, 'ready', {
+      segment_count: processedSegments.length,
+      total_duration: Math.max(...processedSegments.map(s => s.end_time || 0))
+    });
+
+  } catch (error) {
+    console.error('Error processing video:', error);
+    if (error instanceof Error) {
+      await updateVideoStatus(JSON.parse(record.Records[0].body).videoId, 'error', {
+        error: error.message
+      });
+    }
+    throw error; // Let SQS handle the retry
+  }
+}
+
+async function pollSegmentDetection(jobId: string, maxAttempts = 60): Promise<any[]> {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const response = await rekognition.send(new GetSegmentDetectionCommand({
+      JobId: jobId
+    }));
+
+    if (response.JobStatus === 'SUCCEEDED') {
+      return response.Segments || [];
+    }
+
+    if (response.JobStatus === 'FAILED') {
+      throw new Error(`Segment detection failed: ${response.StatusMessage}`);
+    }
+
+    // Wait 5 seconds before next poll
+    await new Promise(resolve => setTimeout(resolve, 5000));
+  }
+
+  throw new Error('Segment detection timed out');
+}
+
+async function updateVideoStatus(videoId: string, status: string, additionalFields?: Record<string, any>) {
+  await openSearch.update({
+    index: 'videos',
+    id: videoId,
+    body: {
+      doc: {
+        status,
+        ...additionalFields,
+        updated_at: new Date().toISOString()
+      }
+    }
+  });
+} 

@@ -17,6 +17,7 @@ import * as sns from 'aws-cdk-lib/aws-sns';
 import { Construct } from 'constructs';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import * as nodejslambda from 'aws-cdk-lib/aws-lambda-nodejs';
+import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 
 interface VideoSearchStackProps extends cdk.StackProps {
   maxAzs: number;
@@ -446,6 +447,9 @@ export class VideoSearchStack extends cdk.Stack {
       handler: 'index.handler',
       memorySize: 4096,
     });
+
+    // Add event source from the video processing queue
+    videoSliceHandler.addEventSource(new SqsEventSource(this.videoProcessingQueue));
 
     return videoSliceHandler;
   }
@@ -905,6 +909,24 @@ export class VideoSearchStack extends cdk.Stack {
 
     // Grant permissions to embedding services to access S3
     this.videoBucket.grantRead(videoEmbeddingService.taskDefinition.taskRole);
+
+    // Grant Rekognition permissions to video slice function
+    const rekognitionPolicy = new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'rekognition:StartSegmentDetection',
+        'rekognition:GetSegmentDetection'
+      ],
+      resources: ['*']
+    });
+    
+    lambdaFunctions.videoSliceFunction.addToRolePolicy(rekognitionPolicy);
+
+    // Grant S3 read access to video slice function
+    this.videoBucket.grantRead(lambdaFunctions.videoSliceFunction);
+
+    // Grant SQS permissions
+    queue.grantConsumeMessages(lambdaFunctions.videoSliceFunction);
   }
 
   private createMonitoringInfrastructure(
