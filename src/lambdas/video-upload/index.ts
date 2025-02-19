@@ -23,10 +23,17 @@ const openSearch = new Client({
   }),
   node: process.env.OPENSEARCH_ENDPOINT
 });
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token',
+  'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
+  'Access-Control-Allow-Credentials': 'true'
+};
 
 interface PresignRequest {
   fileName: string;
   fileType: string;
+  fileSize: number;
   metadata: {
     title?: string;
     description?: string;
@@ -36,6 +43,9 @@ interface PresignRequest {
 
 interface CompleteUploadRequest {
   videoId: string;
+  fileName: string;
+  fileSize: number;
+  fileType: string;
 }
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<LambdaResponse> => {
@@ -43,7 +53,8 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<LambdaRespon
     if (!event.body) {
       return {
         statusCode: 400,
-        body: JSON.stringify({ error: 'Missing request body' })
+        body: JSON.stringify({ error: 'Missing request body' }),
+        headers: {}
       };
     }
 
@@ -65,7 +76,8 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<LambdaRespon
     } else {
       return {
         statusCode: 404,
-        body: JSON.stringify({ error: 'Invalid endpoint' })
+        body: JSON.stringify({ error: 'Invalid endpoint' }),
+        headers: {}
       };
     }
 
@@ -76,7 +88,8 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<LambdaRespon
       body: JSON.stringify({
         error: 'Internal server error',
         details: error instanceof Error ? error.message : 'Unknown error'
-      })
+      }),
+      headers: {}
     };
   }
 };
@@ -94,6 +107,9 @@ async function handlePresignRequest(event: APIGatewayProxyEvent): Promise<Lambda
     body: {
       video_id: videoId,
       video_s3_path: s3Key,
+      video_name: request.fileName,
+      video_size: request.fileSize,
+      video_type: request.fileType,
       video_title: request.metadata?.title || path.basename(request.fileName),
       video_description: request.metadata?.description || '',
       video_tags: request.metadata?.tags || [],
@@ -130,6 +146,7 @@ async function handlePresignRequest(event: APIGatewayProxyEvent): Promise<Lambda
 
   return {
     statusCode: 200,
+    headers: corsHeaders,
     body: JSON.stringify({
       uploadUrl,
       videoId,
@@ -140,7 +157,7 @@ async function handlePresignRequest(event: APIGatewayProxyEvent): Promise<Lambda
 
 async function handleCompleteUpload(event: APIGatewayProxyEvent): Promise<LambdaResponse> {
   const request: CompleteUploadRequest = JSON.parse(event.body!);
-  const { videoId } = request;
+  const { videoId, fileName, fileSize, fileType } = request;
 
   // Verify the video exists in OpenSearch
   const { body: searchResult } = await openSearch.get({
@@ -151,17 +168,20 @@ async function handleCompleteUpload(event: APIGatewayProxyEvent): Promise<Lambda
   if (!searchResult.found) {
     return {
       statusCode: 404,
-      body: JSON.stringify({ error: 'Video not found' })
+      headers: corsHeaders,
+      body: JSON.stringify({ error: 'Video not found for video index ' + videoId })
     };
   }
 
-  // Update OpenSearch status
+  console.log('Search result before update:', searchResult);
+
+  // Update OpenSearch with additional metadata
   await openSearch.update({
     index: 'videos',
     id: videoId,
     body: {
       doc: {
-        status: 'processing',
+        status: 'completed',
         updated_at: new Date().toISOString()
       }
     }
@@ -179,6 +199,7 @@ async function handleCompleteUpload(event: APIGatewayProxyEvent): Promise<Lambda
 
   return {
     statusCode: 200,
+    headers: corsHeaders,
     body: JSON.stringify({
       message: 'Upload completed successfully',
       videoId,

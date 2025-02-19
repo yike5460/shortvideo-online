@@ -1,4 +1,5 @@
 import { Context as LambdaContext } from 'aws-lambda';
+// Import lambda response type from the @types/aws-lambda instead of customize our own
 
 declare global {
   namespace NodeJS {
@@ -18,6 +19,7 @@ declare global {
 export interface LambdaResponse {
   statusCode: number;
   body: string;
+  headers: Record<string, string>;
 }
 
 export interface S3Event {

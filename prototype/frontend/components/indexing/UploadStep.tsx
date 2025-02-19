@@ -91,6 +91,7 @@ export default function UploadStep({ onNext, onBack }: UploadStepProps) {
         fileType: file.type,
         fileSize: file.size,
         metadata: {
+          // Use the file name as the title for now
           title: file.name,
           description: '',
           tags: []
@@ -126,7 +127,8 @@ export default function UploadStep({ onNext, onBack }: UploadStepProps) {
       await axios.post(`${API_ENDPOINT}/videos/upload/${videoId}/complete`, {
         fileName: file.name,
         fileSize: file.size,
-        fileType: file.type
+        fileType: file.type,
+        videoId: videoId
       }, {
         headers: {
           'Content-Type': 'application/json'

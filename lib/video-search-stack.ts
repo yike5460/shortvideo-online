@@ -339,7 +339,7 @@ export class VideoSearchStack extends cdk.Stack {
 
   private createVideoUploadFunction() {
     // Create the Lambda security group with proper egress and ingress rules
-    const lambdaSG = new ec2.SecurityGroup(this, 'LambdaSecurityGroup', {
+    const lambdaSG = new ec2.SecurityGroup(this, 'LambdaSecurityGroupVideoUpload', {
       vpc: this.vpc,
       description: 'Security group for Lambdas accessing OpenSearch via VPC endpoint',
       allowAllOutbound: true,
@@ -411,10 +411,26 @@ export class VideoSearchStack extends cdk.Stack {
   }
 
   private createVideoSliceFunction() {
+    // Create the Lambda security group with proper egress and ingress rules
+    const lambdaSG = new ec2.SecurityGroup(this, 'LambdaSecurityGroupVideoSlice', {
+      vpc: this.vpc,
+      description: 'Security group for Lambdas accessing OpenSearch via VPC endpoint',
+      allowAllOutbound: true,
+    });
+
+    // Allow outbound connections to HTTP and HTTPS (already needed)
+    lambdaSG.addEgressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(443), 'Allow HTTPS outbound');
+    lambdaSG.addEgressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(80), 'Allow HTTP outbound');
+
+    // Now add ingress rules to allow incoming traffic on HTTP and HTTPS (needed for VPC endpoint access)
+    lambdaSG.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(443), 'Allow HTTPS inbound');
+    lambdaSG.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(80), 'Allow HTTP inbound');
+    
     const commonLambdaProps = {
       runtime: lambda.Runtime.NODEJS_20_X,
       vpc: this.vpc,
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+      securityGroups: [lambdaSG],
       timeout: cdk.Duration.minutes(15),
       environment: {
         VIDEO_BUCKET: this.videoBucket.bucketName,
@@ -435,6 +451,21 @@ export class VideoSearchStack extends cdk.Stack {
   }
 
   private createVideoSearchFunction() {
+    // Create the Lambda security group with proper egress and ingress rules
+    const lambdaSG = new ec2.SecurityGroup(this, 'LambdaSecurityGroupVideoSearch', {
+      vpc: this.vpc,
+      description: 'Security group for Lambdas accessing OpenSearch via VPC endpoint',
+      allowAllOutbound: true,
+    });
+
+    // Allow outbound connections to HTTP and HTTPS (already needed)
+    lambdaSG.addEgressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(443), 'Allow HTTPS outbound');
+    lambdaSG.addEgressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(80), 'Allow HTTP outbound');
+
+    // Now add ingress rules to allow incoming traffic on HTTP and HTTPS (needed for VPC endpoint access)
+    lambdaSG.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(443), 'Allow HTTPS inbound');
+    lambdaSG.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(80), 'Allow HTTP inbound');
+
     const commonLambdaProps = {
       runtime: lambda.Runtime.NODEJS_20_X,
       vpc: this.vpc,
@@ -666,36 +697,27 @@ export class VideoSearchStack extends cdk.Stack {
     videoSliceFunction: lambda.Function;
     videoSearchFunction: lambda.Function;
   }): apigateway.RestApi {
-    // Create the API
+    // Create API Gateway
     const api = new apigateway.RestApi(this, 'VideoSearchApi', {
       restApiName: 'Video Search Service',
-      description: 'API for video search and processing',
+      description: 'Video Search API for uploading, slicing, and searching videos',
       deploy: true,
       deployOptions: {
         stageName: 'prod',
         tracingEnabled: true,
-      }
-    });
-
-    // Add Gateway Responses for CORS
-    new apigateway.GatewayResponse(this, 'Gateway4XXResponse', {
-      restApi: api,
-      type: apigateway.ResponseType.DEFAULT_4XX,
-      responseHeaders: {
-        'Access-Control-Allow-Origin': "'*'",
-        'Access-Control-Allow-Headers': "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'",
-        'Access-Control-Allow-Methods': "'GET,POST,PUT,DELETE,OPTIONS'"
-      }
-    });
-
-    new apigateway.GatewayResponse(this, 'Gateway5XXResponse', {
-      restApi: api,
-      type: apigateway.ResponseType.DEFAULT_5XX,
-      responseHeaders: {
-        'Access-Control-Allow-Origin': "'*'",
-        'Access-Control-Allow-Headers': "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'",
-        'Access-Control-Allow-Methods': "'GET,POST,PUT,DELETE,OPTIONS'"
-      }
+      },
+      defaultCorsPreflightOptions: {
+        allowOrigins: apigateway.Cors.ALL_ORIGINS,
+        allowMethods: apigateway.Cors.ALL_METHODS,
+        allowHeaders: [
+          'Content-Type',
+          'X-Amz-Date',
+          'Authorization',
+          'X-Api-Key',
+          'X-Amz-Security-Token',
+        ],
+        maxAge: cdk.Duration.seconds(600)
+      },
     });
 
     // Main resources
@@ -704,74 +726,95 @@ export class VideoSearchStack extends cdk.Stack {
     const upload = videos.addResource('upload');
     const youtube = videos.addResource('youtube');
 
-    // Helper function to add method with CORS
+    // Add Lambda integrations with CORS
     const addMethodWithCors = (resource: apigateway.Resource, httpMethod: string, lambdaFn: lambda.Function) => {
-      // Add the actual method
-      const methodResponse: apigateway.MethodResponse = {
-        statusCode: '200',
-        responseParameters: {
-          'method.response.header.Access-Control-Allow-Origin': true,
-          'method.response.header.Access-Control-Allow-Headers': true,
-          'method.response.header.Access-Control-Allow-Methods': true
-        }
-      };
-
-      const integrationResponse: apigateway.IntegrationResponse = {
-        statusCode: '200',
-        responseParameters: {
-          'method.response.header.Access-Control-Allow-Origin': "'*'",
-          'method.response.header.Access-Control-Allow-Headers': "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'",
-          'method.response.header.Access-Control-Allow-Methods': "'GET,POST,PUT,DELETE,OPTIONS'"
-        }
-      };
+      const integration = new apigateway.LambdaIntegration(lambdaFn, {
+        proxy: true,
+        integrationResponses: [
+          {
+            statusCode: '200',
+            responseParameters: {
+              'method.response.header.Access-Control-Allow-Origin': "'*'",
+              'method.response.header.Access-Control-Allow-Headers': "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'",
+              'method.response.header.Access-Control-Allow-Methods': "'OPTIONS,GET,PUT,POST,DELETE'",
+            },
+          },
+          {
+            selectionPattern: '.*',
+            statusCode: '500',
+            responseParameters: {
+              'method.response.header.Access-Control-Allow-Origin': "'*'",
+            },
+          }
+        ],
+      });
 
       // Add the main method
-      resource.addMethod(httpMethod, new apigateway.LambdaIntegration(lambdaFn, {
-        proxy: true,
-        integrationResponses: [integrationResponse]
-      }), {
-        methodResponses: [methodResponse]
-      });
-
-      // Add OPTIONS method
-      const optionsResponse: apigateway.MethodResponse = {
-        statusCode: '200',
-        responseParameters: {
-          'method.response.header.Access-Control-Allow-Origin': true,
-          'method.response.header.Access-Control-Allow-Headers': true,
-          'method.response.header.Access-Control-Allow-Methods': true
-        }
-      };
-
-      const optionsIntegration = new apigateway.MockIntegration({
-        integrationResponses: [{
-          statusCode: '200',
-          responseParameters: {
-            'method.response.header.Access-Control-Allow-Origin': "'*'",
-            'method.response.header.Access-Control-Allow-Headers': "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'",
-            'method.response.header.Access-Control-Allow-Methods': "'GET,POST,PUT,DELETE,OPTIONS'"
+      resource.addMethod(httpMethod, integration, {
+        methodResponses: [
+          {
+            statusCode: '200',
+            responseParameters: {
+              'method.response.header.Access-Control-Allow-Origin': true,
+              'method.response.header.Access-Control-Allow-Headers': true,
+              'method.response.header.Access-Control-Allow-Methods': true,
+            },
+          },
+          {
+            statusCode: '500',
+            responseParameters: {
+              'method.response.header.Access-Control-Allow-Origin': true,
+            },
           }
-        }],
-        passthroughBehavior: apigateway.PassthroughBehavior.NEVER,
-        requestTemplates: {
-          'application/json': '{"statusCode": 200}'
-        }
+        ],
       });
 
-      resource.addMethod('OPTIONS', optionsIntegration, {
-        methodResponses: [optionsResponse]
-      });
+      // Add OPTIONS method if it doesn't exist and hasn't been added by defaultCorsPreflightOptions
+      try {
+        resource.addMethod('OPTIONS', new apigateway.MockIntegration({
+          integrationResponses: [
+            {
+              statusCode: '200',
+              responseParameters: {
+                'method.response.header.Access-Control-Allow-Headers': "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'",
+                'method.response.header.Access-Control-Allow-Origin': "'*'",
+                'method.response.header.Access-Control-Allow-Methods': "'OPTIONS,GET,PUT,POST,DELETE'",
+                'method.response.header.Access-Control-Allow-Credentials': "'true'"
+              },
+            },
+          ],
+          passthroughBehavior: apigateway.PassthroughBehavior.NEVER,
+          requestTemplates: {
+            'application/json': '{"statusCode": 200}',
+          },
+        }), {
+          methodResponses: [
+            {
+              statusCode: '200',
+              responseParameters: {
+                'method.response.header.Access-Control-Allow-Headers': true,
+                'method.response.header.Access-Control-Allow-Methods': true,
+                'method.response.header.Access-Control-Allow-Origin': true,
+                'method.response.header.Access-Control-Allow-Credentials': true,
+              },
+            },
+          ],
+        });
+      } catch (error) {
+        // OPTIONS method already exists, skip adding it
+        console.log(`OPTIONS method already exists for resource ${resource.path}`);
+      }
     };
 
-    // Add endpoints with CORS
+    // Add endpoints
     addMethodWithCors(upload, 'POST', lambdaFunctions.videoUploadFunction.videoUploadHandler);
     addMethodWithCors(youtube, 'POST', lambdaFunctions.videoUploadFunction.youtubeUploadHandler);
-
+    
     const uploadComplete = upload.addResource('{uploadId}').addResource('complete');
     addMethodWithCors(uploadComplete, 'POST', lambdaFunctions.videoUploadFunction.videoUploadHandler);
-
+    
     addMethodWithCors(search, 'POST', lambdaFunctions.videoSearchFunction);
-
+    
     const status = videos.addResource('status');
     const videoStatus = status.addResource('{videoId}');
     addMethodWithCors(videoStatus, 'GET', lambdaFunctions.videoSliceFunction);
