@@ -5,6 +5,7 @@ import { useDropzone } from 'react-dropzone'
 import { CloudArrowUpIcon, XMarkIcon } from '@heroicons/react/24/outline'
 import { cn } from '@/lib/utils'
 import axios from 'axios'
+import { useRouter } from 'next/navigation'
 
 // Update API configuration
 const API_ENDPOINT = process.env.NEXT_PUBLIC_API_URL
@@ -33,6 +34,7 @@ export default function UploadStep({ onNext, onBack }: UploadStepProps) {
   const [error, setError] = useState<string>('')
   const [uploadProgress, setUploadProgress] = useState<Record<string, UploadProgress>>({})
   const [isUploading, setIsUploading] = useState(false)
+  const router = useRouter()
 
   const validateFile = (file: File) => {
     const maxSize = 2 * 1024 * 1024 * 1024 // 2GB
@@ -135,6 +137,7 @@ export default function UploadStep({ onNext, onBack }: UploadStepProps) {
         }
       })
 
+      // Update progress
       setUploadProgress(prev => ({
         ...prev,
         [file.name]: { 
@@ -143,6 +146,9 @@ export default function UploadStep({ onNext, onBack }: UploadStepProps) {
           status: 'completed'
         }
       }))
+
+      // Redirect to videos page without index parameter
+      router.push('/videos')
 
       return videoId
 

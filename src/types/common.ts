@@ -68,27 +68,29 @@
 // }
 
 // Video metadata types
-export interface VideoMetadata {
-  video_id: string;
-  video_original_path?: string;     // Youtube URL or local video path
-  video_s3_path: string;            // S3 storage location
-  video_title: string;              // Video title
+export interface VideoMetadata {  
   video_description?: string;       // Original video description    
   video_duration?: number;          // Total video duration in milliseconds
-  video_summary?: string;           // Video summary, AI generated
+  video_id?: string;
   video_name?: string;              // Original file name
+  video_original_path?: string;     // Youtube URL or local video path
+  video_s3_path?: string;            // S3 storage location
   video_size?: number;              // File size in bytes
+  video_status?: VideoStatus;        // Current processing status
+  video_summary?: string;           // Video summary, AI generated
+  video_tags?: string[];            // Tags for the video
+  video_title?: string;              // Video title
   video_type?: string;              // MIME type
-  video_status: VideoStatus;        // Current processing status
-  created_at: string;               // ISO timestamp
-  updated_at: string;               // ISO timestamp
+  
+  created_at?: string;               // ISO timestamp
+  updated_at?: string;               // ISO timestamp
   error?: string;                   // Error message if processing failed
   segment_count?: number;           // Number of detected segments
   total_duration?: number;          // Total duration in milliseconds
   job_id?: string;                  // Job ID for the video processing
-
-  video_segments?: VideoSegment[];  // Video segments
+  
   video_metadata?: SearchMetadata;  // Quick search metadata
+  video_segments?: VideoSegment[];  // Video segments
 }
 
 export type VideoStatus = 
@@ -164,4 +166,20 @@ export interface VideoProcessingJob {
     fileSize?: number;
     fileType?: string;
   };
+}
+
+export interface VideoResult {
+  id: string;
+  title: string;
+  description: string;
+  thumbnailUrl: string;
+  previewUrl: string;
+  duration: number;
+  source: 'upload' | 'youtube';
+  sourceUrl: string;
+  uploadDate: string;
+  format: string;
+  status: VideoStatus;
+  size: number;
+  segments?: VideoSegment[];
 }

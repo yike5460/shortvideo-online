@@ -724,11 +724,23 @@ export class VideoSearchStack extends cdk.Stack {
       },
     });
 
-    // Main resources
+    // API Gateway Path:
+    // /videos/upload                         POST - Start upload
+    // /videos/upload/{videoId}/complete      POST - Complete upload
+    // /videos/youtube                        POST - YouTube upload
+    // /videos/{videoId} or /videos/          GET  - Get specific video details or all videos
+    // /videos/{videoId} or /videos/          DELETE - Delete specific video or all videos
+    // /videos/status/{videoId}               GET  - Check status, uploading, slicing, indexing, completed, failed
+    // /videos/search                         POST - Search videos
     const videos = api.root.addResource('videos');
-    const search = api.root.addResource('search');
+    
     const upload = videos.addResource('upload');
+    const uploadComplete = upload.addResource('{uploadId}').addResource('complete');
     const youtube = videos.addResource('youtube');
+
+    const search = api.root.addResource('search');
+    const status = videos.addResource('status');
+    const videoStatus = status.addResource('{videoId}');
 
     // Add Lambda integrations with CORS
     const addMethodWithCors = (resource: apigateway.Resource, httpMethod: string, lambdaFn: lambda.Function) => {
@@ -811,17 +823,16 @@ export class VideoSearchStack extends cdk.Stack {
     };
 
     // Add endpoints
+    addMethodWithCors(videos, 'GET', lambdaFunctions.videoUploadFunction.videoUploadHandler);
+
     addMethodWithCors(upload, 'POST', lambdaFunctions.videoUploadFunction.videoUploadHandler);
-    addMethodWithCors(youtube, 'POST', lambdaFunctions.videoUploadFunction.youtubeUploadHandler);
-    
-    const uploadComplete = upload.addResource('{uploadId}').addResource('complete');
     addMethodWithCors(uploadComplete, 'POST', lambdaFunctions.videoUploadFunction.videoUploadHandler);
-    
-    addMethodWithCors(search, 'POST', lambdaFunctions.videoSearchFunction);
-    
-    const status = videos.addResource('status');
-    const videoStatus = status.addResource('{videoId}');
+    addMethodWithCors(youtube, 'POST', lambdaFunctions.videoUploadFunction.youtubeUploadHandler);
+
+    addMethodWithCors(status, 'GET', lambdaFunctions.videoUploadFunction.videoUploadHandler);
     addMethodWithCors(videoStatus, 'GET', lambdaFunctions.videoSliceFunction);
+
+    addMethodWithCors(search, 'POST', lambdaFunctions.videoSearchFunction);
 
     return api;
   }

@@ -87,24 +87,28 @@ export default function VideosPage() {
   useEffect(() => {
     const fetchVideos = async () => {
       try {
-        const response = await fetch(`${API_ENDPOINT}/videos${selectedIndex ? `?indexId=${selectedIndex}` : ''}`)
+        const response = await fetch(`${API_ENDPOINT}/videos`, {
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        });
         
         if (!response.ok) {
-          throw new Error('Failed to fetch videos')
+          throw new Error('Failed to fetch videos');
         }
 
-        const data = await response.json()
-        setVideos(data)
+        const data = await response.json();
+        setVideos(data);
       } catch (err) {
-        console.error('Error fetching videos:', err)
-        setError('Failed to load videos')
+        console.error('Error fetching videos:', err);
+        setError('Failed to load videos');
       } finally {
-        setLoading(false)
+        setLoading(false);
       }
-    }
+    };
 
-    fetchVideos()
-  }, [selectedIndex])
+    fetchVideos();
+  }, []);
 
   const videosByIndex = useMemo(() => {
     return videos.reduce((acc, video) => {

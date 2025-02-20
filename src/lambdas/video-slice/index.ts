@@ -147,7 +147,7 @@ export const handler = async (event: S3Event | SQSEvent, _context: LambdaContext
           ...record,
           video_segments: shots?.map((shot, index) => ({
             segment_id: `${video_id}_${index}`,
-            video_id,
+            video_id: video_id || '',
             start_time: shot.timestamp || 0,
             end_time: (shot.timestamp || 0) + (shot.duration || 0),
             duration: shot.duration || 0,
@@ -297,7 +297,7 @@ async function updateVideoStatus(videoId: string, status: VideoStatus, additiona
     id: videoId,
     body: {
       doc: {
-        status,
+        video_status: status,
         ...additionalFields,
         updated_at: new Date().toISOString()
       }
