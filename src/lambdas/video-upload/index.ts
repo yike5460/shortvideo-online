@@ -356,15 +356,15 @@ async function handleCompleteUpload(event: APIGatewayProxyEvent): Promise<Lambda
       }
     });
 
-    // Queue processing job
-    await sqs.send(new SendMessageCommand({
-      QueueUrl: process.env.QUEUE_URL,
-      MessageBody: JSON.stringify({
-        videoId,
-        bucket: process.env.VIDEO_BUCKET,
-        key: searchResult._source.video_s3_path
-      })
-    }));
+    // Queue processing job, using S3 event instead of SQS for now
+    // await sqs.send(new SendMessageCommand({
+    //   QueueUrl: process.env.QUEUE_URL,
+    //   MessageBody: JSON.stringify({
+    //     videoId,
+    //     bucket: process.env.VIDEO_BUCKET,
+    //     key: searchResult._source.video_s3_path
+    //   })
+    // }));
 
     return {
       statusCode: 200,

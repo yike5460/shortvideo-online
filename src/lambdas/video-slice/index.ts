@@ -39,12 +39,14 @@ const corsHeaders = {
 
 export const handler = async (event: S3Event | SQSEvent, _context: LambdaContext): Promise<LambdaResponse> => {
   try {
+    console.log('Received raw video event:', event);
     // Handle S3 event for new video upload
     if ('Records' in event && event.Records[0].eventSource === 'aws:s3') {
       const record = event.Records[0].s3;
       const bucket = record.bucket.name;
       const key = decodeURIComponent(record.object.key.replace(/\+/g, ' '));
       
+      console.log('Processing video slice for key:', key, 'bucket:', bucket);
       if (!key.startsWith('RawVideos/')) {
         process.stdout.write('Skipping non-raw video file: ' + key + '\n');
         return {

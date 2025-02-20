@@ -24,6 +24,12 @@ const openSearch = new Client({
   }),
   node: process.env.OPENSEARCH_ENDPOINT
 });
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token',
+  'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
+  'Access-Control-Allow-Credentials': 'true'
+};
 
 interface YouTubeUploadRequest {
   videoUrl: string;
@@ -39,6 +45,7 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
     if (!event.body) {
       return {
         statusCode: 400,
+        headers: corsHeaders,
         body: JSON.stringify({ error: 'Missing request body' })
       };
     }
@@ -93,6 +100,7 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
 
     return {
       statusCode: 200,
+      headers: corsHeaders,
       body: JSON.stringify({
         message: 'YouTube video download initiated',
         videoId,
@@ -104,6 +112,7 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
     console.error('YouTube download error:', error);
     return {
       statusCode: 500,
+      headers: corsHeaders,
       body: JSON.stringify({
         error: 'Internal server error',
         details: error instanceof Error ? error.message : 'Unknown error'

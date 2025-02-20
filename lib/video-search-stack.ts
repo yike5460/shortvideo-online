@@ -17,7 +17,7 @@ import * as sns from 'aws-cdk-lib/aws-sns';
 import { Construct } from 'constructs';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import * as nodejslambda from 'aws-cdk-lib/aws-lambda-nodejs';
-import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
+import { S3EventSource, SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 
 interface VideoSearchStackProps extends cdk.StackProps {
   maxAzs: number;
@@ -411,7 +411,7 @@ export class VideoSearchStack extends cdk.Stack {
     return { videoUploadHandler, youtubeUploadHandler };
   }
 
-  private createVideoSliceFunction() {
+  private createVideoSliceFunction(): lambda.Function {
     // Create the Lambda security group with proper egress and ingress rules
     const lambdaSG = new ec2.SecurityGroup(this, 'LambdaSecurityGroupVideoSlice', {
       vpc: this.vpc,
@@ -439,19 +439,38 @@ export class VideoSearchStack extends cdk.Stack {
         OPENSEARCH_ENDPOINT: `https://${this.openSearchCollection.attrId}.${this.region}.aoss.amazonaws.com`,
         REDIS_ENDPOINT: this.redisCluster.attrRedisEndpointAddress,
       },
+      bundling: {
+        minify: true,
+        sourceMap: true,
+        target: 'node20',
+        format: nodejslambda.OutputFormat.CJS,
+        esbuild: {
+          bundle: true,
+          platform: 'node'
+        }
+      }
     };
 
-    const videoSliceHandler = new lambda.Function(this, 'VideoSliceHandler', {
+    const videoSliceFunctionHandler = new nodejslambda.NodejsFunction(this, 'VideoSliceFunction', {
       ...commonLambdaProps,
-      code: lambda.Code.fromAsset('src/lambdas/video-slice'),
-      handler: 'index.handler',
+      entry: 'src/lambdas/video-slice/index.ts',
+      handler: 'handler',
       memorySize: 4096,
+      depsLockFilePath: 'src/lambdas/video-slice/package-lock.json'
     });
 
     // Add event source from the video processing queue
-    videoSliceHandler.addEventSource(new SqsEventSource(this.videoProcessingQueue));
+    videoSliceFunctionHandler.addEventSource(new SqsEventSource(this.videoProcessingQueue));
 
-    return videoSliceHandler;
+    // Add event source from s3 bucket
+    videoSliceFunctionHandler.addEventSource(new S3EventSource(this.videoBucket, {
+      events: [s3.EventType.OBJECT_CREATED],
+      // Align with backend video-upload lambda
+      filters: [
+        { prefix: 'RawVideos/' }
+      ]
+    }));
+    return videoSliceFunctionHandler;
   }
 
   private createVideoSearchFunction() {
