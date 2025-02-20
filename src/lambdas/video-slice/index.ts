@@ -1,4 +1,5 @@
-import { S3Event, SQSEvent, LambdaContext, LambdaResponse, VideoMetadata } from '../../types/aws-lambda';
+import { S3Event, SQSEvent, LambdaContext, LambdaResponse } from '../../types/aws-lambda';
+import { VideoMetadata, VideoStatus, VideoSegment, VideoProcessingJob } from '../../types/common';
 import { 
   RekognitionClient,
   StartSegmentDetectionCommand,
@@ -35,12 +36,6 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
   'Access-Control-Allow-Credentials': 'true'
 };
-
-interface VideoProcessingJob {
-  videoId: string;
-  bucket: string;
-  key: string;
-}
 
 export const handler = async (event: S3Event | SQSEvent, _context: LambdaContext): Promise<LambdaResponse> => {
   try {
@@ -93,11 +88,13 @@ export const handler = async (event: S3Event | SQSEvent, _context: LambdaContext
 
       // Store job metadata in SQS for tracking
       const metadata: VideoMetadata = {
-        videoId,
-        bucket,
-        key,
-        jobId: shotDetectionResponse.JobId!,
-        status: 'IN_PROGRESS',
+        video_id: videoId,
+        video_s3_path: bucket + '/' + key,
+        job_id: shotDetectionResponse.JobId!,
+        video_status: 'uploading',
+        video_title: '',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
       };
 
       await sqs.send(new SendMessageCommand({
@@ -129,12 +126,12 @@ export const handler = async (event: S3Event | SQSEvent, _context: LambdaContext
     // Handle SQS event for Rekognition job completion
     if ('Records' in event && event.Records[0].eventSource === 'aws:sqs') {
       const record = JSON.parse(event.Records[0].body) as VideoMetadata;
-      const { videoId, jobId, status } = record;
+      const { video_id, job_id, video_status } = record;
 
-      if (status === 'SUCCEEDED') {
+      if (video_status === 'ready') {
         // Get shot detection results
         const shotDetectionResult = await rekognition.send(new GetSegmentDetectionCommand({
-          JobId: jobId
+          JobId: job_id
         }));
 
         // Process shots and create metadata
@@ -148,8 +145,16 @@ export const handler = async (event: S3Event | SQSEvent, _context: LambdaContext
         // Update metadata with shot information
         const updatedMetadata: VideoMetadata = {
           ...record,
-          shots,
-          status: 'COMPLETED'
+          video_segments: shots?.map((shot, index) => ({
+            segment_id: `${video_id}_${index}`,
+            video_id,
+            start_time: shot.timestamp || 0,
+            end_time: (shot.timestamp || 0) + (shot.duration || 0),
+            duration: shot.duration || 0,
+            confidence: shot.confidence,
+            technical_cue: shot.technical_cue
+          })),
+          video_status: 'ready'
         };
 
         // Send to video processing queue for embedding generation
@@ -169,7 +174,7 @@ export const handler = async (event: S3Event | SQSEvent, _context: LambdaContext
           headers: corsHeaders,
           body: JSON.stringify({
             message: 'Shot detection completed',
-            videoId,
+            video_id,
             shots: shots?.length
           })
         };
@@ -201,10 +206,8 @@ async function processVideoJob(record: SQSEvent): Promise<void> {
     const job: VideoProcessingJob = JSON.parse(record.Records[0].body);
     console.log('Processing video job:', job);
 
-    // Update status to processing
     await updateVideoStatus(job.videoId, 'processing');
 
-    // Start segment detection
     const segmentDetectionResponse = await rekognition.send(new StartSegmentDetectionCommand({
       Video: {
         S3Object: {
@@ -225,19 +228,21 @@ async function processVideoJob(record: SQSEvent): Promise<void> {
       throw new Error('Failed to start segment detection job');
     }
 
-    // Poll for job completion
-    let segments = await pollSegmentDetection(jobId);
+    const segments = await pollSegmentDetection(jobId);
     console.log('Detected segments:', segments);
 
     // Process segments and update OpenSearch
-    const processedSegments = segments.map((segment, index) => ({
+    const processedSegments: VideoSegment[] = segments.map((segment, index) => ({
       segment_id: `${job.videoId}_${index}`,
       video_id: job.videoId,
-      start_time: segment.StartTimestampMillis,
-      end_time: segment.EndTimestampMillis,
-      duration: segment.DurationMillis,
-      type: segment.Type,
-      confidence: segment.ModelConfidence
+      start_time: segment.StartTimestampMillis || 0,
+      end_time: segment.EndTimestampMillis || 0,
+      duration: segment.DurationMillis || 0,
+      segment_visual: {
+        segment_visual_description: segment.TechnicalCueSegment 
+          ? 'Technical cue detected'
+          : 'Shot boundary detected'
+      }
     }));
 
     // Batch index segments to OpenSearch
@@ -248,10 +253,10 @@ async function processVideoJob(record: SQSEvent): Promise<void> {
 
     await openSearch.bulk({ body });
 
-    // Update video status to completed
+    // Update video status to ready
     await updateVideoStatus(job.videoId, 'ready', {
       segment_count: processedSegments.length,
-      total_duration: Math.max(...processedSegments.map(s => s.end_time || 0))
+      total_duration: Math.max(...processedSegments.map(s => s.end_time))
     });
 
   } catch (error) {
@@ -261,7 +266,7 @@ async function processVideoJob(record: SQSEvent): Promise<void> {
         error: error.message
       });
     }
-    throw error; // Let SQS handle the retry
+    throw error;
   }
 }
 
@@ -286,7 +291,7 @@ async function pollSegmentDetection(jobId: string, maxAttempts = 60): Promise<an
   throw new Error('Segment detection timed out');
 }
 
-async function updateVideoStatus(videoId: string, status: string, additionalFields?: Record<string, any>) {
+async function updateVideoStatus(videoId: string, status: VideoStatus, additionalFields?: Partial<VideoMetadata>) {
   await openSearch.update({
     index: 'videos',
     id: videoId,

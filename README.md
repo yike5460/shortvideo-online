@@ -1,6 +1,5 @@
 # shortvideo-online
 
-
 ## Search Service
 
 ### User Workflow
@@ -29,6 +28,43 @@
 - The search result will be displayed down below the search bar, in grid view for a list of raw videos with the timestamp and the duration, sorted with the most relevant video clips at the top.
 - The user can hover on each raw video to see the brief video information and see the preview of the raw video, once the user check the checkbox of the raw video in the upper right corner, more details of the raw video will be shown on the right sidebar. Here user will see the detailed video metadata e.g. video title, description, duration, encoding format etc. at the top and the specific video segments that match the query at the bottom. User can click the video segments to play, and user will have the option to select the video segments and download the video segments.
 - The whole theme is neat, concise with a modern look, responsive to different screen sizes.
+
+#### Video Processing Flow:
+
+1. **Initial Entry**
+   - User accesses the system
+   - Views existing indexes or starts new creation
+
+2. **Index Creation (Step 1/2)**
+   - Enter index name
+   - Select AI models (Amazon NOVA/Transcribe)
+   - Configure visual/audio options
+   - Models cannot be changed after creation
+
+3. **Upload Process (Step 2/2)**
+   - Select or drag-and-drop video files
+   - System validates:
+     - Duration (4sec-30min/2hr)
+     - Resolution (360p-4k)
+     - File size (≤2GB)
+     - Audio requirements
+
+4. **Processing Stage**
+   - Shows indexing progress
+   - Displays preview thumbnails
+   - Updates status in real-time
+
+5. **Results View**
+   - Displays processed videos
+   - Shows index details
+   - Provides access to video analysis
+
+The interface follows a modern, clean design system with:
+- Clear hierarchy
+- Progressive disclosure
+- Consistent spacing
+- Material design influences
+- Clear feedback mechanisms
 
 ### Backend Features
 
@@ -85,62 +121,11 @@ sequenceDiagram
 Overall API Path:
 ```http
    /videos/upload                         POST - Start upload
-   /videos/upload/{uploadId}/complete     POST - Complete upload
+   /videos/upload/{videoId}/complete      POST - Complete upload
    /videos/youtube                        POST - YouTube upload
-   /videos/status/{videoId}              GET  - Check status
-   /search                               POST - Search videos
-```
-
-```http
-# Get pre-signed URL for local video upload
-POST /videos/upload
-Content-Type: application/json
-{
-    "fileName": string,
-    "fileType": string,
-    "fileSize": number
-}
-Response: {
-    "uploadUrl": string,  # Pre-signed S3 URL
-    "uploadId": string    # Unique upload identifier
-}
-
-# Notify upload completion
-POST /videos/upload/{uploadId}/complete
-Content-Type: application/json
-{
-    "fileName": string,
-    "fileSize": number,
-    "fileType": string
-}
-Response: {
-    "status": "success",
-    "videoId": string    # Video identifier for status checking
-}
-
-# Upload YouTube video
-POST /videos/youtube
-Content-Type: application/json
-{
-    "videoUrl": string,  # YouTube URL
-    "metadata": {
-        "title": string,
-        "description": string,
-        "tags": string[]
-    }
-}
-Response: {
-    "videoId": string,
-    "status": "processing"
-}
-
-# Check video processing status
-GET /videos/status/{videoId}
-Response: {
-    "status": "processing|completed|failed",
-    "progress": number,  # 0-100
-    "error": string     # Error message if failed
-}
+   /videos/{videoId} or /videos/          GET  - Get specific video details or all videos
+   /videos/status/{videoId}               GET  - Check status, uploading, slicing, indexing, completed, failed
+   /videos/search                         POST - Search videos
 ```
 
 4. **Implementation Details**
@@ -185,26 +170,6 @@ s3://bucket-name/
         ├── thumb_001.jpg
         └── thumb_002.jpg
 ```
-
-6. **Security & Performance**
-
-- **Upload Security**
-  - Pre-signed URLs with short expiration
-  - Client-side file validation
-  - Server-side virus scanning
-  - Content type verification
-
-- **Access Control**
-  - IAM roles for Lambda functions
-  - Bucket policies for S3 access
-  - API Gateway authentication
-  - CORS configuration
-
-- **Performance Optimization**
-  - Multipart uploads for large files
-  - s3cmd configuration tuning
-  - Concurrent uploads
-  - Progress monitoring
 
 #### Video Indexing
 
@@ -390,20 +355,6 @@ Same approach applies for audio and text search, using their respective global a
      - CORS configuration
      - Lambda integration
      - X-Ray tracing and CloudWatch logging disabled
-
-6. **Security Controls**
-   - **IAM Roles**
-     - Lambda execution roles
-     - ECS task roles
-     - OpenSearch access roles
-   - **Security Groups**
-     - OpenSearch access control
-     - Redis access control
-     - Lambda function access
-   - **VPC Endpoints**
-     - Interface endpoints for AWS services
-     - Private DNS enabled
-     - Security group controls
 
 #### Workflow
 
@@ -707,45 +658,32 @@ Response: {
 }
 ```
 
-#### Video Processing Flow:
+## Security & Performance
 
-1. **Initial Entry**
-   - User accesses the system
-   - Views existing indexes or starts new creation
-
-2. **Index Creation (Step 1/2)**
-   - Enter index name
-   - Select AI models (Amazon NOVA/Transcribe)
-   - Configure visual/audio options
-   - Models cannot be changed after creation
-
-3. **Upload Process (Step 2/2)**
-   - Select or drag-and-drop video files
-   - System validates:
-     - Duration (4sec-30min/2hr)
-     - Resolution (360p-4k)
-     - File size (≤2GB)
-     - Audio requirements
-
-4. **Processing Stage**
-   - Shows indexing progress
-   - Displays preview thumbnails
-   - Updates status in real-time
-
-5. **Results View**
-   - Displays processed videos
-   - Shows index details
-   - Provides access to video analysis
-
-The interface follows a modern, clean design system with:
-- Clear hierarchy
-- Progressive disclosure
-- Consistent spacing
-- Material design influences
-- Clear feedback mechanisms
-
-## Todo list
-- [frontend] itegration with backend, start from video upload, then indexing (embedding), finally the hybrid search with backend aoss
-- [frontend] more content including product description, image/video for quick toturial and price categories and possible support for google adsense etc. in the landing page
-- [backend] issue in amazon ecs and aoss debugging
-- [backend] add key frame sample and use nova/claude model to extract video summary as metadata
+- **Upload Security**
+  - Pre-signed URLs with short expiration
+  - Client-side file validation
+  - Server-side virus scanning
+  - Content type verification
+- **Access Control**
+  - IAM roles for Lambda functions
+  - Bucket policies for S3 access
+  - API Gateway authentication
+  - CORS configuration
+- **Performance Optimization**
+  - Multipart uploads for large files
+  - s3cmd configuration tuning
+  - Concurrent uploads
+  - Progress monitoring
+- **IAM Roles**
+    - Lambda execution roles
+    - ECS task roles
+    - OpenSearch access roles
+- **Security Groups**
+    - OpenSearch access control
+    - Redis access control
+    - Lambda function access
+- **VPC Endpoints**
+    - Interface endpoints for AWS services
+    - Private DNS enabled
+    - Security group controls

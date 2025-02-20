@@ -1,5 +1,6 @@
 import { APIGatewayProxyEvent } from 'aws-lambda';
 import { LambdaContext, LambdaResponse } from '../../types/aws-lambda';
+import { VideoMetadata, VideoStatus, VideoSegment, VideoProcessingJob } from '../../types/common';
 import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
@@ -64,10 +65,10 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<LambdaRespon
     // Overall API Path:
     // ```http
     //   /videos/upload                         POST - Start upload
-    //   /videos/upload/{uploadId}/complete     POST - Complete upload
+    //   /videos/upload/{videoId}/complete      POST - Complete upload
     //   /videos/youtube                        POST - YouTube upload
-    //   /videos/status/{videoId}              GET  - Check status
-    //   /search                               POST - Search videos
+    //   /videos/status/{videoId}               GET  - Check status, uploading, slicing, indexing, completed, failed
+    //   /videos/search                         POST - Search videos
     // ```
     if (path.endsWith('/upload')) {
       return handlePresignRequest(event);
@@ -142,7 +143,7 @@ async function handlePresignRequest(event: APIGatewayProxyEvent): Promise<Lambda
     }
   });
 
-  const uploadUrl = await getSignedUrl(s3, command, { expiresIn: 3600 }); // URL expires in 1 hour
+  const uploadUrl = await getSignedUrl(s3 as any, command as any, { expiresIn: 3600 }); // URL expires in 1 hour
 
   return {
     statusCode: 200,
