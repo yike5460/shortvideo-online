@@ -337,7 +337,7 @@ async function handlePresignRequest(event: APIGatewayProxyEvent): Promise<Lambda
 async function handleCompleteUpload(event: APIGatewayProxyEvent): Promise<LambdaResponse> {
   const request: CompleteUploadRequest = JSON.parse(event.body!);
   const { videoId, fileName, fileSize, fileType } = request;
-
+  console.log('Complete upload request: ', request, videoId, fileName, fileSize, fileType);
   try {
     // Verify the video exists in OpenSearch
     const { body: searchResult } = await openSearch.get({

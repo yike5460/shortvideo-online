@@ -41,6 +41,8 @@ export class VideoSearchStack extends cdk.Stack {
     this.vpc = this.createVpcInfrastructure();
     this.videoBucket = this.createStorageInfrastructure(deploymentEnv);
     this.videoProcessingQueue = this.createQueueInfrastructure();
+    // Create SNS topic for video processing in Rekognition
+    this.rekognitionTopic = this.createRekognitionTopic();
     this.redisCluster = this.createCacheInfrastructure();
     this.cluster = this.createContainerInfrastructure();
     
@@ -99,25 +101,22 @@ export class VideoSearchStack extends cdk.Stack {
       service: ec2.GatewayVpcEndpointAwsService.S3,
     });
 
-    vpc.addInterfaceEndpoint('SQSEndpoint', {
-      service: ec2.InterfaceVpcEndpointAwsService.SQS,
-    });
+    // Add interface endpoints
+    const interfaceEndpoints = [
+      { name: 'SQSEndpoint', service: ec2.InterfaceVpcEndpointAwsService.SQS },
+      { name: 'ECRDockerEndpoint', service: ec2.InterfaceVpcEndpointAwsService.ECR_DOCKER },
+      { name: 'ECREndpoint', service: ec2.InterfaceVpcEndpointAwsService.ECR },
+      { name: 'CloudWatchLogsEndpoint', service: ec2.InterfaceVpcEndpointAwsService.CLOUDWATCH_LOGS },
+      { name: 'ElastiCacheEndpoint', service: ec2.InterfaceVpcEndpointAwsService.ELASTICACHE },
+      { name: 'RekognitionEndpoint', service: ec2.InterfaceVpcEndpointAwsService.REKOGNITION },
+    ];
 
-    vpc.addInterfaceEndpoint('ECRDockerEndpoint', {
-      service: ec2.InterfaceVpcEndpointAwsService.ECR_DOCKER,
-    });
-
-    vpc.addInterfaceEndpoint('ECREndpoint', {
-      service: ec2.InterfaceVpcEndpointAwsService.ECR,
-    });
-
-    vpc.addInterfaceEndpoint('CloudWatchLogsEndpoint', {
-      service: ec2.InterfaceVpcEndpointAwsService.CLOUDWATCH_LOGS,
-    });
-
-    // Add ElastiCache VPC endpoint
-    vpc.addInterfaceEndpoint('ElastiCacheEndpoint', {
-      service: ec2.InterfaceVpcEndpointAwsService.ELASTICACHE,
+    // Create all interface endpoints with consistent configuration
+    interfaceEndpoints.forEach(({ name, service }) => {
+      vpc.addInterfaceEndpoint(name, {
+        service,
+        privateDnsEnabled: true,
+      });
     });
 
     return vpc;
@@ -443,19 +442,7 @@ export class VideoSearchStack extends cdk.Stack {
     const commonLambdaProps = {
       runtime: lambda.Runtime.NODEJS_20_X,
       vpc: this.vpc,
-      // add into two subnets: isolated subnets for aoss and redis, add into private with nat for rekognition
-      vpcSubnets: {
-        subnetFilters: [
-          {
-            name: 'Isolated',
-            subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
-          },
-          {
-            name: 'Private',
-            subnetType: ec2.SubnetType.PRIVATE_WITH_NAT,
-          },
-        ],
-      },
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
       securityGroups: [lambdaSG],
       timeout: cdk.Duration.minutes(15),
       environment: {
