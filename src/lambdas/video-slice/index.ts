@@ -119,6 +119,8 @@ async function handleS3Event(event: S3Event): Promise<LambdaResponse> {
   const videoId = key.split('/').pop()?.split('.')[0];
   if (!videoId) throw new Error('Invalid video key format');
 
+  // TODO, we need to do video valiation according to the Amazon Rekognition restriction: https://docs.aws.amazon.com/rekognition/latest/dg/video.html, e.g. The video must be encoded using the H.264 codec. The supported file formats are MPEG-4 and MOV.
+
   // Start Rekognition jobs
   const notificationChannel: NotificationChannel = {
     SNSTopicArn: process.env.SNS_TOPIC_ARN,
@@ -308,6 +310,7 @@ async function updateVideoStatus(videoId: string, status: VideoStatus, additiona
 }
 
 async function getSegmentDetectionResults(jobId: string): Promise<SegmentDetection[]> {
+  // Refer to https://docs.aws.amazon.com/rekognition/latest/dg/segment-api.html for the response format
   const segments: SegmentDetection[] = [];
   let nextToken: string | undefined;
 
@@ -353,6 +356,7 @@ async function updateVideoSegments(videoId: string, segments: SegmentDetection[]
 }
 
 async function getLabelDetectionResults(jobId: string): Promise<any[]> {
+  // Refer to https://docs.aws.amazon.com/rekognition/latest/dg/labels-detecting-labels-video.html for the response format
   const labels: any[] = [];
   let nextToken: string | undefined;
 
@@ -408,6 +412,7 @@ async function updateVideoLabels(videoId: string, labels: any[]): Promise<void> 
 }
 
 async function getFaceDetectionResults(jobId: string): Promise<any[]> {
+  // Refer to https://docs.aws.amazon.com/rekognition/latest/dg/faces-sqs-video.html for the response format
   const faces: any[] = [];
   let nextToken: string | undefined;
 
