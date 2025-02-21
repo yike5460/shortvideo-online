@@ -14,10 +14,11 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as sns from 'aws-cdk-lib/aws-sns';
+import * as sns_subs from 'aws-cdk-lib/aws-sns-subscriptions';
 import { Construct } from 'constructs';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import * as nodejslambda from 'aws-cdk-lib/aws-lambda-nodejs';
-import { S3EventSource, SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
+import { S3EventSource, SnsEventSource, SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 
 interface VideoSearchStackProps extends cdk.StackProps {
   maxAzs: number;
@@ -27,10 +28,12 @@ interface VideoSearchStackProps extends cdk.StackProps {
 export class VideoSearchStack extends cdk.Stack {
   private readonly vpc: ec2.Vpc;
   private readonly videoBucket: s3.Bucket;
-  private readonly openSearchCollection: opensearchserverless.CfnCollection;
+  private readonly videoProcessingQueue: sqs.Queue;
+  private readonly rekognitionTopic: sns.Topic;
+  private readonly rekognitionRole: iam.Role;
   private readonly redisCluster: elasticache.CfnCacheCluster;
   private readonly cluster: ecs.Cluster;
-  private readonly videoProcessingQueue: sqs.Queue;
+  private readonly openSearchCollection: opensearchserverless.CfnCollection;
 
   constructor(scope: Construct, id: string, props: VideoSearchStackProps) {
     super(scope, id, props);
@@ -40,9 +43,10 @@ export class VideoSearchStack extends cdk.Stack {
     // Initialize core infrastructure in correct order
     this.vpc = this.createVpcInfrastructure();
     this.videoBucket = this.createStorageInfrastructure(deploymentEnv);
-    this.videoProcessingQueue = this.createQueueInfrastructure();
-    // Create SNS topic for video processing in Rekognition
-    this.rekognitionTopic = this.createRekognitionTopic();
+    // this.videoProcessingQueue = this.createQueueInfrastructure();
+    const { topic, rekognitionRole } = this.createRekognitionTopic();
+    this.rekognitionTopic = topic;
+    this.rekognitionRole = rekognitionRole;
     this.redisCluster = this.createCacheInfrastructure();
     this.cluster = this.createContainerInfrastructure();
     
@@ -66,7 +70,7 @@ export class VideoSearchStack extends cdk.Stack {
     const api = this.createApiGateway(lambdaFunctions);
 
     // Set up permissions
-    this.setupPermissions(lambdaFunctions, videoEmbeddingService, this.videoProcessingQueue);
+    this.setupPermissions(lambdaFunctions, videoEmbeddingService, this.rekognitionTopic);
 
     // Create stack outputs
     this.createStackOutputs(api);
@@ -374,7 +378,7 @@ export class VideoSearchStack extends cdk.Stack {
       timeout: cdk.Duration.minutes(15),
       environment: {
         VIDEO_BUCKET: this.videoBucket.bucketName,
-        QUEUE_URL: this.videoProcessingQueue.queueUrl,
+        // QUEUE_URL: this.videoProcessingQueue.queueUrl,
         OPENSEARCH_ENDPOINT: `https://${this.openSearchCollection.attrId}.${this.region}.aoss.amazonaws.com`,
         REDIS_ENDPOINT: this.redisCluster.attrRedisEndpointAddress,
       },
@@ -447,7 +451,9 @@ export class VideoSearchStack extends cdk.Stack {
       timeout: cdk.Duration.minutes(15),
       environment: {
         VIDEO_BUCKET: this.videoBucket.bucketName,
-        QUEUE_URL: this.videoProcessingQueue.queueUrl,
+        // QUEUE_URL: this.videoProcessingQueue.queueUrl,
+        SNS_TOPIC_ARN: this.rekognitionTopic.topicArn,
+        REKOGNITION_ROLE_ARN: this.rekognitionRole.roleArn,
         OPENSEARCH_ENDPOINT: `https://${this.openSearchCollection.attrId}.${this.region}.aoss.amazonaws.com`,
         REDIS_ENDPOINT: this.redisCluster.attrRedisEndpointAddress,
       },
@@ -472,7 +478,10 @@ export class VideoSearchStack extends cdk.Stack {
     });
 
     // Add event source from the video processing queue
-    videoSliceFunctionHandler.addEventSource(new SqsEventSource(this.videoProcessingQueue));
+    // videoSliceFunctionHandler.addEventSource(new SqsEventSource(this.videoProcessingQueue));
+
+    // Add event source from sns topic
+    videoSliceFunctionHandler.addEventSource(new SnsEventSource(this.rekognitionTopic));
 
     // Add event source from s3 bucket
     videoSliceFunctionHandler.addEventSource(new S3EventSource(this.videoBucket, {
@@ -508,7 +517,7 @@ export class VideoSearchStack extends cdk.Stack {
       timeout: cdk.Duration.minutes(15),
       environment: {
         VIDEO_BUCKET: this.videoBucket.bucketName,
-        QUEUE_URL: this.videoProcessingQueue.queueUrl,
+        // QUEUE_URL: this.videoProcessingQueue.queueUrl,
         OPENSEARCH_ENDPOINT: `https://${this.openSearchCollection.attrId}.${this.region}.aoss.amazonaws.com`,
         REDIS_ENDPOINT: this.redisCluster.attrRedisEndpointAddress,
       },
@@ -876,7 +885,8 @@ export class VideoSearchStack extends cdk.Stack {
     },
     // textEmbeddingService: ecs.FargateService,
     videoEmbeddingService: ecs.FargateService,
-    queue: sqs.Queue
+    // queue: sqs.Queue
+    snsTopic: sns.Topic
   ) {
     // S3 permissions
     this.videoBucket.grantReadWrite(lambdaFunctions.videoUploadFunction.videoUploadHandler);
@@ -884,8 +894,11 @@ export class VideoSearchStack extends cdk.Stack {
     this.videoBucket.grantReadWrite(lambdaFunctions.videoSliceFunction);
 
     // SQS permissions
-    queue.grantSendMessages(lambdaFunctions.videoUploadFunction.videoUploadHandler);
-    queue.grantConsumeMessages(lambdaFunctions.videoSliceFunction);
+    // queue.grantSendMessages(lambdaFunctions.videoUploadFunction.videoUploadHandler);
+    // queue.grantConsumeMessages(lambdaFunctions.videoSliceFunction);
+
+    // SNS permissions for Rekognition notifications subscription
+    snsTopic.grantSubscribe(lambdaFunctions.videoSliceFunction);
 
     // OpenSearch Serverless permissions
     const openSearchPolicy = new iam.PolicyStatement({
@@ -957,18 +970,35 @@ export class VideoSearchStack extends cdk.Stack {
       effect: iam.Effect.ALLOW,
       actions: [
         'rekognition:StartSegmentDetection',
-        'rekognition:GetSegmentDetection'
+        'rekognition:GetSegmentDetection',
+        'rekognition:StartLabelDetection',
+        'rekognition:GetLabelDetection',
+        'rekognition:StartFaceDetection',
+        'rekognition:GetFaceDetection'
       ],
       resources: ['*']
     });
-    
+
+    // Add PassRole permission for Rekognition
+    const passRolePolicy = new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['iam:PassRole'],
+      resources: [this.rekognitionRole.roleArn],
+      conditions: {
+        StringLike: {
+          'iam:PassedToService': 'rekognition.amazonaws.com'
+        }
+      }
+    });
+
     lambdaFunctions.videoSliceFunction.addToRolePolicy(rekognitionPolicy);
+    lambdaFunctions.videoSliceFunction.addToRolePolicy(passRolePolicy);
 
     // Grant S3 read access to video slice function
     this.videoBucket.grantRead(lambdaFunctions.videoSliceFunction);
 
     // Grant SQS permissions
-    queue.grantConsumeMessages(lambdaFunctions.videoSliceFunction);
+    // queue.grantConsumeMessages(lambdaFunctions.videoSliceFunction);
   }
 
   private createMonitoringInfrastructure(
@@ -1051,5 +1081,38 @@ export class VideoSearchStack extends cdk.Stack {
     });
 
     lambdaAccessPolicy.addDependency(this.openSearchCollection);
+  }
+
+  private createRekognitionTopic(): { topic: sns.Topic; rekognitionRole: iam.Role } {
+    // Create SNS topic for Rekognition notifications
+    const topic = new sns.Topic(this, 'RekognitionTopic', {
+      displayName: 'Video Processing Notifications',
+    });
+
+    // Create SQS queue for processing Rekognition notifications
+    const dlq = new sqs.Queue(this, 'RekognitionDLQ', {
+      queueName: `${this.stackName}-rekognition-dlq`,
+    });
+
+    const queue = new sqs.Queue(this, 'RekognitionQueue', {
+      queueName: `${this.stackName}-rekognition-notifications`,
+      deadLetterQueue: {
+        queue: dlq,
+        maxReceiveCount: 3,
+      },
+    });
+
+    // IAM role that gives Amazon Rekognition publishing permissions to the Amazon SNS topic
+    const rekognitionRole = new iam.Role(this, 'RekognitionRole', {
+      assumedBy: new iam.ServicePrincipal('rekognition.amazonaws.com'),
+    });
+
+    // Subscribe the queue to the SNS topic
+    topic.addSubscription(new sns_subs.SqsSubscription(queue));
+
+    // Grant Rekognition permission to publish to the topic
+    topic.grantPublish(rekognitionRole);
+
+    return { topic, rekognitionRole };
   }
 }

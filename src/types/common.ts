@@ -29,9 +29,14 @@ export type VideoStatus =
   | 'uploading'         // File is being uploaded to S3
   | 'uploaded'          // File upload completed
   | 'processing'        // Video is being processed (slicing/indexing)
-  | 'ready'            // Video is fully processed and searchable
-  | 'error'            // Processing failed
-  | 'deleted';         // Video was deleted
+  | 'ready_for_face'    // Video completed face detection
+  | 'ready_for_object'   // Video completed object detection
+  | 'ready_for_shots'   // Video completed shot detection
+  | 'ready_for_video_embed'   // Video completed video embedding
+  | 'ready_for_audio_embed'   // Video completed audio embedding
+  | 'ready'             // Video is fully processed and searchable
+  | 'error'             // Processing failed
+  | 'deleted';          // Video was deleted
 
 export interface VideoSegment {
   segment_id: string;

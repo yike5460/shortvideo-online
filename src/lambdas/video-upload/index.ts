@@ -389,7 +389,7 @@ async function handleCompleteUpload(event: APIGatewayProxyEvent): Promise<Lambda
   } catch (error) {
     return {
       statusCode: STATUS_CODES.INTERNAL_SERVER_ERROR,
-      body: JSON.stringify({ error: 'Internal server error' }),
+      body: JSON.stringify({ error: error }),
       headers: corsHeaders
     }
   }
