@@ -31,6 +31,15 @@ const corsHeaders = {
   'Access-Control-Allow-Credentials': 'true'
 };
 
+// Status codes
+const STATUS_CODES = {
+  OK: 200,
+  CREATED: 201,
+  BAD_REQUEST: 400,
+  NOT_FOUND: 404,
+  INTERNAL_SERVER_ERROR: 500
+};
+
 interface PresignRequest {
   fileName: string;
   fileType: string;
@@ -54,7 +63,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<LambdaRespon
     // For GET requests, we don't need to check for body
     if (event.httpMethod !== 'GET' && !event.body) {
       return {
-        statusCode: 400,
+        statusCode: STATUS_CODES.BAD_REQUEST,
         headers: corsHeaders,  // Add CORS headers even for errors
         body: JSON.stringify({ error: 'Missing request body' })
       };
@@ -96,7 +105,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<LambdaRespon
     }
 
     return {
-      statusCode: 404,
+      statusCode: STATUS_CODES.NOT_FOUND,
       headers: corsHeaders,
       body: JSON.stringify({ error: 'Invalid endpoint' })
     };
@@ -104,7 +113,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<LambdaRespon
   } catch (error) {
     console.error('Error:', error);
     return {
-      statusCode: 500,
+      statusCode: STATUS_CODES.INTERNAL_SERVER_ERROR,
       headers: corsHeaders,  // Add CORS headers for errors too
       body: JSON.stringify({
         error: 'Internal server error',
@@ -149,14 +158,14 @@ async function handleListVideos(): Promise<LambdaResponse> {
     }));
 
     return {
-      statusCode: 200,
+      statusCode: STATUS_CODES.OK,
       headers: corsHeaders,
       body: JSON.stringify(videos)
     };
   } catch (error) {
     console.error('Error listing videos:', error);
     return {
-      statusCode: 500,
+      statusCode: STATUS_CODES.INTERNAL_SERVER_ERROR,
       headers: corsHeaders,
       body: JSON.stringify({ error: 'Failed to list videos' })
     };
@@ -172,7 +181,7 @@ async function handleGetVideo(videoId: string): Promise<LambdaResponse> {
 
     if (!body.found || body._source.video_status === 'deleted') {
       return {
-        statusCode: 404,
+        statusCode: STATUS_CODES.NOT_FOUND,
         headers: corsHeaders,
         body: JSON.stringify({ error: 'Video not found' })
       };
@@ -196,14 +205,14 @@ async function handleGetVideo(videoId: string): Promise<LambdaResponse> {
     };
 
     return {
-      statusCode: 200,
+      statusCode: STATUS_CODES.OK,
       headers: corsHeaders,
       body: JSON.stringify(video)
     };
   } catch (error) {
     console.error('Error getting video:', error);
     return {
-      statusCode: 500,
+      statusCode: STATUS_CODES.INTERNAL_SERVER_ERROR,
       headers: corsHeaders,
       body: JSON.stringify({ error: 'Failed to get video details' })
     };
@@ -220,7 +229,7 @@ async function handleDeleteVideo(videoId: string): Promise<LambdaResponse> {
 
     if (!body.found) {
       return {
-        statusCode: 404,
+        statusCode: STATUS_CODES.NOT_FOUND,
         headers: corsHeaders,
         body: JSON.stringify({ error: 'Video not found' })
       };
@@ -245,14 +254,14 @@ async function handleDeleteVideo(videoId: string): Promise<LambdaResponse> {
     // }));
 
     return {
-      statusCode: 200,
+      statusCode: STATUS_CODES.OK,
       headers: corsHeaders,
       body: JSON.stringify({ message: 'Video deleted successfully' })
     };
   } catch (error) {
     console.error('Error deleting video:', error);
     return {
-      statusCode: 500,
+      statusCode: STATUS_CODES.INTERNAL_SERVER_ERROR,
       headers: corsHeaders,
       body: JSON.stringify({ error: 'Failed to delete video' })
     };
@@ -263,7 +272,9 @@ async function handlePresignRequest(event: APIGatewayProxyEvent): Promise<Lambda
   const request: PresignRequest = JSON.parse(event.body!);
   const videoId = uuidv4();
   const timestamp = new Date().toISOString().split('T')[0];
-  const s3Key = `RawVideos/${timestamp}/${videoId}/original${path.extname(request.fileName)}`;
+  // Sanitize the file name by replacing spaces (and optionally other characters) with underscores
+  const sanitizedFileName = request.fileName.replace(/\s+/g, '_');
+  const s3Key = `RawVideos/${timestamp}/${videoId}/${sanitizedFileName}`;
 
   // Align body schema with VideoMetadata
   const aossInitialBody: VideoMetadata = {
@@ -313,7 +324,7 @@ async function handlePresignRequest(event: APIGatewayProxyEvent): Promise<Lambda
   const uploadUrl = await getSignedUrl(s3 as any, command as any, { expiresIn: 3600 }); // URL expires in 1 hour
 
   return {
-    statusCode: 200,
+    statusCode: STATUS_CODES.OK,
     headers: corsHeaders,
     body: JSON.stringify({
       uploadUrl,
@@ -336,7 +347,7 @@ async function handleCompleteUpload(event: APIGatewayProxyEvent): Promise<Lambda
 
     if (!searchResult.found) {
       return {
-        statusCode: 404,
+        statusCode: STATUS_CODES.NOT_FOUND,
         headers: corsHeaders,
         body: JSON.stringify({ error: 'Video not found for video index ' + videoId })
       };
@@ -367,7 +378,7 @@ async function handleCompleteUpload(event: APIGatewayProxyEvent): Promise<Lambda
     // }));
 
     return {
-      statusCode: 200,
+      statusCode: STATUS_CODES.OK,
       headers: corsHeaders,
       body: JSON.stringify({
         message: 'Upload completed successfully',
@@ -377,7 +388,7 @@ async function handleCompleteUpload(event: APIGatewayProxyEvent): Promise<Lambda
     };
   } catch (error) {
     return {
-      statusCode: 500,
+      statusCode: STATUS_CODES.INTERNAL_SERVER_ERROR,
       body: JSON.stringify({ error: 'Internal server error' }),
       headers: corsHeaders
     }

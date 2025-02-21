@@ -380,24 +380,27 @@ sequenceDiagram
 2. **Video Indexing Flow**
 ```mermaid
 sequenceDiagram
-    participant SQS
+    participant S3
     participant Lambda
-    participant ECS
+    participant SQS
     participant Rekognition
+    participant ECS
     participant Transcribe
     participant FFMPEG
     participant Bedrock
-    participant S3
     participant OpenSearch
 
-    SQS->>Lambda: Trigger Processing Task
-    Lambda->>S3: Read Raw Video
+    %% Initial S3 Event Trigger
+    S3->>Lambda: Object Created Event
+    Lambda->>OpenSearch: Create Initial Video Entry
     
-    %% Video Shot Detection and Metadata Extraction
-    Lambda->>Rekognition: Slice Video into Shots
-    Rekognition-->>Lambda: Return Shot Segments
+    %% Start Rekognition Jobs
+    Lambda->>Rekognition: Start Segment Detection
+    Note over Rekognition: Async Processing
+    Rekognition-->>SQS: Job Complete Notification
+    SQS->>Lambda: Process Rekognition Results
     
-    par Parallel Processing
+    par Parallel Processing after Segments
         %% Audio Processing
         Lambda->>FFMPEG: Extract Audio
         FFMPEG-->>S3: Store Audio File
@@ -408,28 +411,31 @@ sequenceDiagram
         Lambda->>FFMPEG: Extract Keyframes
         FFMPEG-->>S3: Store Keyframes
         Lambda->>Bedrock: Generate Frame Descriptions
-        Bedrock-->>S3: Store Frame Descriptions
+        Bedrock-->>Lambda: Return Descriptions
         
         %% Object & Face Detection
-        Lambda->>Rekognition: Detect Objects & Faces
-        Rekognition-->>Lambda: Return Detections
+        Lambda->>Rekognition: Start Object/Face Detection
+        Note over Rekognition: Async Processing
+        Rekognition-->>SQS: Detection Complete
+        SQS->>Lambda: Process Detection Results
     end
 
     %% Embedding Generation
     Lambda->>ECS: Start Embedding Task
-    ECS->>ECS: Generate Embeddings
+    Note over ECS: Generate Embeddings
         note over ECS: BGE Model for Text/Audio
         note over ECS: VideoCLIP-XL for Video
+    ECS-->>Lambda: Return Embeddings
     
     %% Final Processing
-    ECS->>OpenSearch: Store Video Metadata
+    Lambda->>OpenSearch: Store Complete Metadata
         note over OpenSearch: Store Schema:
         note over OpenSearch: - Video Info
         note over OpenSearch: - Segment Data
         note over OpenSearch: - Embeddings
         note over OpenSearch: - Search Metadata
     
-    ECS->>SQS: Delete Message
+    Lambda->>OpenSearch: Update Video Status
 ```
 
 3. **Search Flow**
@@ -688,3 +694,7 @@ Response: {
     - Interface endpoints for AWS services
     - Private DNS enabled
     - Security group controls
+
+
+## TODO List
+- [ ] Redirect the index progress page after the video is uploaded, with extra button to jump out to see all the videos while the index is processing

@@ -73,18 +73,28 @@ export class VideoSearchStack extends cdk.Stack {
   private createVpcInfrastructure(): ec2.Vpc {
     const vpc = new ec2.Vpc(this, 'VideoSearchVPC', {
       maxAzs: 2,
-      natGateways: 0,
+      natGateways: 1,
+      ipAddresses: ec2.IpAddresses.cidr('10.1.0.0/16'),  // Use different CIDR block
       subnetConfiguration: [
         {
-          name: 'Private',
-          // No NAT Gateway, no internet access from this subnet in either directions
-          subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
+          name: 'Public',  // For NAT Gateway
+          subnetType: ec2.SubnetType.PUBLIC,
           cidrMask: 24,
         },
+        {
+          name: 'Private',  // For Lambda functions
+          subnetType: ec2.SubnetType.PRIVATE_WITH_NAT,
+          cidrMask: 24,
+        },
+        {
+          name: 'Isolated',  // For Redis/ElastiCache
+          subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
+          cidrMask: 28,
+        }
       ],
     });
 
-    // Keep only the necessary VPC endpoints
+    // Add VPC endpoints for AWS services
     vpc.addGatewayEndpoint('S3Endpoint', {
       service: ec2.GatewayVpcEndpointAwsService.S3,
     });
@@ -93,7 +103,6 @@ export class VideoSearchStack extends cdk.Stack {
       service: ec2.InterfaceVpcEndpointAwsService.SQS,
     });
 
-    // Add ECR endpoints
     vpc.addInterfaceEndpoint('ECRDockerEndpoint', {
       service: ec2.InterfaceVpcEndpointAwsService.ECR_DOCKER,
     });
@@ -102,9 +111,13 @@ export class VideoSearchStack extends cdk.Stack {
       service: ec2.InterfaceVpcEndpointAwsService.ECR,
     });
 
-    // Add CloudWatch Logs endpoint for container logging
     vpc.addInterfaceEndpoint('CloudWatchLogsEndpoint', {
       service: ec2.InterfaceVpcEndpointAwsService.CLOUDWATCH_LOGS,
+    });
+
+    // Add ElastiCache VPC endpoint
+    vpc.addInterfaceEndpoint('ElastiCacheEndpoint', {
+      service: ec2.InterfaceVpcEndpointAwsService.ELASTICACHE,
     });
 
     return vpc;
@@ -430,7 +443,19 @@ export class VideoSearchStack extends cdk.Stack {
     const commonLambdaProps = {
       runtime: lambda.Runtime.NODEJS_20_X,
       vpc: this.vpc,
-      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+      // add into two subnets: isolated subnets for aoss and redis, add into private with nat for rekognition
+      vpcSubnets: {
+        subnetFilters: [
+          {
+            name: 'Isolated',
+            subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
+          },
+          {
+            name: 'Private',
+            subnetType: ec2.SubnetType.PRIVATE_WITH_NAT,
+          },
+        ],
+      },
       securityGroups: [lambdaSG],
       timeout: cdk.Duration.minutes(15),
       environment: {

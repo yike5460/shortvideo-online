@@ -37,6 +37,14 @@ const corsHeaders = {
   'Access-Control-Allow-Credentials': 'true'
 };
 
+const STATUS_CODES = {
+  OK: 200,
+  CREATED: 201,
+  BAD_REQUEST: 400,
+  NOT_FOUND: 404,
+  INTERNAL_SERVER_ERROR: 500
+};
+
 export const handler = async (event: S3Event | SQSEvent, _context: LambdaContext): Promise<LambdaResponse> => {
   try {
     console.log('Received raw video event:', event);
@@ -50,7 +58,7 @@ export const handler = async (event: S3Event | SQSEvent, _context: LambdaContext
       if (!key.startsWith('RawVideos/')) {
         process.stdout.write('Skipping non-raw video file: ' + key + '\n');
         return {
-          statusCode: 200,
+          statusCode: STATUS_CODES.OK,
           headers: corsHeaders,
           body: JSON.stringify({ message: 'Skipped non-raw video file' })
         };
@@ -111,7 +119,7 @@ export const handler = async (event: S3Event | SQSEvent, _context: LambdaContext
       }));
 
       return {
-        statusCode: 200,
+        statusCode: STATUS_CODES.OK,
         headers: corsHeaders,
         body: JSON.stringify({
           message: 'Video processing started',
@@ -129,7 +137,7 @@ export const handler = async (event: S3Event | SQSEvent, _context: LambdaContext
     if ('Records' in event && event.Records[0].eventSource === 'aws:sqs') {
       const record = JSON.parse(event.Records[0].body) as VideoMetadata;
       const { video_id, job_id, video_status } = record;
-
+      console.log('Received video processing job completion event:', event, 'video_id:', video_id, 'job_id:', job_id, 'video_status:', video_status);
       if (video_status === 'ready') {
         // Get shot detection results
         const shotDetectionResult = await rekognition.send(new GetSegmentDetectionCommand({
@@ -159,20 +167,11 @@ export const handler = async (event: S3Event | SQSEvent, _context: LambdaContext
           video_status: 'ready'
         };
 
-        // Send to video processing queue for embedding generation
-        await sqs.send(new SendMessageCommand({
-          QueueUrl: process.env.VIDEO_PROCESSING_QUEUE_URL,
-          MessageBody: JSON.stringify(updatedMetadata),
-          MessageAttributes: {
-            jobType: {
-              DataType: 'String',
-              StringValue: 'EMBEDDING_GENERATION'
-            }
-          }
-        }));
+        // Update OpenSearch with segment information
+        await updateVideoStatus(video_id!, 'ready' as VideoStatus, updatedMetadata);
 
         return {
-          statusCode: 200,
+          statusCode: STATUS_CODES.OK,
           headers: corsHeaders,
           body: JSON.stringify({
             message: 'Shot detection completed',
@@ -185,7 +184,7 @@ export const handler = async (event: S3Event | SQSEvent, _context: LambdaContext
 
     // If we get here, we didn't handle the event type
     return {
-      statusCode: 400,
+      statusCode: STATUS_CODES.BAD_REQUEST,
       headers: corsHeaders,
       body: JSON.stringify({ error: 'Unsupported event type' })
     };
@@ -193,7 +192,7 @@ export const handler = async (event: S3Event | SQSEvent, _context: LambdaContext
   } catch (error) {
     console.error('Error processing video:', error);
     return {
-      statusCode: 500,
+      statusCode: STATUS_CODES.INTERNAL_SERVER_ERROR,
       headers: corsHeaders,
       body: JSON.stringify({
         error: 'Internal server error',
