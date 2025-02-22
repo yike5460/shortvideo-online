@@ -171,128 +171,48 @@ async function handleSNSEvent(event: SNSEvent): Promise<LambdaResponse> {
   const status = message.Status;
   const videoId = message.Video.S3ObjectName.split('/')[2]; // Extract from S3 key
 
-  console.log('Processing Rekognition notification for job:', jobId, 'status:', status, 'videoId:', videoId, 'message:', message);
+  console.log('Processing Rekognition notification for job type:', message.API, 'jobId:', jobId, 'status:', status, 'videoId:', videoId, 'message:', message);
+  console.log('Video information before processing:', await openSearch.get({index: 'videos', id: videoId}));
 
-  if (status === 'SUCCEEDED') {
-    // Get job results based on job type
-    if (message.API === 'StartSegmentDetection') {
-      const segments = await getSegmentDetectionResults(jobId);
-      await updateVideoSegments(videoId, segments);
-    } else if (message.API === 'StartLabelDetection') {
-      const labels = await getLabelDetectionResults(jobId);
-      await updateVideoLabels(videoId, labels);
-    } else if (message.API === 'StartFaceDetection') {
-      const faces = await getFaceDetectionResults(jobId);
-      await updateVideoFaces(videoId, faces);
+  try {
+    if (status === 'SUCCEEDED') {
+      // Get job results based on job type
+      if (message.API === 'StartSegmentDetection') {
+        const segments = await getSegmentDetectionResults(jobId);
+        await updateVideoSegments(videoId, segments);
+      } else if (message.API === 'StartLabelDetection') {
+        const labels = await getLabelDetectionResults(jobId);
+        await updateVideoLabels(videoId, labels);
+      } else if (message.API === 'StartFaceDetection') {
+        const faces = await getFaceDetectionResults(jobId);
+        await updateVideoFaces(videoId, faces);
+      }
+    } else if (status === 'FAILED') {
+      await updateVideoStatus(videoId, 'error', {
+        error: message.StatusMessage
+      });
     }
-  } else if (status === 'FAILED') {
-    await updateVideoStatus(videoId, 'error', {
-      error: message.StatusMessage
-    });
-  }
 
-  // Display the video information in aoss for debugging
-  const fullVideoMetadata = await openSearch.get({
-    index: 'videos',
-    id: videoId
-  });
-  console.log('Video information:', fullVideoMetadata);
+    // Display the video information in aoss for debugging
+    const fullVideoMetadata = await openSearch.get({
+      index: 'videos',
+      id: videoId
+    });
+    console.log('Video information after processing:', fullVideoMetadata);
+  } catch (error) {
+    console.error('Error in handle Rekognition notification for job type:', message.API, 'jobId:', jobId, 'error message:', error, 'videoId:', videoId, 'message:', message);
+    return {
+      statusCode: STATUS_CODES.INTERNAL_SERVER_ERROR,
+      headers: corsHeaders,
+      body: JSON.stringify({ error: 'Internal server error' })
+    };
+  }
 
   return {
     statusCode: STATUS_CODES.OK,
     headers: corsHeaders,
     body: JSON.stringify({ message: 'Processed Rekognition notification' })
   };
-}
-
-async function processVideoJob(record: SQSEvent): Promise<void> {
-  try {
-    const job: VideoProcessingJob = JSON.parse(record.Records[0].body);
-    console.log('Processing video job:', job);
-
-    await updateVideoStatus(job.videoId, 'processing');
-
-    const segmentDetectionResponse = await rekognition.send(new StartSegmentDetectionCommand({
-      Video: {
-        S3Object: {
-          Bucket: job.bucket,
-          Name: job.key
-        }
-      },
-      SegmentTypes: ['SHOT', 'TECHNICAL_CUE'],
-      Filters: {
-        TechnicalCueFilter: {
-          BlackFrame: { MaxPixelThreshold: 0.2, MinCoveragePercentage: 95 }
-        }
-      }
-    }));
-
-    const jobId = segmentDetectionResponse.JobId;
-    if (!jobId) {
-      throw new Error('Failed to start segment detection job');
-    }
-
-    const segments = await pollSegmentDetection(jobId);
-    console.log('Detected segments:', segments);
-
-    // Process segments and update OpenSearch
-    const processedSegments: VideoSegment[] = segments.map((segment, index) => ({
-      segment_id: `${job.videoId}_${index}`,
-      video_id: job.videoId,
-      start_time: segment.StartTimestampMillis || 0,
-      end_time: segment.EndTimestampMillis || 0,
-      duration: segment.DurationMillis || 0,
-      segment_visual: {
-        segment_visual_description: segment.TechnicalCueSegment 
-          ? 'Technical cue detected'
-          : 'Shot boundary detected'
-      }
-    }));
-
-    // Batch index segments to OpenSearch
-    const body = processedSegments.flatMap(segment => [
-      { index: { _index: 'video_segments', _id: segment.segment_id } },
-      segment
-    ]);
-
-    await openSearch.bulk({ body });
-
-    // Update video status to ready
-    await updateVideoStatus(job.videoId, 'ready', {
-      segment_count: processedSegments.length,
-      total_duration: Math.max(...processedSegments.map(s => s.end_time))
-    });
-
-  } catch (error) {
-    console.error('Error processing video:', error);
-    if (error instanceof Error) {
-      await updateVideoStatus(JSON.parse(record.Records[0].body).videoId, 'error', {
-        error: error.message
-      });
-    }
-    throw error;
-  }
-}
-
-async function pollSegmentDetection(jobId: string, maxAttempts = 60): Promise<any[]> {
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const response = await rekognition.send(new GetSegmentDetectionCommand({
-      JobId: jobId
-    }));
-
-    if (response.JobStatus === 'SUCCEEDED') {
-      return response.Segments || [];
-    }
-
-    if (response.JobStatus === 'FAILED') {
-      throw new Error(`Segment detection failed: ${response.StatusMessage}`);
-    }
-
-    // Wait 5 seconds before next poll
-    await new Promise(resolve => setTimeout(resolve, 5000));
-  }
-
-  throw new Error('Segment detection timed out');
 }
 
 async function updateVideoStatus(videoId: string, status: VideoStatus, additionalFields?: Partial<VideoMetadata>) {
@@ -330,28 +250,36 @@ async function getSegmentDetectionResults(jobId: string): Promise<SegmentDetecti
 }
 
 async function updateVideoSegments(videoId: string, segments: SegmentDetection[]): Promise<void> {
-  const processedSegments = segments.map((segment, index) => ({
+  // First get existing video metadata
+  const { body: existingVideo } = await openSearch.get({
+    index: 'videos',
+    id: videoId
+  });
+
+  const processedSegments: VideoSegment[] = segments.map((segment, index) => ({
     segment_id: `${videoId}_${index}`,
     video_id: videoId,
     start_time: segment.StartTimestampMillis || 0,
     end_time: segment.EndTimestampMillis || 0,
     duration: segment.DurationMillis || 0,
-    segment_type: segment.ShotSegment ? 'shot' : 'technical_cue',
-    confidence: segment.ShotSegment?.Confidence || segment.TechnicalCueSegment?.Confidence
+    segment_visual: {
+      segment_visual_description: segment.ShotSegment ? 'Shot boundary detected' : 'Technical cue detected',
+    }
   }));
 
-  // Batch index segments to OpenSearch
-  await openSearch.bulk({
-    body: processedSegments.flatMap(segment => [
-      { index: { _index: 'video_segments', _id: segment.segment_id } },
-      segment
-    ])
-  });
-
-  // Update video metadata with segment count
-  await updateVideoStatus(videoId, 'ready_for_shots' as VideoStatus, {
-    segment_count: processedSegments.length,
-    total_duration: Math.max(...processedSegments.map(s => s.end_time))
+  // Update video metadata with new segments and status
+  await openSearch.update({
+    index: 'videos',
+    id: videoId,
+    body: {
+      doc: {
+        video_status: 'ready_for_shots' as VideoStatus,
+        video_segments: processedSegments,
+        segment_count: processedSegments.length,
+        total_duration: Math.max(...processedSegments.map(s => s.end_time)),
+        updated_at: new Date().toISOString()
+      }
+    }
   });
 }
 
@@ -377,37 +305,41 @@ async function getLabelDetectionResults(jobId: string): Promise<any[]> {
 }
 
 async function updateVideoLabels(videoId: string, labels: any[]): Promise<void> {
-  const processedLabels = labels.map((label, index) => {
-    const visualObject = {
-      label: label.Label.Name,
-      confidence: label.Label.Confidence,
-      bounding_box: label.Label.BoundingBox || { left: 0, top: 0, width: 0, height: 0 }
-    };
+  // First get existing video metadata
+  const { body: existingVideo } = await openSearch.get({
+    index: 'videos',
+    id: videoId
+  });
 
-    return {
-      segment_id: `${videoId}_${index}`,
-      video_id: videoId,
-      start_time: label.Timestamp,
-      end_time: label.Timestamp + 1000, // Assume 1 second duration
-      duration: 1000,
-      segment_visual: {
-        segment_visual_objects: [visualObject],
-        segment_visual_description: `Detected ${label.Label.Name}`
+  const processedSegments: VideoSegment[] = labels.map((label, index) => ({
+    segment_id: `${videoId}_label_${index}`,
+    video_id: videoId,
+    start_time: label.Timestamp,
+    end_time: label.Timestamp + 1000, // Assume 1 second duration
+    duration: 1000,
+    segment_visual: {
+      segment_visual_objects: [{
+        label: label.Label.Name,
+        confidence: label.Label.Confidence,
+        bounding_box: label.Label.BoundingBox || { left: 0, top: 0, width: 0, height: 0 }
+      }],
+      segment_visual_description: `Detected ${label.Label.Name}`
+    }
+  }));
+
+  // Merge with existing segments
+  const allSegments = [...(existingVideo._source.video_segments || []), ...processedSegments];
+
+  await openSearch.update({
+    index: 'videos',
+    id: videoId,
+    body: {
+      doc: {
+        video_status: 'ready_for_object' as VideoStatus,
+        video_segments: allSegments,
+        updated_at: new Date().toISOString()
       }
-    };
-  });
-
-  // Batch index to video_segments
-  await openSearch.bulk({
-    body: processedLabels.flatMap(segment => [
-      { index: { _index: 'video_segments', _id: segment.segment_id } },
-      segment
-    ])
-  });
-
-  // Update video metadata
-  await updateVideoStatus(videoId, 'ready_for_object' as VideoStatus, {
-    video_segments: processedLabels
+    }
   });
 }
 
@@ -432,36 +364,40 @@ async function getFaceDetectionResults(jobId: string): Promise<any[]> {
 }
 
 async function updateVideoFaces(videoId: string, faces: any[]): Promise<void> {
-  const processedFaces = faces.map((face, index) => {
-    const faceDetection = {
-      confidence: face.Face.Confidence,
-      bounding_box: face.Face.BoundingBox,
-      person_name: undefined // Can be updated later with face recognition
-    };
+  // First get existing video metadata
+  const { body: existingVideo } = await openSearch.get({
+    index: 'videos',
+    id: videoId
+  });
 
-    return {
-      segment_id: `${videoId}_face_${index}`,
-      video_id: videoId,
-      start_time: face.Timestamp,
-      end_time: face.Timestamp + 1000, // Assume 1 second duration
-      duration: 1000,
-      segment_visual: {
-        segment_visual_faces: [faceDetection],
-        segment_visual_description: 'Face detected'
+  const processedSegments: VideoSegment[] = faces.map((face, index) => ({
+    segment_id: `${videoId}_face_${index}`,
+    video_id: videoId,
+    start_time: face.Timestamp,
+    end_time: face.Timestamp + 1000, // Assume 1 second duration
+    duration: 1000,
+    segment_visual: {
+      segment_visual_faces: [{
+        confidence: face.Face.Confidence,
+        bounding_box: face.Face.BoundingBox,
+        person_name: undefined // Can be updated later with face recognition
+      }],
+      segment_visual_description: 'Face detected'
+    }
+  }));
+
+  // Merge with existing segments
+  const allSegments = [...(existingVideo._source.video_segments || []), ...processedSegments];
+
+  await openSearch.update({
+    index: 'videos',
+    id: videoId,
+    body: {
+      doc: {
+        video_status: 'ready_for_face' as VideoStatus,
+        video_segments: allSegments,
+        updated_at: new Date().toISOString()
       }
-    };
-  });
-
-  // Batch index to video_segments
-  await openSearch.bulk({
-    body: processedFaces.flatMap(segment => [
-      { index: { _index: 'video_segments', _id: segment.segment_id } },
-      segment
-    ])
-  });
-
-  // Update video metadata
-  await updateVideoStatus(videoId, 'ready_for_face' as VideoStatus, {
-    video_segments: processedFaces
+    }
   });
 } 
