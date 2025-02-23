@@ -125,6 +125,9 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<LambdaRespon
 
 async function handleListVideos(): Promise<LambdaResponse> {
   try {
+    // Add pagination parameters
+    const pageSize = 20;  // Limit number of videos per request
+    
     const { body } = await openSearch.search({
       index: 'videos',
       body: {
@@ -136,31 +139,45 @@ async function handleListVideos(): Promise<LambdaResponse> {
           }
         },
         sort: [{ created_at: { order: 'desc' } }],
-        size: 100
+        size: pageSize,
+        // Only return necessary fields
+        _source: [
+          'video_id',
+          'video_title',
+          'video_description',
+          'video_s3_path',
+          'video_duration',
+          'video_type',
+          'video_status',
+          'video_size',
+          'created_at'
+        ]
       }
     });
 
-    // Transform to match frontend VideoResult interface
+    // Transform to minimal VideoResult interface
     const videos: VideoResult[] = body.hits.hits.map((hit: any) => ({
       id: hit._id,
-      title: hit._source.video_title,
+      title: hit._source.video_title || '',
       description: hit._source.video_description || '',
-      thumbnailUrl: hit._source.video_thumbnail_url || '', // TODO: Generate thumbnails
+      thumbnailUrl: '', // Will be generated separately
       previewUrl: hit._source.video_s3_path,
       duration: hit._source.video_duration || 0,
-      source: 'upload',
-      sourceUrl: hit._source.video_s3_path,
+      source: 'local' as const,
       uploadDate: hit._source.created_at,
       format: hit._source.video_type,
       status: hit._source.video_status,
-      size: hit._source.video_size,
-      segments: hit._source.video_segments || []
+      size: hit._source.video_size
     }));
 
     return {
       statusCode: STATUS_CODES.OK,
       headers: corsHeaders,
-      body: JSON.stringify(videos)
+      body: JSON.stringify({
+        videos,
+        total: body.hits.total.value,
+        hasMore: body.hits.total.value > pageSize
+      })
     };
   } catch (error) {
     console.error('Error listing videos:', error);
@@ -176,7 +193,24 @@ async function handleGetVideo(videoId: string): Promise<LambdaResponse> {
   try {
     const { body } = await openSearch.get({
       index: 'videos',
-      id: videoId
+      id: videoId,
+      // Only fetch required fields
+      _source: [
+        'video_title',
+        'video_description',
+        'video_s3_path',
+        'video_duration',
+        'video_type',
+        'video_status',
+        'video_size',
+        'created_at',
+        // Only include basic segment info
+        'video_segments.segment_id',
+        'video_segments.start_time',
+        'video_segments.end_time',
+        'video_segments.duration',
+        'video_segments.segment_visual.segment_visual_description'
+      ]
     });
 
     if (!body.found || body._source.video_status === 'deleted') {
@@ -187,21 +221,27 @@ async function handleGetVideo(videoId: string): Promise<LambdaResponse> {
       };
     }
 
-    // Transform to match frontend VideoResult interface
+    // Transform to minimal VideoResult interface
     const video: VideoResult = {
-      id: body._id,
+      id: videoId,
       title: body._source.video_title || '',
       description: body._source.video_description || '',
-      thumbnailUrl: body._source.video_thumbnail_url || '', // TODO: Generate thumbnails
+      thumbnailUrl: '', // Will be generated separately
       previewUrl: body._source.video_s3_path,
       duration: body._source.video_duration || 0,
-      source: 'upload',
-      sourceUrl: body._source.video_s3_path,
+      source: 'local' as const,
       uploadDate: body._source.created_at,
       format: body._source.video_type,
       status: body._source.video_status,
       size: body._source.video_size,
-      segments: body._source.video_segments || []
+      // Only include essential segment information
+      segments: (body._source.video_segments || []).map((segment: any) => ({
+        segment_id: segment.segment_id,
+        start_time: segment.start_time,
+        end_time: segment.end_time,
+        duration: segment.duration,
+        description: segment.segment_visual?.segment_visual_description || ''
+      }))
     };
 
     return {

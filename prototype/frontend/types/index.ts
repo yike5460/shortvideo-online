@@ -10,6 +10,7 @@ export interface VideoSegment {
   confidence: number
 }
 
+// Align with the VideoResult type in src/types/common.ts
 export interface VideoResult {
   id: string
   title: string
@@ -19,6 +20,7 @@ export interface VideoResult {
   duration: number
   source: string
   sourceUrl: string
+  status: string
   uploadDate: string
   format: string
   resolution: string

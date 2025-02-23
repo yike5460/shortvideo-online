@@ -12,6 +12,11 @@ interface VideoGridProps {
 export default function VideoGrid({ videos, onVideoSelect, selectedVideo }: VideoGridProps) {
   const [hoveredVideo, setHoveredVideo] = useState<string | null>(null)
 
+  if (!Array.isArray(videos)) {
+    console.error('Videos prop is not an array:', videos)
+    return null
+  }
+
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
       {videos.map((video) => (

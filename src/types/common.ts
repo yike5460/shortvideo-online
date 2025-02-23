@@ -111,8 +111,8 @@ export interface VideoResult {
   thumbnailUrl: string;
   previewUrl: string;
   duration: number;
-  source: 'upload' | 'youtube';
-  sourceUrl: string;
+  source: 'local' | 'youtube';
+  sourceUrl?: string;
   uploadDate: string;
   format: string;
   status: VideoStatus;
