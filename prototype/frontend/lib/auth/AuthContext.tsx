@@ -1,6 +1,6 @@
 'use client'
 
-import { createContext, useContext, useEffect, useState } from 'react'
+import { createContext, useContext, useReducer, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { AuthState, LoginCredentials, RegisterCredentials, User, Session } from '@/types/auth'
 
@@ -20,196 +20,172 @@ const MOCK_USER: User = {
   twoFactorEnabled: false,
 }
 
-const initialState: AuthState = {
-  user: null,
-  session: null,
-  isLoading: true,
-  error: null,
-  verificationRequired: false,
-  registrationEmail: null,
+// Add session storage key
+const SESSION_STORAGE_KEY = 'video_search_session'
+
+// Add these types at the top of the file
+type AuthAction =
+  | { type: 'SET_SESSION'; payload: { session: any; user: any } }
+  | { type: 'SET_LOADING'; payload: boolean }
+  | { type: 'SET_ERROR'; payload: string }
+  | { type: 'CLEAR_SESSION' }
+  | { type: 'SET_VERIFICATION'; payload: { verificationRequired?: boolean; registrationEmail?: string; error?: string } }
+
+// Add the reducer before the AuthProvider
+function authReducer(state: AuthState, action: AuthAction): AuthState {
+  switch (action.type) {
+    case 'SET_SESSION':
+      return {
+        ...state,
+        session: action.payload.session,
+        user: action.payload.user,
+        error: null,
+        verificationRequired: false
+      }
+    case 'SET_LOADING':
+      return {
+        ...state,
+        isLoading: action.payload
+      }
+    case 'SET_ERROR':
+      return {
+        ...state,
+        error: action.payload,
+        isLoading: false
+      }
+    case 'CLEAR_SESSION':
+      return {
+        ...initialState,
+        isLoading: false,
+        verificationRequired: false,
+        registrationEmail: null
+      }
+    case 'SET_VERIFICATION':
+      return {
+        ...state,
+        ...action.payload,
+        isLoading: false
+      }
+    default:
+      return state
+  }
 }
 
-const AuthContext = createContext<{
-  state: AuthState;
-  login: (credentials: LoginCredentials) => Promise<void>;
-  register: (credentials: RegisterCredentials) => Promise<void>;
-  logout: () => Promise<void>;
-  clearError: () => void;
-  resendVerification: () => Promise<void>;
+// Update the initial state to include verificationRequired
+const initialState: AuthState = {
+  isLoading: true,
+  session: null,
+  user: null,
+  error: null,
+  registrationEmail: null,
+  verificationRequired: false
+}
+
+export const AuthContext = createContext<{
+  state: AuthState
+  login: (credentials: any) => Promise<void>
+  logout: () => Promise<void>
+  register: (credentials: any) => Promise<void>
+  resendVerification: () => Promise<void>
 }>({
   state: initialState,
   login: async () => {},
-  register: async () => {},
   logout: async () => {},
-  clearError: () => {},
-  resendVerification: async () => {},
+  register: async () => {},
+  resendVerification: async () => {}
 })
 
 // Mock API delay
 const mockApiDelay = () => new Promise(resolve => setTimeout(resolve, 500))
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [state, setState] = useState<AuthState>(initialState)
+  const [state, dispatch] = useReducer(authReducer, initialState)
   const router = useRouter()
 
+  // Load session from storage on mount
   useEffect(() => {
-    // Check for existing session in localStorage
-    const storedSession = localStorage.getItem('session')
-    if (storedSession) {
+    const loadSession = () => {
       try {
-        const session = JSON.parse(storedSession)
-        setState(prev => ({
-          ...prev,
-          user: session.user,
-          session,
-          isLoading: false,
-        }))
+        const savedSession = sessionStorage.getItem(SESSION_STORAGE_KEY)
+        if (savedSession) {
+          const { session, user } = JSON.parse(savedSession)
+          dispatch({ type: 'SET_SESSION', payload: { session, user } })
+        }
       } catch (error) {
-        localStorage.removeItem('session')
-        setState(prev => ({ ...prev, isLoading: false }))
+        console.error('Error loading session:', error)
+      } finally {
+        dispatch({ type: 'SET_LOADING', payload: false })
       }
-    } else {
-      setState(prev => ({ ...prev, isLoading: false }))
     }
+
+    loadSession()
   }, [])
 
-  const login = async (credentials: LoginCredentials) => {
+  const login = async (credentials: any) => {
     try {
-      setState(prev => ({ ...prev, isLoading: true, error: null }))
+      dispatch({ type: 'SET_LOADING', payload: true })
       
-      // For test account, bypass verification
-      if (credentials.email === TEST_ACCOUNT.email && credentials.password === TEST_ACCOUNT.password) {
-        const session: Session = {
-          token: 'mock-jwt-token-' + Date.now(),
-          user: MOCK_USER,
-          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-        }
+      // Mock successful login for test@example.com
+      if (credentials.email === 'test@example.com' && credentials.password === 'password123') {
+        const session = { token: 'mock-token' }
+        const user = { email: credentials.email }
         
-        if (credentials.rememberMe) {
-          localStorage.setItem('session', JSON.stringify(session))
-        }
-
-        setState(prev => ({
-          ...prev,
-          user: session.user,
-          session,
-          isLoading: false,
-          verificationRequired: false,
-          registrationEmail: null,
-        }))
-
+        // Save to session storage
+        sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({ session, user }))
+        
+        dispatch({ type: 'SET_SESSION', payload: { session, user } })
         router.push('/')
         return
       }
 
-      // For other accounts, check verification status
-      if (!credentials.email.endsWith('@example.com')) {
-        setState(prev => ({
-          ...prev,
-          error: 'Please verify your email before logging in.',
-          verificationRequired: true,
-          registrationEmail: credentials.email,
-          isLoading: false,
-        }))
-        return
-      }
-
-      throw new Error('Invalid credentials. Use test@example.com / password123')
+      throw new Error('Invalid credentials')
     } catch (error) {
-      setState(prev => ({
-        ...prev,
-        error: error instanceof Error ? error.message : 'An error occurred',
-        isLoading: false,
-      }))
+      dispatch({ type: 'SET_ERROR', payload: 'Invalid email or password' })
+    } finally {
+      dispatch({ type: 'SET_LOADING', payload: false })
     }
+  }
+
+  const logout = async () => {
+    sessionStorage.removeItem(SESSION_STORAGE_KEY)
+    dispatch({ type: 'CLEAR_SESSION' })
+    router.push('/landing')
   }
 
   const register = async (credentials: RegisterCredentials) => {
     try {
-      setState(prev => ({ ...prev, isLoading: true, error: null }))
+      dispatch({ type: 'SET_LOADING', payload: true })
 
       await mockApiDelay()
 
       // Simulate sending verification email
-      setState(prev => ({
-        ...prev,
-        verificationRequired: true,
-        registrationEmail: credentials.email,
-        error: null,
-        isLoading: false,
-      }))
+      dispatch({ type: 'SET_VERIFICATION', payload: { verificationRequired: true, registrationEmail: credentials.email } })
 
       // Show verification required message
       router.push('/auth/verify-email')
     } catch (error) {
-      setState(prev => ({
-        ...prev,
-        error: error instanceof Error ? error.message : 'An error occurred',
-        isLoading: false,
-      }))
+      dispatch({ type: 'SET_ERROR', payload: error instanceof Error ? error.message : 'An error occurred' })
+    } finally {
+      dispatch({ type: 'SET_LOADING', payload: false })
     }
   }
 
   const resendVerification = async () => {
     try {
-      setState(prev => ({ ...prev, isLoading: true, error: null }))
+      dispatch({ type: 'SET_LOADING', payload: true })
       
       await mockApiDelay()
 
-      setState(prev => ({
-        ...prev,
-        error: 'Verification email resent. Please check your inbox.',
-        isLoading: false,
-      }))
+      dispatch({ type: 'SET_VERIFICATION', payload: { error: 'Verification email resent. Please check your inbox.' } })
     } catch (error) {
-      setState(prev => ({
-        ...prev,
-        error: error instanceof Error ? error.message : 'Failed to resend verification email',
-        isLoading: false,
-      }))
+      dispatch({ type: 'SET_ERROR', payload: error instanceof Error ? error.message : 'Failed to resend verification email' })
+    } finally {
+      dispatch({ type: 'SET_LOADING', payload: false })
     }
-  }
-
-  const logout = async () => {
-    try {
-      setState(prev => ({ ...prev, isLoading: true }))
-      
-      await mockApiDelay()
-
-      localStorage.removeItem('session')
-      setState({ 
-        ...initialState, 
-        isLoading: false,
-        verificationRequired: false,
-        registrationEmail: null,
-      })
-      router.push('/landing')
-    } catch (error) {
-      console.error('Logout error:', error)
-      localStorage.removeItem('session')
-      setState({ 
-        ...initialState, 
-        isLoading: false,
-        verificationRequired: false,
-        registrationEmail: null,
-      })
-      router.push('/landing')
-    }
-  }
-
-  const clearError = () => {
-    setState(prev => ({ ...prev, error: null }))
   }
 
   return (
-    <AuthContext.Provider value={{ 
-      state, 
-      login, 
-      register, 
-      logout, 
-      clearError,
-      resendVerification,
-    }}>
+    <AuthContext.Provider value={{ state, login, logout, register, resendVerification }}>
       {children}
     </AuthContext.Provider>
   )

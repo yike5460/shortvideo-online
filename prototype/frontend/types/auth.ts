@@ -9,17 +9,16 @@ export interface User {
 
 export interface Session {
   token: string;
-  user: User;
-  expiresAt: string;
+  expiresAt?: string;
 }
 
 export interface AuthState {
-  user: User | null;
-  session: Session | null;
   isLoading: boolean;
+  session: Session | null;
+  user: User | null;
   error: string | null;
-  verificationRequired: boolean;
   registrationEmail: string | null;
+  verificationRequired: boolean;
 }
 
 export interface LoginCredentials {

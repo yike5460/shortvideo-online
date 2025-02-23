@@ -6,10 +6,8 @@ import './globals.css'
 
 const inter = Inter({ subsets: ['latin'] })
 
-export const metadata: Metadata = {
-  title: 'Video Search Platform',
-  description: 'Search and analyze video content across multiple sources',
-}
+// Move metadata to a separate file to avoid 'use client' conflict
+export { metadata } from './metadata'
 
 export default function RootLayout({
   children,
