@@ -58,46 +58,6 @@ export interface BoundingBox {
   height: number;
 }
 
-export interface VideoSegment {
-  segment_id: string;
-  video_id: string;
-  start_time: number;        // Milliseconds from start
-  end_time: number;          // Milliseconds from start
-  duration: number;          // Segment duration in milliseconds
-  segment_audio?: {
-    segment_audio_transcript?: string;     // Raw transcript text
-    segment_audio_semantic_embedding?: number[];  // Audio embedding
-    segment_audio_description?: string;    // Audio description
-  };
-  segment_visual?: {
-    segment_visual_keyframe_path?: string;  // S3 path to keyframe
-    segment_visual_description?: string;    // Visual description
-    segment_visual_objects?: VisualObject[];
-    segment_visual_faces?: FaceDetection[];
-    segment_visual_embedding?: number[];    // Visual embedding
-    segment_visual_ocr_text?: string[];    // Extracted text
-  };
-}
-
-export interface VisualObject {
-  label: string;
-  confidence: number;
-  bounding_box: BoundingBox;
-}
-
-export interface FaceDetection {
-  person_name?: string;
-  confidence: number;
-  bounding_box: BoundingBox;
-}
-
-export interface BoundingBox {
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-}
-
 export interface VideoResult {
   id: string;
   title: string;
@@ -111,6 +71,7 @@ export interface VideoResult {
   format: string;
   status: VideoStatus;
   size: number;
+  metadata?: SearchMetadata;
   segments?: VideoSegment[];
 }
 
@@ -132,11 +93,19 @@ export type ConfidencePreset = 'low' | 'medium' | 'high'
 export type ConfidenceAdjustment = 'less' | 'default' | 'more'
 
 export interface SearchOptions {
-  visualSearch: boolean
-  audioSearch: boolean
+  selectedIndex: string | null
+  searchType: 'text' | 'image' | 'video' | 'audio'
+  searchQuery: string
+  exactMatch: boolean
+  topK: number
+  weights: {
+    text: number
+    image: number
+    video: number
+    audio: number
+  };
   minConfidence: number
   showConfidenceScores: boolean
-  selectedIndex: string | null
   confidencePreset: ConfidencePreset
   confidenceAdjustment: ConfidenceAdjustment
 }

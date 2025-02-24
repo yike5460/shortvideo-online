@@ -7,17 +7,20 @@ import { RedisClientType, createClient } from 'redis';
 import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
 import { AwsSigv4Signer } from '@opensearch-project/opensearch/aws';
 
-// Add search query interface to match frontend in page.tsx
+// Update search query interface to match frontend
 interface SearchQuery {
-  text: string;
-  exact_match: boolean;
-  top_k: number;
+  searchType: 'text' | 'image' | 'video' | 'audio';
+  searchQuery: string;
+  exactMatch: boolean;
+  topK: number;
   weights: {
-    visual: number;
-    audio: number;
     text: number;
+    image: number;
+    video: number;
+    audio: number;
   };
-  min_confidence: number;
+  minConfidence: number;
+  selectedIndex?: string;
 }
 
 // OpenSearch query types
@@ -58,17 +61,33 @@ const corsHeaders = {
   'Access-Control-Allow-Credentials': 'true'
 };
 
-// Simplify and optimize the search query
+// Update the search query builder
 const buildSearchQuery = (searchQuery: SearchQuery): OpenSearchQuery => {
+  console.log('Building search query:', JSON.stringify(searchQuery, null, 2));
+
   const searchBody: OpenSearchQuery = {
-    size: searchQuery.top_k || 20,
+    size: searchQuery.topK || 20,
+    _source: [
+      'video_id',
+      'video_title',
+      'video_description',
+      'video_thumbnail_url',
+      'video_s3_path',
+      'video_duration',
+      'video_original_path',
+      'created_at',
+      'video_type',
+      'video_status',
+      'video_size',
+      'video_segments'
+    ],
     query: {
       bool: {
         must: [
-          { term: { video_status: 'ready' as VideoStatus} }
+          { term: { video_status: 'ready' as VideoStatus } }
         ],
         must_not: [
-          { term: { video_status: 'deleted' as VideoStatus} }
+          { term: { video_status: 'deleted' as VideoStatus } }
         ],
         should: [],
         minimum_should_match: 1
@@ -76,44 +95,93 @@ const buildSearchQuery = (searchQuery: SearchQuery): OpenSearchQuery => {
     }
   };
 
-  if (searchQuery.text) {
-    if (searchQuery.exact_match) {
-      // Simplified exact match query
+  // Only add search conditions if we have a query
+  if (searchQuery.searchQuery && searchQuery.searchQuery.trim()) {
+    if (searchQuery.exactMatch) {
+      // Exact match query
       searchBody.query.bool.should.push({
         multi_match: {
-          query: searchQuery.text,
+          query: searchQuery.searchQuery,
           fields: [
             'video_title^3',
             'video_description^2',
-            'video_metadata.exact_match_keywords.*',
-            'video_segments.segment_audio.segment_audio_transcript',
-            'video_segments.segment_visual.segment_visual_description'
+            'video_metadata.exact_match_keywords.visual^2',
+            'video_metadata.exact_match_keywords.audio^2',
+            'video_metadata.exact_match_keywords.text^1',
+            'video_segments.segment_audio.segment_audio_transcript^1',
+            'video_segments.segment_visual.segment_visual_description^1'
           ],
           type: 'phrase',
           tie_breaker: 0.3
         }
       });
     } else {
-      // Simplified semantic search
-      searchBody.query.bool.should.push({
-        multi_match: {
-          query: searchQuery.text,
-          fields: [
-            'video_title^3',
-            'video_description^2',
-            'video_metadata.exact_match_keywords.*',
-            'video_segments.segment_audio.segment_audio_transcript',
-            'video_segments.segment_visual.segment_visual_description'
-          ],
-          type: 'best_fields',
-          tie_breaker: 0.3,
-          fuzziness: 'AUTO'
-        }
-      });
+      // Semantic search with weights
+      const fields = [];
+      if (searchQuery.weights.text > 0) {
+        fields.push(
+          `video_title^${3 * searchQuery.weights.text}`,
+          `video_description^${2 * searchQuery.weights.text}`,
+          `video_metadata.exact_match_keywords.text^${searchQuery.weights.text}`
+        );
+      }
+      if (searchQuery.weights.audio > 0) {
+        fields.push(
+          `video_metadata.exact_match_keywords.audio^${2 * searchQuery.weights.audio}`,
+          `video_segments.segment_audio.segment_audio_transcript^${searchQuery.weights.audio}`
+        );
+      }
+      if (searchQuery.weights.image > 0) {
+        fields.push(
+          `video_metadata.exact_match_keywords.visual^${2 * searchQuery.weights.image}`,
+          `video_segments.segment_visual.segment_visual_description^${searchQuery.weights.image}`,
+          `video_segments.segment_visual.segment_visual_ocr_text^${searchQuery.weights.image}`
+        );
+      }
+
+      if (fields.length > 0) {
+        searchBody.query.bool.should.push({
+          multi_match: {
+            query: searchQuery.searchQuery,
+            fields,
+            type: 'best_fields',
+            tie_breaker: 0.3,
+            fuzziness: 'AUTO'
+          }
+        });
+      }
     }
   }
 
+  console.log('Generated search body:', JSON.stringify(searchBody, null, 2));
   return searchBody;
+};
+
+// Update result transformation
+const transformSearchResults = (hits: any[]): VideoResult[] => {
+  return hits.map(hit => ({
+    id: hit._id,
+    title: hit._source.video_title || '',
+    description: hit._source.video_description || '',
+    thumbnailUrl: hit._source.video_thumbnail_url || '',
+    previewUrl: hit._source.video_s3_path || '',
+    duration: hit._source.video_duration || 0,
+    source: hit._source.video_original_path?.includes('youtube.com') ? 'youtube' : 'local',
+    sourceUrl: hit._source.video_original_path || '',
+    uploadDate: hit._source.created_at,
+    format: hit._source.video_type || '',
+    status: hit._source.video_status,
+    size: hit._source.video_size || 0,
+    segments: hit._source.video_segments?.map((segment: any): VideoSegment => ({
+      segment_id: segment.segment_id,
+      video_id: hit._id,
+      start_time: segment.start_time,
+      end_time: segment.end_time,
+      duration: segment.duration,
+      // segment_visual: segment.segment_visual,
+      // segment_audio: segment.segment_audio
+    })) || []
+  }));
 };
 
 export const handler = async (event: APIGatewayProxyEvent, _context: LambdaContext): Promise<LambdaResponse> => {
@@ -128,6 +196,7 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
     }
 
     const searchQuery: SearchQuery = JSON.parse(event.body);
+    console.log('Parsed search query:', JSON.stringify(searchQuery, null, 2));
 
     // const cacheKey = `search:${JSON.stringify(searchQuery)}`;
     // // Try to get cached results
@@ -157,39 +226,17 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
 
     console.log('OpenSearch test result:', testResult);
 
-    // Build and execute the actual search
+    // Build and execute the search
     const searchBody = buildSearchQuery(searchQuery);
-    console.log('Search query:', JSON.stringify(searchBody, null, 2));
-
     const { body } = await openSearch.search({
-      index: 'videos',
+      index: searchQuery.selectedIndex || 'videos',
       body: searchBody
     });
 
+    console.log('Search results:', JSON.stringify(body, null, 2));
+
     // Transform results to match VideoResult interface
-    const results: VideoResult[] = body.hits.hits.map((hit: any) => ({
-      id: hit._id,
-      title: hit._source.video_title || '',
-      description: hit._source.video_description || '',
-      thumbnailUrl: hit._source.video_thumbnail_url || '',
-      previewUrl: hit._source.video_s3_path || '',
-      duration: hit._source.video_duration || 0,
-      source: hit._source.video_original_path?.includes('youtube.com') ? 'youtube' : 'local',
-      sourceUrl: hit._source.video_original_path || '',
-      uploadDate: hit._source.created_at,
-      format: hit._source.video_type || '',
-      status: hit._source.video_status,
-      size: hit._source.video_size || 0,
-      segments: hit._source.video_segments?.map((segment: any): VideoSegment => ({
-        segment_id: segment.segment_id,
-        video_id: hit._id,
-        start_time: segment.start_time,
-        end_time: segment.end_time,
-        duration: segment.duration,
-        segment_visual: segment.segment_visual,
-        segment_audio: segment.segment_audio
-      })) || []
-    }));
+    const results: VideoResult[] = transformSearchResults(body.hits.hits);
 
     // Cache results, skip the redis cache for now
     // await redisClient.set(cacheKey, JSON.stringify(results), {

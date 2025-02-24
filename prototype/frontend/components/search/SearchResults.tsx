@@ -18,10 +18,15 @@ export default function SearchResults({
   const [selectedView, setSelectedView] = useState<'clip' | 'video'>('clip')
 
   const getAverageConfidence = useCallback((segments: VideoResult['segments']): number => {
-    if (segments.length === 0) return 0
-    const sum = segments.reduce((acc, segment) => acc + segment.confidence, 0)
-    return sum / segments.length
-  }, [])
+    if (!segments || segments.length === 0) return 0;
+    const sum = segments.reduce((acc, segment) => {
+      if (!segment.segment_visual?.segment_visual_objects) return acc;
+      return acc + segment.segment_visual.segment_visual_objects.reduce((objectAcc, object) => {
+        return objectAcc + (object.confidence || 0);
+      }, 0);
+    }, 0);
+    return sum / segments.length;
+  }, []);
 
   const formatDuration = useCallback((duration: number): string => {
     const minutes = Math.floor(duration / 60)
@@ -88,22 +93,24 @@ export default function SearchResults({
               </p>
               <div className="mt-4">
                 <div className="relative">
-                  {showConfidenceScores && result.segments.map((segment, index) => {
-                    const centerPercent = ((segment.startTime + (segment.endTime - segment.startTime) / 2) / result.duration) * 100
+                  {showConfidenceScores && result.segments?.map((segment, index) => {
+                    const centerPercent = ((segment.start_time + (segment.end_time - segment.start_time) / 2) / result.duration) * 100;
+                    const confidence = segment.segment_visual?.segment_visual_objects?.[0]?.confidence || 0;
                     return (
                       <div
                         key={`confidence-${index}`}
                         className="absolute -top-6 text-xs font-medium text-gray-600 transform -translate-x-1/2 whitespace-nowrap"
                         style={{ left: `${centerPercent}%` }}
                       >
-                        {Math.round(segment.confidence * 100)}%
+                        {Math.round(confidence * 100)}%
                       </div>
-                    )
+                    );
                   })}
                   <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
-                    {result.segments.map((segment, index) => {
-                      const startPercent = (segment.startTime / result.duration) * 100
-                      const widthPercent = ((segment.endTime - segment.startTime) / result.duration) * 100
+                    {result.segments?.map((segment, index) => {
+                      const startPercent = (segment.start_time / result.duration) * 100;
+                      const widthPercent = ((segment.end_time - segment.start_time) / result.duration) * 100;
+                      const confidence = segment.segment_visual?.segment_visual_objects?.[0]?.confidence || 0;
                       return (
                         <div
                           key={index}
@@ -111,10 +118,10 @@ export default function SearchResults({
                           style={{
                             left: `${startPercent}%`,
                             width: `${widthPercent}%`,
-                            opacity: segment.confidence
+                            opacity: confidence
                           }}
                         />
-                      )
+                      );
                     })}
                   </div>
                 </div>

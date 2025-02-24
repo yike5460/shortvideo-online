@@ -87,13 +87,21 @@ const ALL_MOCK_RESULTS: VideoResult[] = [
 ]
 
 const initialSearchOptions: SearchOptions = {
-  visualSearch: true,
-  audioSearch: true,
+  searchType: 'text',
+  searchQuery: '',
+  exactMatch: false,
+  topK: 20,
+  weights: {
+    text: 1.0,
+    image: 0.0,
+    video: 0.0,
+    audio: 0.0
+  },
   minConfidence: 0.5,
   showConfidenceScores: true,
   selectedIndex: null,
   confidencePreset: 'medium',
-  confidenceAdjustment: 'default',
+  confidenceAdjustment: 'default'
 }
 
 // Add API configuration
@@ -212,7 +220,11 @@ export default function HomePage() {
         // Handle image search
         const formData = new FormData()
         formData.append('image', imageFile)
-        formData.append('indexId', searchOptions.selectedIndex)
+        formData.append('searchOptions', JSON.stringify({
+          ...searchOptions,
+          searchType: 'image',
+          searchQuery: query
+        }))
         
         searchResponse = await fetch(`${API_ENDPOINT}/search/image`, {
           method: 'POST',
@@ -226,15 +238,10 @@ export default function HomePage() {
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({
-            text: query,
-            exact_match: !searchOptions.visualSearch,
-            top_k: 20,
-            weights: {
-              visual: searchOptions.visualSearch ? 1.0 : 0.0,
-              audio: searchOptions.audioSearch ? 1.0 : 0.0,
-              text: 1.0
-            },
-            min_confidence: searchOptions.minConfidence
+            ...searchOptions,
+            searchType: 'text',
+            searchQuery: query,
+            selectedIndex: 'videos' // Use fixed index for now
           })
         })
       }
