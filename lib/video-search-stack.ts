@@ -491,6 +491,7 @@ export class VideoSearchStack extends cdk.Stack {
         { prefix: 'RawVideos/' }
       ]
     }));
+
     return videoSliceFunctionHandler;
   }
 
@@ -514,6 +515,7 @@ export class VideoSearchStack extends cdk.Stack {
       runtime: lambda.Runtime.NODEJS_20_X,
       vpc: this.vpc,
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+      securityGroups: [lambdaSG],
       timeout: cdk.Duration.minutes(15),
       environment: {
         VIDEO_BUCKET: this.videoBucket.bucketName,
@@ -521,13 +523,30 @@ export class VideoSearchStack extends cdk.Stack {
         OPENSEARCH_ENDPOINT: `https://${this.openSearchCollection.attrId}.${this.region}.aoss.amazonaws.com`,
         REDIS_ENDPOINT: this.redisCluster.attrRedisEndpointAddress,
       },
+      bundling: {
+        // Minify the code to reduce bundle size
+        minify: true,
+        // Generate source maps for better debugging
+        sourceMap: true,
+        // Target Node.js 20.x runtime
+        target: 'node20',
+        // Use CommonJS module format for Node.js compatibility
+        format: nodejslambda.OutputFormat.CJS,
+        esbuild: {
+          // Bundle all dependencies into a single file
+          bundle: true,
+          // Specify Node.js as the platform
+          platform: 'node'
+        }
+      }
     };
 
-    const videoSearchHandler = new lambda.Function(this, 'VideoSearchHandler', {
+    const videoSearchHandler = new nodejslambda.NodejsFunction(this, 'VideoSearchHandler', {
       ...commonLambdaProps,
-      code: lambda.Code.fromAsset('src/lambdas/video-search'),
+      entry: 'src/lambdas/video-search/index.ts',
       handler: 'index.handler',
       memorySize: 2048,
+      depsLockFilePath: 'src/lambdas/video-search/package-lock.json'
     });
 
     return videoSearchHandler;
@@ -907,6 +926,7 @@ export class VideoSearchStack extends cdk.Stack {
         'aoss:APIAccessAll',
         'aoss:CreateCollection',
         'aoss:ListCollections',
+        'aoss:GetCollection',
         'aoss:BatchGetCollection',
         'aoss:UpdateCollection',
         'aoss:DeleteCollection',
@@ -929,8 +949,15 @@ export class VideoSearchStack extends cdk.Stack {
     const openSearchReadOnlyPolicy = new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       actions: [
+        // All readonly actions
         'aoss:APIAccessAll',
-        'aoss:DescribeCollection'
+        'aoss:DescribeCollection',
+        'aoss:ListCollections',
+        'aoss:GetCollection',
+        'aoss:BatchGetCollection',
+        'aoss:GetSecurityPolicy',
+        'aoss:GetAccessPolicy',
+        'es:ESHttp*'
       ],
       resources: [
         `arn:aws:aoss:${this.region}:${this.account}:collection/${this.openSearchCollection.attrId}`
@@ -940,7 +967,7 @@ export class VideoSearchStack extends cdk.Stack {
     // Add policies to Lambda roles
     lambdaFunctions.videoUploadFunction.videoUploadHandler.addToRolePolicy(openSearchPolicy);
     lambdaFunctions.videoSliceFunction.addToRolePolicy(openSearchPolicy);
-    lambdaFunctions.videoSearchFunction.addToRolePolicy(openSearchReadOnlyPolicy);
+    lambdaFunctions.videoSearchFunction.addToRolePolicy(openSearchPolicy);
 
     // AI service permissions
     const aiServicePolicy = new iam.PolicyStatement({

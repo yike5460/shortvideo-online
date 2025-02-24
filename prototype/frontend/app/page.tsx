@@ -7,24 +7,8 @@ import SearchBar from '@/components/search/SearchBar'
 import SearchSidebar from '@/components/search/SearchSidebar'
 import SearchResults from '@/components/search/SearchResults'
 import FeedbackBar from '@/components/search/FeedbackBar'
-import { VideoResult, SearchOptions, Index } from '@/types'
+import { VideoResult, SearchOptions } from '@/types'
 import { cn } from '@/lib/utils'
-
-// Mock data for demonstration
-const MOCK_INDEXES: Index[] = [
-  { 
-    id: 'index-1', 
-    name: 'Main Video Index',
-    status: 'ready',
-    videoCount: 1
-  },
-  { 
-    id: 'index-2', 
-    name: 'Training Videos',
-    status: 'ready',
-    videoCount: 1
-  },
-]
 
 // Extended mock data with indexId
 const ALL_MOCK_RESULTS: VideoResult[] = [
@@ -39,23 +23,30 @@ const ALL_MOCK_RESULTS: VideoResult[] = [
     sourceUrl: 'https://www.youtube.com/watch?v=ABC123',
     uploadDate: '2024-01-15',
     format: 'MP4',
-    resolution: '1920x1080',
-    fileSize: '1.2 GB',
-    indexId: 'index-1',
+    status: 'ready',
+    size: 1.2 * 1024 * 1024 * 1024,
     segments: [
       {
-        startTime: 120,
-        endTime: 180,
-        text: 'Explanation of supervised learning algorithms',
-        confidence: 0.95,
+        segment_id: 'seg1',
+        video_id: '1',
+        start_time: 120000,
+        end_time: 180000,
+        duration: 60000,
+        segment_visual: {
+          segment_visual_description: 'Explanation of supervised learning algorithms'
+        }
       },
       {
-        startTime: 360,
-        endTime: 420,
-        text: 'Deep dive into neural networks architecture',
-        confidence: 0.88,
-      },
-    ],
+        segment_id: 'seg2',
+        video_id: '1',
+        start_time: 360000,
+        end_time: 420000,
+        duration: 60000,
+        segment_visual: {
+          segment_visual_description: 'Deep dive into neural networks architecture'
+        }
+      }
+    ]
   },
   {
     id: '2',
@@ -68,24 +59,31 @@ const ALL_MOCK_RESULTS: VideoResult[] = [
     sourceUrl: 'https://www.youtube.com/watch?v=DEF456',
     uploadDate: '2024-01-20',
     format: 'MP4',
-    resolution: '1920x1080',
-    fileSize: '1.0 GB',
-    indexId: 'index-2',
+    status: 'ready',
+    size: 1.0 * 1024 * 1024 * 1024,
     segments: [
       {
-        startTime: 180,
-        endTime: 240,
-        text: 'Advanced neural network architectures',
-        confidence: 0.92,
+        segment_id: 'seg3',
+        video_id: '2',
+        start_time: 180000,
+        end_time: 240000,
+        duration: 60000,
+        segment_visual: {
+          segment_visual_description: 'Advanced neural network architectures'
+        }
       },
       {
-        startTime: 420,
-        endTime: 480,
-        text: 'Training optimization techniques',
-        confidence: 0.89,
-      },
-    ],
-  },
+        segment_id: 'seg4',
+        video_id: '2',
+        start_time: 420000,
+        end_time: 480000,
+        duration: 60000,
+        segment_visual: {
+          segment_visual_description: 'Training optimization techniques'
+        }
+      }
+    ]
+  }
 ]
 
 const initialSearchOptions: SearchOptions = {
@@ -100,6 +98,30 @@ const initialSearchOptions: SearchOptions = {
 
 // Add API configuration
 const API_ENDPOINT = process.env.NEXT_PUBLIC_API_URL
+
+// Add Index type definition
+interface Index {
+  id: string;
+  name: string;
+  status: 'ready' | 'indexing' | 'error';
+  videoCount: number;
+}
+
+// Add mock indexes
+const MOCK_INDEXES: Index[] = [
+  { 
+    id: 'main', 
+    name: 'Main Video Index',
+    status: 'ready',
+    videoCount: 1
+  },
+  { 
+    id: 'training', 
+    name: 'Training Videos',
+    status: 'ready',
+    videoCount: 1
+  },
+]
 
 export default function HomePage() {
   const { state } = useAuth()
@@ -146,17 +168,17 @@ export default function HomePage() {
 
     const filterResults = () => {
       return ALL_MOCK_RESULTS.filter(result => {
-        if (searchOptions.selectedIndex && result.indexId !== searchOptions.selectedIndex) {
-          return false
-        }
-        const query = searchQuery.toLowerCase()
+        const query = searchQuery.toLowerCase();
         return (
           result.title.toLowerCase().includes(query) ||
           result.description.toLowerCase().includes(query) ||
-          result.segments.some(segment => segment.text.toLowerCase().includes(query))
-        )
-      })
-    }
+          (result.segments?.some(segment => 
+            segment.segment_visual?.segment_visual_description?.toLowerCase().includes(query) ||
+            segment.segment_audio?.segment_audio_transcript?.toLowerCase().includes(query)
+          ) ?? false)
+        );
+      });
+    };
 
     setIsLoading(true)
     const searchTimer = setTimeout(() => {
@@ -165,7 +187,7 @@ export default function HomePage() {
     }, 500)
 
     return () => clearTimeout(searchTimer)
-  }, [searchQuery, searchOptions.selectedIndex])
+  }, [searchQuery])
 
   const handleSearch = useCallback(async (query: string, imageFile?: File) => {
     setError('')
@@ -204,19 +226,21 @@ export default function HomePage() {
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({
-            query,
-            indexId: searchOptions.selectedIndex,
-            options: {
-              visualSearch: searchOptions.visualSearch,
-              audioSearch: searchOptions.audioSearch,
-              minConfidence: searchOptions.minConfidence
-            }
+            text: query,
+            exact_match: !searchOptions.visualSearch,
+            top_k: 20,
+            weights: {
+              visual: searchOptions.visualSearch ? 1.0 : 0.0,
+              audio: searchOptions.audioSearch ? 1.0 : 0.0,
+              text: 1.0
+            },
+            min_confidence: searchOptions.minConfidence
           })
         })
       }
 
       if (!searchResponse.ok) {
-        throw new Error('Search failed')
+        throw new Error(`Search failed: ${searchResponse.statusText}`)
       }
 
       const results = await searchResponse.json()
@@ -228,7 +252,7 @@ export default function HomePage() {
     } finally {
       setIsLoading(false)
     }
-  }, [searchOptions])
+  }, [searchOptions, API_ENDPOINT])
 
   const handleFeedback = useCallback(async (isHelpful: boolean) => {
     try {

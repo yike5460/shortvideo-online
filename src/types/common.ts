@@ -92,6 +92,19 @@ export interface SearchMetadata {
   };
 }
 
+export type ConfidencePreset = 'low' | 'medium' | 'high'
+export type ConfidenceAdjustment = 'less' | 'default' | 'more'
+
+export interface SearchOptions {
+  visualSearch: boolean
+  audioSearch: boolean
+  minConfidence: number
+  showConfidenceScores: boolean
+  selectedIndex: string | null
+  confidencePreset: ConfidencePreset
+  confidenceAdjustment: ConfidenceAdjustment
+}
+
 // Processing job types
 export interface VideoProcessingJob {
   videoId: string;
