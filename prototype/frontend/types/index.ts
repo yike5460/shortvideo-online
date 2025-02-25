@@ -73,6 +73,7 @@ export interface VideoResult {
   size: number;
   metadata?: SearchMetadata;
   segments?: VideoSegment[];
+  searchConfidence?: number;
 }
 
 // Quick search metadata

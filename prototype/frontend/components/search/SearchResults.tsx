@@ -18,6 +18,7 @@ export default function SearchResults({
   const [selectedView, setSelectedView] = useState<'clip' | 'video'>('clip')
 
   const getAverageConfidence = useCallback((segments: VideoResult['segments']): number => {
+    console.log('segments', segments)
     if (!segments || segments.length === 0) return 0;
     const sum = segments.reduce((acc, segment) => {
       if (!segment.segment_visual?.segment_visual_objects) return acc;
@@ -46,7 +47,7 @@ export default function SearchResults({
             />
             {showConfidenceScores && (
               <div className="absolute top-2 right-2 px-2 py-1 bg-black/50 rounded text-white text-sm">
-                {Math.round(getAverageConfidence(result.segments) * 100)}% Confidence
+                {Math.round((result.searchConfidence || 0) * 100)}% Match
               </div>
             )}
           </div>
@@ -65,7 +66,7 @@ export default function SearchResults({
         </div>
       ))}
     </div>
-  ), [results, showConfidenceScores, getAverageConfidence, formatDuration])
+  ), [results, showConfidenceScores, formatDuration])
 
   const renderTimelineView = useCallback(() => (
     <div className="space-y-6">
@@ -80,7 +81,7 @@ export default function SearchResults({
               />
               {showConfidenceScores && (
                 <div className="absolute top-2 right-2 px-2 py-1 bg-black/50 rounded text-white text-sm">
-                  {Math.round(getAverageConfidence(result.segments) * 100)}% Avg. Confidence
+                  {Math.round((result.searchConfidence || 0) * 100)}% Match
                 </div>
               )}
             </div>

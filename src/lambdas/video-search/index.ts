@@ -91,9 +91,23 @@ const buildSearchQuery = (searchQuery: SearchQuery): OpenSearchQuery => {
     query: {
       bool: {
         must: [
+          // Filter for valid statuses
           {
-            match_all: {}
+            bool: {
+              should: [
+                { term: { video_status: 'ready' } },
+                { term: { video_status: 'ready_for_face' } },
+                { term: { video_status: 'ready_for_object' } },
+                { term: { video_status: 'ready_for_shots' } },
+                { term: { video_status: 'ready_for_video_embed' } },
+                { term: { video_status: 'ready_for_audio_embed' } }
+              ],
+              minimum_should_match: 1
+            }
           }
+        ],
+        must_not: [
+          { term: { video_status: 'deleted' } }
         ],
         should: [
           // Simple match on title with high boost
@@ -124,7 +138,7 @@ const buildSearchQuery = (searchQuery: SearchQuery): OpenSearchQuery => {
             }
           }
         ],
-        minimum_should_match: 0 // Return all documents if no match
+        minimum_should_match: 1 // Require at least one match
       }
     }
   };
@@ -147,8 +161,11 @@ const getTestQuery = () => ({
   }
 });
 
-// Optimize result transformation to include only essential data
+// Update the transform function to normalize OpenSearch confidence scores, such score is relative and per index and per query, calculated using TF-IDF by default
 const transformSearchResults = (hits: any[]): VideoResult[] => {
+  // Find the max score for normalization
+  const maxScore = Math.max(...hits.map(hit => hit._score || 0));
+  
   return hits.map(hit => {
     // Extract only the essential segments data
     const segments = hit._source.video_segments?.map((segment: any): VideoSegment => ({
@@ -161,6 +178,9 @@ const transformSearchResults = (hits: any[]): VideoResult[] => {
 
     // Limit segments to 5 per video to reduce payload size
     const limitedSegments = segments.slice(0, 5);
+    
+    // Normalize the score to be between 0 and 1
+    const normalizedScore = maxScore > 0 ? (hit._score || 0) / maxScore : 0;
     
     return {
       id: hit._id,
@@ -175,7 +195,8 @@ const transformSearchResults = (hits: any[]): VideoResult[] => {
       format: hit._source.video_type || '',
       status: hit._source.video_status,
       size: hit._source.video_size || 0,
-      segments: limitedSegments
+      segments: limitedSegments,
+      searchConfidence: normalizedScore // Use normalized score
     };
   });
 };

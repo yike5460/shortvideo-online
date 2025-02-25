@@ -117,6 +117,14 @@ export interface VideoProcessingJob {
   };
 }
 
+// Add OpenSearch result type with confidence
+export interface OpenSearchHit {
+  _id: string;
+  _score: number; // This is the OpenSearch confidence score
+  _source: any;
+}
+
+// Update VideoResult to include search confidence
 export interface VideoResult {
   id: string;
   title: string;
@@ -130,5 +138,6 @@ export interface VideoResult {
   format: string;
   status: VideoStatus;
   size: number;
-  segments?: VideoSegment[];
+  segments: VideoSegment[];
+  searchConfidence?: number; // Add OpenSearch confidence score
 }

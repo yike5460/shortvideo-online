@@ -13,8 +13,8 @@ export default function VideoSidebar({ video }: VideoSidebarProps) {
 
   const handleSegmentSelect = (segment: VideoSegment) => {
     setSelectedSegments((prev) =>
-      prev.some((s) => s.startTime === segment.startTime)
-        ? prev.filter((s) => s.startTime !== segment.startTime)
+      prev.some((s) => s.start_time === segment.start_time)
+        ? prev.filter((s) => s.start_time !== segment.start_time)
         : [...prev, segment]
     )
   }
@@ -46,6 +46,61 @@ export default function VideoSidebar({ video }: VideoSidebarProps) {
     }
   }
 
+  const formatResolution = (video: VideoResult) => {
+    // Use size property instead of resolution
+    return video.format || 'Unknown';
+  };
+
+  const formatFileSize = (video: VideoResult) => {
+    // Use size property instead of fileSize
+    if (!video.size) return 'Unknown';
+    
+    const sizeInMB = video.size / (1024 * 1024);
+    if (sizeInMB < 1) {
+      return `${Math.round(video.size / 1024)} KB`;
+    } else if (sizeInMB < 1024) {
+      return `${Math.round(sizeInMB * 10) / 10} MB`;
+    } else {
+      return `${Math.round(sizeInMB / 102.4) / 10} GB`;
+    }
+  };
+
+  const renderSegments = (video: VideoResult) => {
+    if (!video.segments || video.segments.length === 0) {
+      return (
+        <div className="text-gray-500 text-sm italic">
+          No segments available
+        </div>
+      );
+    }
+    
+    return (
+      <div className="space-y-2">
+        {video.segments.map((segment, index) => (
+          <div 
+            key={segment.segment_id || index} 
+            className="p-2 bg-gray-50 rounded border border-gray-100 hover:bg-gray-100 cursor-pointer"
+            onClick={() => handleSegmentSelect(segment)}
+          >
+            <div className="flex justify-between items-center">
+              <span className="text-sm font-medium">
+                {Math.floor(segment.start_time / 60)}:{String(segment.start_time % 60).padStart(2, '0')} - {Math.floor(segment.end_time / 60)}:{String(segment.end_time % 60).padStart(2, '0')}
+              </span>
+              <span className="text-xs text-gray-500">
+                {Math.floor(segment.duration / 60)}:{String(segment.duration % 60).padStart(2, '0')}
+              </span>
+            </div>
+            {segment.segment_visual?.segment_visual_description && (
+              <p className="text-xs text-gray-600 mt-1 line-clamp-2">
+                {segment.segment_visual.segment_visual_description}
+              </p>
+            )}
+          </div>
+        ))}
+      </div>
+    );
+  };
+
   return (
     <div className="bg-white rounded-lg shadow-sm p-6 space-y-6">
       {/* Video Metadata */}
@@ -61,15 +116,15 @@ export default function VideoSidebar({ video }: VideoSidebarProps) {
           </div>
           <div>
             <span className="text-gray-500">Format:</span>
-            <span className="ml-2 text-gray-900">{video.format}</span>
+            <span className="ml-2 text-gray-900">{formatResolution(video)}</span>
           </div>
           <div>
             <span className="text-gray-500">Resolution:</span>
-            <span className="ml-2 text-gray-900">{video.resolution}</span>
+            <span className="ml-2 text-gray-900">{formatResolution(video)}</span>
           </div>
           <div>
             <span className="text-gray-500">Size:</span>
-            <span className="ml-2 text-gray-900">{video.fileSize}</span>
+            <span className="ml-2 text-gray-900">{formatFileSize(video)}</span>
           </div>
         </div>
       </div>
@@ -78,7 +133,7 @@ export default function VideoSidebar({ video }: VideoSidebarProps) {
       {playingSegment && (
         <div className="aspect-video rounded-lg overflow-hidden bg-black">
           <ReactPlayer
-            url={`${video.sourceUrl}#t=${playingSegment.startTime},${playingSegment.endTime}`}
+            url={`${video.sourceUrl}#t=${playingSegment.start_time},${playingSegment.end_time}`}
             width="100%"
             height="100%"
             controls
@@ -102,38 +157,7 @@ export default function VideoSidebar({ video }: VideoSidebarProps) {
           )}
         </div>
         <div className="space-y-3 max-h-[400px] overflow-y-auto">
-          {video.segments.map((segment) => (
-            <div
-              key={segment.startTime}
-              className="flex items-center gap-4 p-3 rounded-lg hover:bg-gray-50"
-            >
-              <input
-                type="checkbox"
-                checked={selectedSegments.some((s) => s.startTime === segment.startTime)}
-                onChange={() => handleSegmentSelect(segment)}
-                className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-              />
-              <button
-                onClick={() => setPlayingSegment(segment)}
-                className="flex-1 flex items-center gap-3 text-left"
-              >
-                <PlayIcon className="w-5 h-5 text-gray-400" />
-                <div className="flex-1">
-                  <p className="text-sm text-gray-900 line-clamp-2">{segment.text}</p>
-                  <div className="flex items-center gap-2 mt-1">
-                    <p className="text-xs text-gray-500">
-                      {Math.floor(segment.startTime / 60)}:{String(segment.startTime % 60).padStart(2, '0')} -{' '}
-                      {Math.floor(segment.endTime / 60)}:{String(segment.endTime % 60).padStart(2, '0')}
-                    </p>
-                    <span className="text-xs text-gray-400">•</span>
-                    <p className="text-xs text-gray-500">
-                      Confidence: {Math.round(segment.confidence * 100)}%
-                    </p>
-                  </div>
-                </div>
-              </button>
-            </div>
-          ))}
+          {renderSegments(video)}
         </div>
       </div>
     </div>
