@@ -19,6 +19,7 @@ import { Construct } from 'constructs';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import * as nodejslambda from 'aws-cdk-lib/aws-lambda-nodejs';
 import { S3EventSource, SnsEventSource, SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
+import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 
 interface VideoSearchStackProps extends cdk.StackProps {
   maxAzs: number;
@@ -34,6 +35,8 @@ export class VideoSearchStack extends cdk.Stack {
   private readonly redisCluster: elasticache.CfnCacheCluster;
   private readonly cluster: ecs.Cluster;
   private readonly openSearchCollection: opensearchserverless.CfnCollection;
+  private readonly indexesTable: dynamodb.Table;
+  private readonly dynamodbEndpoint: ec2.InterfaceVpcEndpoint;
 
   constructor(scope: Construct, id: string, props: VideoSearchStackProps) {
     super(scope, id, props);
@@ -41,8 +44,16 @@ export class VideoSearchStack extends cdk.Stack {
     const deploymentEnv = props.deploymentEnvironment || 'dev';
 
     // Initialize core infrastructure in correct order
-    this.vpc = this.createVpcInfrastructure();
+    const { vpc, dynamodbEndpoint } = this.createVpcInfrastructure();
+    this.vpc = vpc;
+    this.dynamodbEndpoint = dynamodbEndpoint;
     this.videoBucket = this.createStorageInfrastructure(deploymentEnv);
+    this.indexesTable = new dynamodb.Table(this, 'IndexesTable', {
+      partitionKey: { name: 'indexId', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
     // this.videoProcessingQueue = this.createQueueInfrastructure();
     const { topic, rekognitionRole } = this.createRekognitionTopic();
     this.rekognitionTopic = topic;
@@ -57,7 +68,8 @@ export class VideoSearchStack extends cdk.Stack {
     const lambdaFunctions = {
       videoUploadFunction: this.createVideoUploadFunction(),
       videoSliceFunction: this.createVideoSliceFunction(),
-      videoSearchFunction: this.createVideoSearchFunction()
+      videoSearchFunction: this.createVideoSearchFunction(),
+      indexCrudFunction: this.crudIndexFunction()
     };
 
     // Update OpenSearch access policies with Lambda roles
@@ -70,13 +82,13 @@ export class VideoSearchStack extends cdk.Stack {
     const api = this.createApiGateway(lambdaFunctions);
 
     // Set up permissions
-    this.setupPermissions(lambdaFunctions, videoEmbeddingService, this.rekognitionTopic);
+    this.setupPermissions(lambdaFunctions, videoEmbeddingService, this.rekognitionTopic, this.indexesTable);
 
     // Create stack outputs
     this.createStackOutputs(api);
   }
 
-  private createVpcInfrastructure(): ec2.Vpc {
+  private createVpcInfrastructure(): { vpc: ec2.Vpc; dynamodbEndpoint: ec2.InterfaceVpcEndpoint } {
     const vpc = new ec2.Vpc(this, 'VideoSearchVPC', {
       maxAzs: 2,
       natGateways: 1,
@@ -123,7 +135,13 @@ export class VideoSearchStack extends cdk.Stack {
       });
     });
 
-    return vpc;
+    // Add DynamoDB endpoint since Private DNS can't be enabled because the service com.amazonaws.<region>.dynamodb does not provide a privateDNS name
+    const dynamodbEndpoint = vpc.addInterfaceEndpoint('DynamoDBEndpoint', {
+      service: ec2.InterfaceVpcEndpointAwsService.DYNAMODB,
+      privateDnsEnabled: false,
+    });
+
+    return { vpc, dynamodbEndpoint };
   }
 
   // Storage infrastructure can be critical in cost and operational complexity, configure all the parameters explicitly
@@ -354,7 +372,7 @@ export class VideoSearchStack extends cdk.Stack {
     });
   }
 
-  private createVideoUploadFunction() {
+  private createVideoUploadFunction(): { videoUploadHandler: lambda.Function; youtubeUploadHandler: lambda.Function } {
     // Create the Lambda security group with proper egress and ingress rules
     const lambdaSG = new ec2.SecurityGroup(this, 'LambdaSecurityGroupVideoUpload', {
       vpc: this.vpc,
@@ -495,7 +513,7 @@ export class VideoSearchStack extends cdk.Stack {
     return videoSliceFunctionHandler;
   }
 
-  private createVideoSearchFunction() {
+  private createVideoSearchFunction(): lambda.Function {
     // Create the Lambda security group with proper egress and ingress rules
     const lambdaSG = new ec2.SecurityGroup(this, 'LambdaSecurityGroupVideoSearch', {
       vpc: this.vpc,
@@ -511,6 +529,18 @@ export class VideoSearchStack extends cdk.Stack {
     lambdaSG.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(443), 'Allow HTTPS inbound');
     lambdaSG.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(80), 'Allow HTTP inbound');
 
+    // Extract just the DNS name part by splitting at ':' and selecting the second part, to remove DNS zone ID prefix 
+    const dynamoDbEndpointDns = cdk.Fn.select(
+      1, 
+      cdk.Fn.split(
+        ':', 
+        cdk.Fn.select(0, this.dynamodbEndpoint.vpcEndpointDnsEntries)
+      )
+    );
+
+    // Assemble to valid endpoint URL
+    const dynamoDbEndpointDnsHttp = `https://${dynamoDbEndpointDns}`;
+
     const commonLambdaProps = {
       runtime: lambda.Runtime.NODEJS_20_X,
       vpc: this.vpc,
@@ -522,6 +552,9 @@ export class VideoSearchStack extends cdk.Stack {
         // QUEUE_URL: this.videoProcessingQueue.queueUrl,
         OPENSEARCH_ENDPOINT: `https://${this.openSearchCollection.attrId}.${this.region}.aoss.amazonaws.com`,
         REDIS_ENDPOINT: this.redisCluster.attrRedisEndpointAddress,
+        INDEXES_TABLE: this.indexesTable.tableName,
+        // Explicitly specify the DynamoDB endpoint since Private DNS can't be enabled because the service com.amazonaws.<region>.dynamodb does not provide a privateDNS name. Use Fn.select to properly extract the first DNS entry from the list
+        INDEXES_TABLE_DYNAMODB_DNS_NAME: dynamoDbEndpointDnsHttp
       },
       bundling: {
         // Minify the code to reduce bundle size
@@ -550,6 +583,57 @@ export class VideoSearchStack extends cdk.Stack {
     });
 
     return videoSearchHandler;
+  }
+
+  private crudIndexFunction() {
+    // Create the Lambda security group with proper egress and ingress rules
+    const lambdaSG = new ec2.SecurityGroup(this, 'LambdaSecurityGroupCreateIndex', {
+      vpc: this.vpc,
+      description: 'Security group for Lambdas accessing OpenSearch via VPC endpoint',
+      allowAllOutbound: true,
+    });
+
+    // Allow outbound connections to HTTP and HTTPS (already needed)
+    lambdaSG.addEgressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(443), 'Allow HTTPS outbound');
+    lambdaSG.addEgressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(80), 'Allow HTTP outbound');
+
+    // Now add ingress rules to allow incoming traffic on HTTP and HTTPS (needed for VPC endpoint access)
+    lambdaSG.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(443), 'Allow HTTPS inbound');
+    lambdaSG.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(80), 'Allow HTTP inbound');
+
+    const commonLambdaProps = {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      vpc: this.vpc,
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+      securityGroups: [lambdaSG],
+      timeout: cdk.Duration.minutes(15),
+      environment: {
+        VIDEO_BUCKET: this.videoBucket.bucketName,
+        // QUEUE_URL: this.videoProcessingQueue.queueUrl,
+        OPENSEARCH_ENDPOINT: `https://${this.openSearchCollection.attrId}.${this.region}.aoss.amazonaws.com`,
+        DYNAMODB_TABLE_NAME: this.indexesTable.tableName,
+      },
+      bundling: {
+        minify: true,
+        sourceMap: true,
+        target: 'node20',
+        format: nodejslambda.OutputFormat.CJS,
+        esbuild: {
+          bundle: true,
+          platform: 'node'
+        }
+      }
+    };
+
+    const crudIndexHandler = new nodejslambda.NodejsFunction(this, 'crudIndexHandler', {
+      ...commonLambdaProps,
+      entry: 'src/lambdas/index-ops/index.ts',
+      handler: 'index.handler',
+      memorySize: 2048,
+      depsLockFilePath: 'src/lambdas/index-ops/package-lock.json'
+    });
+
+    return crudIndexHandler;
   }
 
   private createTextEmbeddingService(): ecs.FargateService {
@@ -759,6 +843,7 @@ export class VideoSearchStack extends cdk.Stack {
     videoUploadFunction: { videoUploadHandler: lambda.Function; youtubeUploadHandler: lambda.Function };
     videoSliceFunction: lambda.Function;
     videoSearchFunction: lambda.Function;
+    indexCrudFunction: lambda.Function;
   }): apigateway.RestApi {
     // Create API Gateway
     const api = new apigateway.RestApi(this, 'VideoSearchApi', {
@@ -784,6 +869,7 @@ export class VideoSearchStack extends cdk.Stack {
     });
 
     // API Gateway Path:
+    // Fixed index "videos"
     // /videos/upload                         POST - Start upload
     // /videos/upload/{videoId}/complete      POST - Complete upload
     // /videos/youtube                        POST - YouTube upload
@@ -791,6 +877,13 @@ export class VideoSearchStack extends cdk.Stack {
     // /videos/{videoId} or /videos/          DELETE - Delete specific video or all videos
     // /videos/status/{videoId}               GET  - Check status, uploading, slicing, indexing, completed, failed
     // /videos/search                         POST - Search videos
+
+    // Dynamic index management
+
+    // /indexes/{indexId}                     GET - Get index details or delete index, including query status, search options, upload status
+    // /indexes/{indexId}                     POST - Create index and upload videos to specific index
+    // /indexes/{indexId}                     DELETE - Delete index
+
     const videos = api.root.addResource('videos');
     
     const upload = videos.addResource('upload');
@@ -800,6 +893,9 @@ export class VideoSearchStack extends cdk.Stack {
     const search = api.root.addResource('search');
     const status = videos.addResource('status');
     const videoStatus = status.addResource('{videoId}');
+
+    const indexes = api.root.addResource('indexes');
+    const index = indexes.addResource('{indexId}');
 
     // Add Lambda integrations with CORS
     const addMethodWithCors = (resource: apigateway.Resource, httpMethod: string, lambdaFn: lambda.Function) => {
@@ -893,6 +989,11 @@ export class VideoSearchStack extends cdk.Stack {
 
     addMethodWithCors(search, 'POST', lambdaFunctions.videoSearchFunction);
 
+    addMethodWithCors(indexes, 'GET', lambdaFunctions.indexCrudFunction);
+    addMethodWithCors(index, 'GET', lambdaFunctions.indexCrudFunction);
+    addMethodWithCors(index, 'DELETE', lambdaFunctions.indexCrudFunction);
+    addMethodWithCors(index, 'POST', lambdaFunctions.indexCrudFunction);
+
     return api;
   }
 
@@ -901,17 +1002,22 @@ export class VideoSearchStack extends cdk.Stack {
       videoUploadFunction: { videoUploadHandler: lambda.Function; youtubeUploadHandler: lambda.Function };
       videoSliceFunction: lambda.Function;
       videoSearchFunction: lambda.Function;
+      indexCrudFunction: lambda.Function;
     },
     // textEmbeddingService: ecs.FargateService,
     videoEmbeddingService: ecs.FargateService,
     // queue: sqs.Queue
-    snsTopic: sns.Topic
+    snsTopic: sns.Topic,
+    indexesTable: dynamodb.Table
   ) {
     // S3 permissions
     this.videoBucket.grantReadWrite(lambdaFunctions.videoUploadFunction.videoUploadHandler);
     this.videoBucket.grantRead(lambdaFunctions.videoSearchFunction);
     this.videoBucket.grantReadWrite(lambdaFunctions.videoSliceFunction);
-
+    this.videoBucket.grantReadWrite(lambdaFunctions.indexCrudFunction);
+    // Grant permissions to embedding services to access S3
+    this.videoBucket.grantRead(videoEmbeddingService.taskDefinition.taskRole);
+ 
     // SQS permissions
     // queue.grantSendMessages(lambdaFunctions.videoUploadFunction.videoUploadHandler);
     // queue.grantConsumeMessages(lambdaFunctions.videoSliceFunction);
@@ -968,29 +1074,13 @@ export class VideoSearchStack extends cdk.Stack {
     lambdaFunctions.videoUploadFunction.videoUploadHandler.addToRolePolicy(openSearchPolicy);
     lambdaFunctions.videoSliceFunction.addToRolePolicy(openSearchPolicy);
     lambdaFunctions.videoSearchFunction.addToRolePolicy(openSearchPolicy);
-
-    // AI service permissions
-    const aiServicePolicy = new iam.PolicyStatement({
-      effect: iam.Effect.ALLOW,
-      actions: [
-        'rekognition:StartSegmentDetection',
-        'rekognition:GetSegmentDetection',
-        'rekognition:StartLabelDetection',
-        'rekognition:GetLabelDetection',
-        'rekognition:StartFaceDetection',
-        'rekognition:GetFaceDetection'
-      ],
-      resources: ['*']
-    });
-
-    lambdaFunctions.videoSliceFunction.addToRolePolicy(aiServicePolicy);
+    lambdaFunctions.indexCrudFunction.addToRolePolicy(openSearchPolicy);
 
     // Grant permissions to embedding services to access OpenSearch
     // textEmbeddingService.taskDefinition.addToTaskRolePolicy(openSearchPolicy);
     videoEmbeddingService.taskDefinition.addToTaskRolePolicy(openSearchPolicy);
 
-    // Grant permissions to embedding services to access S3
-    this.videoBucket.grantRead(videoEmbeddingService.taskDefinition.taskRole);
+
 
     // Grant Rekognition permissions to video slice function
     const rekognitionPolicy = new iam.PolicyStatement({
@@ -1021,11 +1111,14 @@ export class VideoSearchStack extends cdk.Stack {
     lambdaFunctions.videoSliceFunction.addToRolePolicy(rekognitionPolicy);
     lambdaFunctions.videoSliceFunction.addToRolePolicy(passRolePolicy);
 
-    // Grant S3 read access to video slice function
-    this.videoBucket.grantRead(lambdaFunctions.videoSliceFunction);
 
     // Grant SQS permissions
     // queue.grantConsumeMessages(lambdaFunctions.videoSliceFunction);
+
+    // Grant DynamoDB permissions
+    indexesTable.grantReadWriteData(lambdaFunctions.videoSearchFunction);
+    indexesTable.grantReadWriteData(lambdaFunctions.indexCrudFunction);
+    indexesTable.grantReadData(lambdaFunctions.videoSearchFunction);
   }
 
   private createMonitoringInfrastructure(

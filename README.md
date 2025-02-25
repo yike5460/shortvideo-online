@@ -120,6 +120,7 @@ sequenceDiagram
 3. **API Endpoints**
 Overall API Path:
 ```http
+    # Fixed index "videos"
    /videos/upload                         POST - Start upload
    /videos/upload/{videoId}/complete      POST - Complete upload
    /videos/youtube                        POST - YouTube upload
@@ -127,6 +128,12 @@ Overall API Path:
    /videos/{videoId} or /videos/          DELETE - Delete specific video or all videos
    /videos/status/{videoId}               GET  - Check status, uploading, slicing, indexing, completed, failed
    /videos/search                         POST - Search videos
+
+    # Dynamic index management
+   /indexes                               POST - Create index
+   /indexes/{indexId}                     GET - Get index details or delete index, including query status, search options, upload status
+   /indexes/{indexId}                     POST - Upload videos to specific index
+   /indexes/{indexId}                     DELETE - Delete index
 ```
 
 4. **Implementation Details**

@@ -6,6 +6,8 @@ import { defaultProvider } from '@aws-sdk/credential-provider-node';
 import { RedisClientType, createClient } from 'redis';
 import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
 import { AwsSigv4Signer } from '@opensearch-project/opensearch/aws';
+import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import { DynamoDBDocumentClient, GetCommand } from '@aws-sdk/lib-dynamodb';
 
 // Update search query interface to match frontend
 interface SearchQuery {
@@ -53,12 +55,39 @@ const openSearch = new Client({
 
 const bedrock = new BedrockRuntimeClient({});
 let redisClient: RedisClientType | null = null;
+const dynamoClient = new DynamoDBClient({endpoint: process.env.INDEXES_TABLE_DYNAMODB_DNS_NAME});
+const docClient = DynamoDBDocumentClient.from(dynamoClient);
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token',
   'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
   'Access-Control-Allow-Credentials': 'true'
+};
+
+// Add this function to get the OpenSearch index name from the index ID
+const getOpenSearchIndexName = async (indexId: string): Promise<string> => {
+  // If no index ID is provided, use the default 'videos' index
+  if (!indexId) {
+    return 'videos';
+  }
+  
+  try {
+    const result = await docClient.send(new GetCommand({
+      TableName: process.env.INDEXES_TABLE,
+      Key: { indexId }
+    }));
+    
+    if (!result.Item) {
+      console.warn(`Index ${indexId} not found, falling back to default index`);
+      return 'videos';
+    }
+    
+    return result.Item.openSearchIndexName;
+  } catch (error) {
+    console.error('Error getting index details:', error);
+    return 'videos'; // Fallback to default index
+  }
 };
 
 // Update the search query builder
@@ -148,8 +177,8 @@ const buildSearchQuery = (searchQuery: SearchQuery): OpenSearchQuery => {
 };
 
 // Optimize the test query to return less data
-const getTestQuery = () => ({
-  index: 'videos',
+const getTestQuery = (indexName: string) => ({
+  index: indexName,
   body: {
     size: 3, // Limit to 3 results for testing
     query: { match_all: {} },
@@ -201,8 +230,10 @@ const transformSearchResults = (hits: any[]): VideoResult[] => {
   });
 };
 
+// Update the handler to use the dynamic index
 export const handler = async (event: APIGatewayProxyEvent, _context: LambdaContext): Promise<LambdaResponse> => {
   console.log('Received event for video search:', JSON.stringify(event, null, 2));
+  console.log('INDEXES_TABLE_DYNAMODB_DNS_NAME:', process.env.INDEXES_TABLE_DYNAMODB_DNS_NAME);
   try {
     if (!event.body) {
       return {
@@ -232,15 +263,17 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
     //   };
     // }
 
+    const openSearchIndexName = await getOpenSearchIndexName(searchQuery.selectedIndex || '')
+    
     // Test the OpenSearch connection with minimal data
-    const testQuery = getTestQuery();
+    const testQuery = getTestQuery(openSearchIndexName);
     console.log('Test query:', JSON.stringify(testQuery, null, 2));
     
     const { body: testResult } = await openSearch.search(testQuery);
     
     // Log only essential test data
     if (testResult.hits?.hits) {
-      console.log(`Found ${testResult.hits.total.value} documents`);
+      console.log(`Found ${testResult.hits.total.value} documents in index ${openSearchIndexName}`);
       console.log('Sample documents:', testResult.hits.hits.slice(0, 3).map((hit: any) => ({
         id: hit._id,
         title: hit._source.video_title,
@@ -251,7 +284,7 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
     // Build and execute the search with limited results
     const searchBody = buildSearchQuery(searchQuery);
     const { body } = await openSearch.search({
-      index: searchQuery.selectedIndex || 'videos',
+      index: openSearchIndexName,
       body: searchBody
     });
 
