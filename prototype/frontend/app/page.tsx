@@ -90,7 +90,7 @@ const initialSearchOptions: SearchOptions = {
   searchType: 'text',
   searchQuery: '',
   exactMatch: false,
-  topK: 20,
+  topK: 3,
   weights: {
     text: 1.0,
     image: 0.0,

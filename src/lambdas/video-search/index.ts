@@ -65,8 +65,11 @@ const corsHeaders = {
 const buildSearchQuery = (searchQuery: SearchQuery): OpenSearchQuery => {
   console.log('Building search query:', JSON.stringify(searchQuery, null, 2));
 
+  const searchTerm = searchQuery.searchQuery.trim();
+  
+  // Simple query that should work with most OpenSearch configurations
   const searchBody: OpenSearchQuery = {
-    size: searchQuery.topK || 20,
+    size: searchQuery.topK || 3, // Limit to 3 results by default
     _source: [
       'video_id',
       'video_title',
@@ -79,109 +82,102 @@ const buildSearchQuery = (searchQuery: SearchQuery): OpenSearchQuery => {
       'video_type',
       'video_status',
       'video_size',
-      'video_segments'
+      // Only include essential segment data
+      'video_segments.segment_id',
+      'video_segments.start_time',
+      'video_segments.end_time',
+      'video_segments.duration'
     ],
     query: {
       bool: {
         must: [
-          { term: { video_status: 'ready' as VideoStatus } }
+          {
+            match_all: {}
+          }
         ],
-        must_not: [
-          { term: { video_status: 'deleted' as VideoStatus } }
+        should: [
+          // Simple match on title with high boost
+          {
+            match: {
+              "video_title": {
+                query: searchTerm,
+                boost: 3.0
+              }
+            }
+          },
+          // Match on description with lower boost
+          {
+            match: {
+              "video_description": {
+                query: searchTerm,
+                boost: 1.0
+              }
+            }
+          },
+          // Prefix match for partial matches
+          {
+            prefix: {
+              "video_title": {
+                value: searchTerm.toLowerCase(),
+                boost: 2.0
+              }
+            }
+          }
         ],
-        should: [],
-        minimum_should_match: 1
+        minimum_should_match: 0 // Return all documents if no match
       }
     }
   };
-
-  // Only add search conditions if we have a query
-  if (searchQuery.searchQuery && searchQuery.searchQuery.trim()) {
-    if (searchQuery.exactMatch) {
-      // Exact match query
-      searchBody.query.bool.should.push({
-        multi_match: {
-          query: searchQuery.searchQuery,
-          fields: [
-            'video_title^3',
-            'video_description^2',
-            'video_metadata.exact_match_keywords.visual^2',
-            'video_metadata.exact_match_keywords.audio^2',
-            'video_metadata.exact_match_keywords.text^1',
-            'video_segments.segment_audio.segment_audio_transcript^1',
-            'video_segments.segment_visual.segment_visual_description^1'
-          ],
-          type: 'phrase',
-          tie_breaker: 0.3
-        }
-      });
-    } else {
-      // Semantic search with weights
-      const fields = [];
-      if (searchQuery.weights.text > 0) {
-        fields.push(
-          `video_title^${3 * searchQuery.weights.text}`,
-          `video_description^${2 * searchQuery.weights.text}`,
-          `video_metadata.exact_match_keywords.text^${searchQuery.weights.text}`
-        );
-      }
-      if (searchQuery.weights.audio > 0) {
-        fields.push(
-          `video_metadata.exact_match_keywords.audio^${2 * searchQuery.weights.audio}`,
-          `video_segments.segment_audio.segment_audio_transcript^${searchQuery.weights.audio}`
-        );
-      }
-      if (searchQuery.weights.image > 0) {
-        fields.push(
-          `video_metadata.exact_match_keywords.visual^${2 * searchQuery.weights.image}`,
-          `video_segments.segment_visual.segment_visual_description^${searchQuery.weights.image}`,
-          `video_segments.segment_visual.segment_visual_ocr_text^${searchQuery.weights.image}`
-        );
-      }
-
-      if (fields.length > 0) {
-        searchBody.query.bool.should.push({
-          multi_match: {
-            query: searchQuery.searchQuery,
-            fields,
-            type: 'best_fields',
-            tie_breaker: 0.3,
-            fuzziness: 'AUTO'
-          }
-        });
-      }
-    }
-  }
 
   console.log('Generated search body:', JSON.stringify(searchBody, null, 2));
   return searchBody;
 };
 
-// Update result transformation
+// Optimize the test query to return less data
+const getTestQuery = () => ({
+  index: 'videos',
+  body: {
+    size: 3, // Limit to 3 results for testing
+    query: { match_all: {} },
+    _source: [
+      'video_id',
+      'video_title',
+      'video_status'
+    ]
+  }
+});
+
+// Optimize result transformation to include only essential data
 const transformSearchResults = (hits: any[]): VideoResult[] => {
-  return hits.map(hit => ({
-    id: hit._id,
-    title: hit._source.video_title || '',
-    description: hit._source.video_description || '',
-    thumbnailUrl: hit._source.video_thumbnail_url || '',
-    previewUrl: hit._source.video_s3_path || '',
-    duration: hit._source.video_duration || 0,
-    source: hit._source.video_original_path?.includes('youtube.com') ? 'youtube' : 'local',
-    sourceUrl: hit._source.video_original_path || '',
-    uploadDate: hit._source.created_at,
-    format: hit._source.video_type || '',
-    status: hit._source.video_status,
-    size: hit._source.video_size || 0,
-    segments: hit._source.video_segments?.map((segment: any): VideoSegment => ({
+  return hits.map(hit => {
+    // Extract only the essential segments data
+    const segments = hit._source.video_segments?.map((segment: any): VideoSegment => ({
       segment_id: segment.segment_id,
       video_id: hit._id,
       start_time: segment.start_time,
       end_time: segment.end_time,
-      duration: segment.duration,
-      // segment_visual: segment.segment_visual,
-      // segment_audio: segment.segment_audio
-    })) || []
-  }));
+      duration: segment.duration
+    })) || [];
+
+    // Limit segments to 5 per video to reduce payload size
+    const limitedSegments = segments.slice(0, 5);
+    
+    return {
+      id: hit._id,
+      title: hit._source.video_title || '',
+      description: hit._source.video_description || '',
+      thumbnailUrl: hit._source.video_thumbnail_url || '',
+      previewUrl: hit._source.video_s3_path || '',
+      duration: hit._source.video_duration || 0,
+      source: hit._source.video_original_path?.includes('youtube.com') ? 'youtube' : 'local',
+      sourceUrl: hit._source.video_original_path || '',
+      uploadDate: hit._source.created_at,
+      format: hit._source.video_type || '',
+      status: hit._source.video_status,
+      size: hit._source.video_size || 0,
+      segments: limitedSegments
+    };
+  });
 };
 
 export const handler = async (event: APIGatewayProxyEvent, _context: LambdaContext): Promise<LambdaResponse> => {
@@ -197,7 +193,6 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
 
     const searchQuery: SearchQuery = JSON.parse(event.body);
     console.log('Parsed search query:', JSON.stringify(searchQuery, null, 2));
-
     // const cacheKey = `search:${JSON.stringify(searchQuery)}`;
     // // Try to get cached results
     // if (!redisClient) {
@@ -216,26 +211,34 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
     //   };
     // }
 
-    // Test the OpenSearch connection
-    const { body: testResult } = await openSearch.search({
-      index: 'videos',
-      body: {
-        query: { match_all: {} }
-      }
-    });
+    // Test the OpenSearch connection with minimal data
+    const testQuery = getTestQuery();
+    console.log('Test query:', JSON.stringify(testQuery, null, 2));
+    
+    const { body: testResult } = await openSearch.search(testQuery);
+    
+    // Log only essential test data
+    if (testResult.hits?.hits) {
+      console.log(`Found ${testResult.hits.total.value} documents`);
+      console.log('Sample documents:', testResult.hits.hits.slice(0, 3).map((hit: any) => ({
+        id: hit._id,
+        title: hit._source.video_title,
+        status: hit._source.video_status
+      })));
+    }
 
-    console.log('OpenSearch test result:', testResult);
-
-    // Build and execute the search
+    // Build and execute the search with limited results
     const searchBody = buildSearchQuery(searchQuery);
     const { body } = await openSearch.search({
       index: searchQuery.selectedIndex || 'videos',
       body: searchBody
     });
 
-    console.log('Search results:', JSON.stringify(body, null, 2));
+    // Log only the count and IDs of results to avoid large logs
+    console.log(`Search returned ${body.hits.total.value} results`);
+    console.log('Result IDs:', body.hits.hits.map((hit: any) => hit._id));
 
-    // Transform results to match VideoResult interface
+    // Transform results to match VideoResult interface with limited data
     const results: VideoResult[] = transformSearchResults(body.hits.hits);
 
     // Cache results, skip the redis cache for now
