@@ -12,6 +12,9 @@ interface VideoResponse {
   hasMore: boolean;
 }
 
+// Add API configuration
+const API_ENDPOINT = process.env.NEXT_PUBLIC_API_URL
+
 export default function VideosPage() {
   const searchParams = useSearchParams()
   const [videos, setVideos] = useState<VideoResult[]>([])
@@ -24,7 +27,7 @@ export default function VideosPage() {
     const fetchVideos = async () => {
       try {
         setIsLoading(true)
-        const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/videos`)
+        const response = await fetch(`${API_ENDPOINT}/videos`)
         if (!response.ok) {
           throw new Error('Failed to fetch videos')
         }

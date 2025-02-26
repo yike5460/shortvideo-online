@@ -70,73 +70,7 @@ The interface follows a modern, clean design system with:
 
 The backend is implemented using AWS CDK with TypeScript, providing a secure and scalable infrastructure.
 
-#### Upload Video & Download Video
-
-1. **Local Video Upload Flow**
-```mermaid
-sequenceDiagram
-    participant Client
-    participant API Gateway
-    participant Lambda
-    participant S3
-    participant SQS
-    participant OpenSearch
-
-    %% Get pre-signed URL
-    Client->>API Gateway: Request pre-signed URL
-    API Gateway->>Lambda: Generate pre-signed URL
-    Lambda->>Client: Return pre-signed URL + uploadId
-
-    %% Direct upload using s3cmd
-    Client->>S3: Upload video using s3cmd
-    Note over Client,S3: Direct upload for better performance
-
-    %% Notify completion
-    Client->>API Gateway: Notify upload complete
-    API Gateway->>Lambda: Process upload completion
-    Lambda->>OpenSearch: Create initial index
-    Lambda->>SQS: Queue processing job
-    Lambda->>Client: Return success status
-```
-
-2. **YouTube URL Upload Flow**
-```mermaid
-sequenceDiagram
-    participant Client
-    participant API Gateway
-    participant Lambda
-    participant S3
-    participant SQS
-    participant OpenSearch
-
-    Client->>API Gateway: Submit YouTube URL
-    API Gateway->>Lambda: Download video
-    Lambda->>S3: Store video
-    Lambda->>OpenSearch: Create initial index
-    Lambda->>SQS: Queue processing job
-    Lambda->>Client: Return success status
-```
-
-3. **API Endpoints**
-Overall API Path:
-```http
-    # Fixed index "videos"
-   /videos/upload                         POST - Start upload
-   /videos/upload/{videoId}/complete      POST - Complete upload
-   /videos/youtube                        POST - YouTube upload
-   /videos/{videoId} or /videos/          GET  - Get specific video details or all videos
-   /videos/{videoId} or /videos/          DELETE - Delete specific video or all videos
-   /videos/status/{videoId}               GET  - Check status, uploading, slicing, indexing, completed, failed
-   /videos/search                         POST - Search videos
-
-    # Dynamic index management
-   /indexes                               POST - Create index
-   /indexes/{indexId}                     GET - Get index details or delete index, including query status, search options, upload status
-   /indexes/{indexId}                     POST - Upload videos to specific index
-   /indexes/{indexId}                     DELETE - Delete index
-```
-
-4. **Implementation Details**
+#### Implementation Details
 
 - **Local Video Upload**
   - Uses s3cmd for direct S3 upload
@@ -156,28 +90,6 @@ Overall API Path:
   - SQS queuing for async processing
   - OpenSearch indexing for search capabilities
   - Progress tracking through job status
-
-5. **Storage Structure**
-```
-s3://bucket-name/
-├── RawVideos/
-│   └── YYYY-MM-DD/
-│       └── video_id/
-│           ├── original.mp4
-│           └── metadata.json
-├── ProcessedVideos/
-│   └── video_id/
-│       ├── segments/
-│       │   ├── segment_001.mp4
-│       │   └── segment_002.mp4
-│       └── metadata/
-│           ├── visual_embeddings.json
-│           └── audio_embeddings.json
-└── Thumbnails/
-    └── video_id/
-        ├── thumb_001.jpg
-        └── thumb_002.jpg
-```
 
 #### Video Indexing
 
@@ -313,6 +225,8 @@ This two-step approach provides both efficiency and precision. For example, if s
 Same approach applies for audio and text search, using their respective global and segment-level embeddings.
 
 ### Backend Architecture
+
+#### Resource Layer
 1. **AI Services**
     - Using Amazon Reckognition for the shots detection and object detection.
     - Using Amazon Bedrock for the video summary and visual description.
@@ -364,24 +278,39 @@ Same approach applies for audio and text search, using their respective global a
      - Lambda integration
      - X-Ray tracing and CloudWatch logging disabled
 
+
 #### Workflow
 
-1. **Video Upload Flow**
+1. **Local/Youtube Video Upload Flow**
 ```mermaid
 sequenceDiagram
     participant Client
     participant API Gateway
-    participant VideoDownloadHandler
+    participant UploadLambda as Video Upload Lambda
     participant S3
-    participant SQS
+    participant DynamoDB as Index DynamoDB
     participant OpenSearch
 
-    Client->>API Gateway: Upload Video/URL
-    API Gateway->>VideoDownloadHandler: Trigger Lambda
-    VideoDownloadHandler->>S3: Store Raw Video
-    VideoDownloadHandler->>OpenSearch: Create Initial Index
-    VideoDownloadHandler->>SQS: Queue Processing Job
-    VideoDownloadHandler->>Client: Return Job ID
+    %% Index Creation if user specify the index name, otherwise the index will be created with default name "videos"
+    Client->>API Gateway: Create index (POST /videos/upload)
+    API Gateway->>UploadLambda: Create index request
+    UploadLambda->>OpenSearch: Create index with mappings
+    UploadLambda->>DynamoDB: Create index metadata or update the existing index metadata
+
+    %% Get pre-signed URL
+    API Gateway->>UploadLambda: Generate pre-signed URLs
+    UploadLambda->>DynamoDB: Update index status to "processing"
+    UploadLambda->>Client: Return pre-signed URLs + videoIds
+
+    %% Direct upload
+    Client->>S3: Upload video using pre-signed URL
+    Note over Client,S3: Direct upload to S3 bucket
+
+    %% Notify completion
+    Client->>API Gateway: Notify upload complete (/videos/upload/{videoId}/complete)
+    API Gateway->>UploadLambda: Process upload completion
+    UploadLambda->>OpenSearch: Update video status to "processing"
+    UploadLambda->>Client: Return success status
 ```
 
 2. **Video Indexing Flow**
@@ -389,7 +318,7 @@ sequenceDiagram
 sequenceDiagram
     participant S3
     participant Lambda
-    participant SQS
+    participant SNS
     participant Rekognition
     participant ECS
     participant Transcribe
@@ -402,45 +331,42 @@ sequenceDiagram
     Lambda->>OpenSearch: Create Initial Video Entry
     
     %% Start Rekognition Jobs
-    Lambda->>Rekognition: Start Segment Detection
+    Lambda->>Rekognition: Start jobs for shots/labels/faces detection
     Note over Rekognition: Async Processing
-    Rekognition-->>SQS: Job Complete Notification
-    SQS->>Lambda: Process Rekognition Results
+    Rekognition-->>SNS: Job Complete Notification
+    SNS->>Lambda: Process Rekognition Results
     
+    %% Parallel Processing after Segments
     par Parallel Processing after Segments
-        %% Audio Processing
+        %% Audio Processing (FFMPEG + Transcribe)
         Lambda->>FFMPEG: Extract Audio
         FFMPEG-->>S3: Store Audio File
         Lambda->>Transcribe: Process Audio
         Transcribe-->>S3: Store Transcription
         
-        %% Visual Processing
+        %% Visual Processing for keyframes and description (FFMPEG + Bedrock)
         Lambda->>FFMPEG: Extract Keyframes
         FFMPEG-->>S3: Store Keyframes
         Lambda->>Bedrock: Generate Frame Descriptions
         Bedrock-->>Lambda: Return Descriptions
         
-        %% Object & Face Detection
-        Lambda->>Rekognition: Start Object/Face Detection
-        Note over Rekognition: Async Processing
-        Rekognition-->>SQS: Detection Complete
-        SQS->>Lambda: Process Detection Results
+        %% Visual Processing for shots & object & face detection (Rekognition)
+        Lambda->>OpenSearch: Update the object/face detection results (texts)
     end
 
     %% Embedding Generation
-    Lambda->>ECS: Start Embedding Task
+    Lambda->>ECS: Start Embedding Task for audio & shots
     Note over ECS: Generate Embeddings
         note over ECS: BGE Model for Text/Audio
         note over ECS: VideoCLIP-XL for Video
     ECS-->>Lambda: Return Embeddings
     
     %% Final Processing
-    Lambda->>OpenSearch: Store Complete Metadata
-        note over OpenSearch: Store Schema:
-        note over OpenSearch: - Video Info
-        note over OpenSearch: - Segment Data
-        note over OpenSearch: - Embeddings
-        note over OpenSearch: - Search Metadata
+    Lambda->>OpenSearch: Store complete VideoMetadata
+        note over OpenSearch: Store VideoMetadata:
+        note over OpenSearch: - Brief Video Info (name, description, duration, etc.)
+        note over OpenSearch: - Video Segment Data (audio, visual)
+        note over OpenSearch: - Search Metadata (Not used for now)
     
     Lambda->>OpenSearch: Update Video Status
 ```
@@ -523,9 +449,27 @@ This architecture ensures:
 4. Network segmentation through security groups
 5. Service-to-service communication through VPC endpoints
 
-### RESTful API Endpoints
+#### RESTful API
 
-#### Video Management
+Overall API Path:
+```http
+    # Fixed index "videos"
+   /videos/upload                         POST - Start upload
+   /videos/upload/{videoId}/complete      POST - Complete upload
+   /videos/youtube                        POST - YouTube upload
+   /videos/{videoId} or /videos/          GET  - Get specific video details or all videos
+   /videos/{videoId} or /videos/          DELETE - Delete specific video or all videos
+   /videos/status/{videoId}               GET  - Check status, uploading, slicing, indexing, completed, failed
+   /videos/search                         POST - Search videos
+
+    # Dynamic index management
+   /indexes                               POST - Create index, this may be handled by the /videos/upload endpoint
+   /indexes/{indexId}                     GET - Get index details or delete index, including query status, search options, upload status
+   /indexes/{indexId}                     POST - Upload videos to specific index
+   /indexes/{indexId}                     DELETE - Delete index
+```
+
+##### Video Management
 ```http
 # Upload or register new video
 POST /api/v1/videos
@@ -556,7 +500,7 @@ Response: {
 DELETE /api/v1/videos/{videoId}
 ```
 
-#### Search Operations
+##### Search Operations
 ```http
 # Multi-modal search
 POST /api/v1/search
@@ -602,7 +546,7 @@ Response: {
 }
 ```
 
-#### Processing Operations
+##### Processing Operations
 ```http
 # Get processing status
 GET /api/v1/process/{jobId}/status
@@ -624,7 +568,7 @@ POST /api/v1/videos/{videoId}/reprocess
 }
 ```
 
-#### Analytics Operations
+##### Analytics Operations
 ```http
 # Get video analytics
 GET /api/v1/videos/{videoId}/analytics
@@ -643,7 +587,7 @@ Response: {
 }
 ```
 
-#### Health and Monitoring
+##### Health and Monitoring
 ```http
 # System health check
 GET /api/v1/health
@@ -670,6 +614,29 @@ Response: {
         "errorRate": float
     }
 }
+```
+
+#### Storage Structure
+
+```
+s3://bucket-name/
+├── RawVideos/
+│   └── YYYY-MM-DD/
+│       └── video_id/
+│           ├── original.mp4
+│           └── metadata.json
+├── ProcessedVideos/
+│   └── video_id/
+│       ├── segments/
+│       │   ├── segment_001.mp4
+│       │   └── segment_002.mp4
+│       └── metadata/
+│           ├── visual_embeddings.json
+│           └── audio_embeddings.json
+└── Thumbnails/
+    └── video_id/
+        ├── thumb_001.jpg
+        └── thumb_002.jpg
 ```
 
 ## Security & Performance

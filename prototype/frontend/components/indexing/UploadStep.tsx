@@ -2,7 +2,7 @@
 
 import { useState, useCallback } from 'react'
 import { useDropzone } from 'react-dropzone'
-import { CloudArrowUpIcon, XMarkIcon } from '@heroicons/react/24/outline'
+import { CloudArrowUpIcon, XMarkIcon, InformationCircleIcon } from '@heroicons/react/24/outline'
 import { cn } from '@/lib/utils'
 import axios from 'axios'
 import { useRouter } from 'next/navigation'
@@ -13,6 +13,7 @@ const API_ENDPOINT = process.env.NEXT_PUBLIC_API_URL
 interface UploadStepProps {
   onNext: (files: File[], uploadIds: string[]) => void
   onBack: () => void
+  indexId?: string  // Add indexId prop to receive from parent
 }
 
 interface UploadProgress {
@@ -28,7 +29,7 @@ interface YouTubeUpload {
   tags?: string[]
 }
 
-export default function UploadStep({ onNext, onBack }: UploadStepProps) {
+export default function UploadStep({ onNext, onBack, indexId = 'videos' }: UploadStepProps) {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
   const [youtubeUrl, setYoutubeUrl] = useState('')
   const [error, setError] = useState<string>('')
@@ -97,7 +98,9 @@ export default function UploadStep({ onNext, onBack }: UploadStepProps) {
           title: file.name,
           description: '',
           tags: []
-        }
+        },
+        // Use the indexId from props
+        indexId: indexId
       }, {
         headers: {
           'Content-Type': 'application/json'
@@ -130,7 +133,9 @@ export default function UploadStep({ onNext, onBack }: UploadStepProps) {
         fileName: file.name,
         fileSize: file.size,
         fileType: file.type,
-        videoId: videoId
+        videoId: videoId,
+        // Include the index information in the completion request
+        indexId: indexId
       }, {
         headers: {
           'Content-Type': 'application/json'
@@ -146,9 +151,6 @@ export default function UploadStep({ onNext, onBack }: UploadStepProps) {
           status: 'completed'
         }
       }))
-
-      // Redirect to videos page without index parameter
-      router.push('/videos')
 
       return videoId
 
@@ -175,7 +177,9 @@ export default function UploadStep({ onNext, onBack }: UploadStepProps) {
           title: '',
           description: '',
           tags: []
-        }
+        },
+        // Include the index information for YouTube uploads
+        indexId: indexId
       }, {
         headers: {
           'Content-Type': 'application/json'
@@ -208,6 +212,14 @@ export default function UploadStep({ onNext, onBack }: UploadStepProps) {
       }
 
       const uploadIds = await Promise.all(uploadPromises)
+      
+      // Redirect to processing page with index parameter
+      if (indexId) {
+        router.push(`/indexing/progress?id=${indexId}`)
+      } else {
+        router.push('/videos')
+      }
+      
       onNext(selectedFiles, uploadIds)
     } catch (err) {
       setError('Failed to upload one or more files. Please try again.')
@@ -222,6 +234,11 @@ export default function UploadStep({ onNext, onBack }: UploadStepProps) {
       <div className="text-center">
         <span className="text-sm font-medium text-gray-500">Step 2/2</span>
         <h2 className="mt-2 text-2xl font-bold text-gray-900">Upload Videos</h2>
+        {indexId !== 'videos' && (
+          <p className="mt-1 text-sm text-gray-500">
+            Uploading to index: <span className="font-medium">{indexId}</span>
+          </p>
+        )}
       </div>
 
       {/* YouTube URL input */}
