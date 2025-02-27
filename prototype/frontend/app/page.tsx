@@ -126,22 +126,6 @@ interface Index {
   videoCount: number;
 }
 
-// Add mock indexes
-const MOCK_INDEXES: Index[] = [
-  { 
-    id: 'main', 
-    name: 'Main Video Index',
-    status: 'ready',
-    videoCount: 1
-  },
-  { 
-    id: 'training', 
-    name: 'Training Videos',
-    status: 'ready',
-    videoCount: 1
-  },
-]
-
 export default function HomePage() {
   const { state } = useAuth()
   const router = useRouter()
@@ -151,6 +135,8 @@ export default function HomePage() {
   const [error, setError] = useState<string>('')
   const [searchQuery, setSearchQuery] = useState('')
   const [isErrorVisible, setIsErrorVisible] = useState(false)
+  const [indexes, setIndexes] = useState<Index[]>([])
+  const [isLoadingIndexes, setIsLoadingIndexes] = useState(false)
 
   // Authentication check effect
   useEffect(() => {
@@ -158,6 +144,64 @@ export default function HomePage() {
       router.push('/landing')
     }
   }, [state.session, state.isLoading, router])
+
+  // Fetch indexes from backend
+  useEffect(() => {
+    const fetchIndexes = async () => {
+      if (!state.session) return;
+      
+      setIsLoadingIndexes(true);
+      try {
+        const response = await fetch(`${API_ENDPOINT}/indexes`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${state.session.token}`
+          }
+        });
+        
+        if (!response.ok) {
+          throw new Error(`Failed to fetch indexes: ${response.statusText}`);
+        }
+        
+        const data = await response.json();
+        
+        // [
+        //   {
+        //       "updated_at": "2025-02-27T13:10:49.561Z",
+        //       "indexId": "66778899",
+        //       "videoId": "536c20ca-a866-49a2-97d1-a1d91e68874f",
+        //       "video_status": "uploaded",
+        //       "videoCount": 9363
+        //   },
+        //   {
+        //       "updated_at": "2025-02-27T13:35:30.622Z",
+        //       "indexId": "1122334455",
+        //       "videoId": "5c4a6985-61d1-4a0a-afc0-1222cfafdef0",
+        //       "video_status": "uploaded",
+        //       "videoCount": 9363
+        //   }
+        // ]
+
+        // Transform the API response to match our Index interface
+        const transformedIndexes = data.map((item: any, i: number) => ({
+          id: item.indexId || `index-${i}`,
+          name: `Index: ${item.indexId || 'Unknown'}`,
+          status: item.video_status === 'uploaded' ? 'ready' : 'indexing',
+          videoCount: item.videoCount || 0
+        }));
+        
+        setIndexes(transformedIndexes);
+      } catch (err) {
+        console.error('Error fetching indexes:', err);
+        setError('Failed to load indexes. Please refresh the page.');
+      } finally {
+        setIsLoadingIndexes(false);
+      }
+    };
+    
+    fetchIndexes();
+  }, [state.session, API_ENDPOINT]);
 
   // Error display effect
   useEffect(() => {
@@ -253,7 +297,7 @@ export default function HomePage() {
             ...searchOptions,
             searchType: 'text',
             searchQuery: query,
-            selectedIndex: 'videos' // Use fixed index for now
+            selectedIndex: searchOptions.selectedIndex
           })
         })
       }
@@ -344,7 +388,8 @@ export default function HomePage() {
       <SearchSidebar
         options={searchOptions}
         onOptionsChange={handleOptionsChange}
-        indexes={MOCK_INDEXES}
+        indexes={indexes}
+        // isLoadingIndexes={isLoadingIndexes}
       />
     </div>
   )

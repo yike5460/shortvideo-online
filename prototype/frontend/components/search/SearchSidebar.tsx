@@ -139,6 +139,7 @@ export default function SearchSidebar({
       <div className="space-y-4">
         <h3 className="text-lg font-medium text-gray-900">Select Index</h3>
         <select
+          id="index-select"
           value={options.selectedIndex || ''}
           onChange={(e) => onOptionsChange({ ...options, selectedIndex: e.target.value || null })}
           className="w-full border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
