@@ -1,20 +1,21 @@
 // Video metadata types
 export interface VideoMetadata {  
+  video_index: string;              // Index ID
   video_description?: string;       // Original video description    
   video_duration?: number;          // Total video duration in milliseconds
   video_id?: string;
   video_name?: string;              // Original file name
   video_original_path?: string;     // Youtube URL or local video path
-  video_s3_path?: string;            // S3 storage location
+  video_s3_path?: string;           // S3 storage location
   video_size?: number;              // File size in bytes
-  video_status?: VideoStatus;        // Current processing status
+  video_status?: VideoStatus;       // Current processing status
   video_summary?: string;           // Video summary, AI generated
   video_tags?: string[];            // Tags for the video
-  video_title?: string;              // Video title
+  video_title?: string;             // Video title
   video_type?: string;              // MIME type
   
-  created_at?: string;               // ISO timestamp
-  updated_at?: string;               // ISO timestamp
+  created_at?: string;              // ISO timestamp
+  updated_at?: string;              // ISO timestamp
   error?: string;                   // Error message if processing failed
   segment_count?: number;           // Number of detected segments
   total_duration?: number;          // Total duration in milliseconds
@@ -30,7 +31,7 @@ export type VideoStatus =
   | 'uploaded'          // File upload completed
   | 'processing'        // Video is being processed (slicing/indexing)
   | 'ready_for_face'    // Video completed face detection
-  | 'ready_for_object'   // Video completed object detection
+  | 'ready_for_object'  // Video completed object detection
   | 'ready_for_shots'   // Video completed shot detection
   | 'ready_for_video_embed'   // Video completed video embedding
   | 'ready_for_audio_embed'   // Video completed audio embedding
@@ -44,13 +45,14 @@ export interface VideoSegment {
   start_time: number;        // Milliseconds from start
   end_time: number;          // Milliseconds from start
   duration: number;          // Segment duration in milliseconds
+  video_s3_path?: string;     // S3 storage location for each segment (shots)
   segment_audio?: {
     segment_audio_transcript?: string;     // Raw transcript text
     segment_audio_semantic_embedding?: number[];  // Audio embedding
     segment_audio_description?: string;    // Audio description
   };
   segment_visual?: {
-    segment_visual_keyframe_path?: string;  // S3 path to keyframe
+    segment_visual_keyframe_path?: string;  // S3 path to keyframe, will obsolete to use video_s3_path instead
     segment_visual_description?: string;    // Visual description
     segment_visual_objects?: VisualObject[];
     segment_visual_faces?: FaceDetection[];

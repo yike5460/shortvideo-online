@@ -116,7 +116,10 @@ async function handleS3Event(event: S3Event): Promise<LambdaResponse> {
     };
   }
 
+  // The s3Key format is `RawVideos/${timestamp}/${videoIndex}/${videoId}/${sanitizedFileName}`
+  const videoIndex = key.split('/')[2];
   const videoId = key.split('/').pop()?.split('.')[0];
+
   if (!videoId) throw new Error('Invalid video key format');
 
   // TODO, we need to do video valiation according to the Amazon Rekognition restriction: https://docs.aws.amazon.com/rekognition/latest/dg/video.html, e.g. The video must be encoded using the H.264 codec. The supported file formats are MPEG-4 and MOV.
@@ -131,7 +134,7 @@ async function handleS3Event(event: S3Event): Promise<LambdaResponse> {
   const shotDetectionResponse = await rekognition.send(new StartSegmentDetectionCommand({
     Video: { S3Object: { Bucket: bucket, Name: key } },
     NotificationChannel: notificationChannel,
-    JobTag: `${videoId}-shots`,
+    JobTag: `${videoIndex}-${videoId}-shots`,
     SegmentTypes: [SegmentType.SHOT]
   }));
 
@@ -139,7 +142,7 @@ async function handleS3Event(event: S3Event): Promise<LambdaResponse> {
   const labelDetectionResponse = await rekognition.send(new StartLabelDetectionCommand({
     Video: { S3Object: { Bucket: bucket, Name: key } },
     NotificationChannel: notificationChannel,
-    JobTag: `${videoId}-labels`,
+    JobTag: `${videoIndex}-${videoId}-labels`,
     MinConfidence: 80
   }));
 
@@ -147,7 +150,7 @@ async function handleS3Event(event: S3Event): Promise<LambdaResponse> {
   const faceDetectionResponse = await rekognition.send(new StartFaceDetectionCommand({
     Video: { S3Object: { Bucket: bucket, Name: key } },
     NotificationChannel: notificationChannel,
-    JobTag: `${videoId}-faces`
+    JobTag: `${videoIndex}-${videoId}-faces`
   }));
 
   return {
@@ -169,23 +172,23 @@ async function handleSNSEvent(event: SNSEvent): Promise<LambdaResponse> {
   const message = JSON.parse(event.Records[0].Sns.Message);
   const jobId = message.JobId;
   const status = message.Status;
-  const videoId = message.Video.S3ObjectName.split('/')[2]; // Extract from S3 key
-
-  console.log('Processing Rekognition notification for job type:', message.API, 'jobId:', jobId, 'status:', status, 'videoId:', videoId, 'message:', message);
-  console.log('Video information before processing:', await openSearch.get({index: 'videos', id: videoId}));
+  const videoId = message.Video.S3ObjectName.split('/').pop()?.split('.')[0];
+  const videoIndex = message.Video.S3ObjectName.split('/')[2];
+  console.log('Processing Rekognition notification for job type:', message.API, 'jobId:', jobId, 'status:', status, 'videoIndex:', videoIndex, 'videoId:', videoId, 'message:', message);
+  console.log('Video information before processing:', await openSearch.get({index: videoIndex, id: videoId}));
 
   try {
     if (status === 'SUCCEEDED') {
       // Get job results based on job type
       if (message.API === 'StartSegmentDetection') {
         const segments = await getSegmentDetectionResults(jobId);
-        await updateVideoSegments(videoId, segments);
+        await updateVideoSegments(videoIndex, videoId, segments);
       } else if (message.API === 'StartLabelDetection') {
         const labels = await getLabelDetectionResults(jobId);
-        await updateVideoLabels(videoId, labels);
+        await updateVideoLabels(videoIndex, videoId, labels);
       } else if (message.API === 'StartFaceDetection') {
         const faces = await getFaceDetectionResults(jobId);
-        await updateVideoFaces(videoId, faces);
+        await updateVideoFaces(videoIndex, videoId, faces);
       }
     } else if (status === 'FAILED') {
       await updateVideoStatus(videoId, 'error', {
@@ -195,7 +198,7 @@ async function handleSNSEvent(event: SNSEvent): Promise<LambdaResponse> {
 
     // Display the video information in aoss for debugging
     const fullVideoMetadata = await openSearch.get({
-      index: 'videos',
+      index: videoIndex,
       id: videoId
     });
     console.log('Video information after processing:', fullVideoMetadata);
@@ -249,10 +252,10 @@ async function getSegmentDetectionResults(jobId: string): Promise<SegmentDetecti
   return segments;
 }
 
-async function updateVideoSegments(videoId: string, segments: SegmentDetection[]): Promise<void> {
+async function updateVideoSegments(videoIndex: string, videoId: string, segments: SegmentDetection[]): Promise<void> {
   // First get existing video metadata
   const { body: existingVideo } = await openSearch.get({
-    index: 'videos',
+    index: videoIndex,
     id: videoId
   });
 
@@ -269,7 +272,7 @@ async function updateVideoSegments(videoId: string, segments: SegmentDetection[]
 
   // Update video metadata with new segments and status
   await openSearch.update({
-    index: 'videos',
+    index: videoIndex,
     id: videoId,
     body: {
       doc: {
@@ -304,7 +307,7 @@ async function getLabelDetectionResults(jobId: string): Promise<any[]> {
   return labels;
 }
 
-async function updateVideoLabels(videoId: string, labels: any[]): Promise<void> {
+async function updateVideoLabels(videoIndex: string, videoId: string, labels: any[]): Promise<void> {
   // First get existing video metadata
   const { body: existingVideo } = await openSearch.get({
     index: 'videos',
@@ -331,7 +334,7 @@ async function updateVideoLabels(videoId: string, labels: any[]): Promise<void> 
   const allSegments = [...(existingVideo._source.video_segments || []), ...processedSegments];
 
   await openSearch.update({
-    index: 'videos',
+    index: videoIndex,
     id: videoId,
     body: {
       doc: {
@@ -363,7 +366,7 @@ async function getFaceDetectionResults(jobId: string): Promise<any[]> {
   return faces;
 }
 
-async function updateVideoFaces(videoId: string, faces: any[]): Promise<void> {
+async function updateVideoFaces(videoIndex: string, videoId: string, faces: any[]): Promise<void> {
   // First get existing video metadata
   const { body: existingVideo } = await openSearch.get({
     index: 'videos',
@@ -390,7 +393,7 @@ async function updateVideoFaces(videoId: string, faces: any[]): Promise<void> {
   const allSegments = [...(existingVideo._source.video_segments || []), ...processedSegments];
 
   await openSearch.update({
-    index: 'videos',
+    index: videoIndex,
     id: videoId,
     body: {
       doc: {

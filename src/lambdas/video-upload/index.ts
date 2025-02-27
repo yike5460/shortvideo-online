@@ -40,10 +40,46 @@ const STATUS_CODES = {
   INTERNAL_SERVER_ERROR: 500
 };
 
+const indexSettings = {
+  settings: {
+    number_of_shards: 1,
+    number_of_replicas: 0
+  },
+  // Update the mappings to match the VideoMetadata schema
+  mappings: {
+    properties: {
+      video_index: { type: 'keyword' },
+      video_description: { type: 'text' },
+      video_duration: { type: 'integer' },
+      video_id: { type: 'keyword' },
+      video_name: { type: 'keyword' },
+      video_original_path: { type: 'keyword' },
+      video_s3_path: { type: 'keyword' },
+      video_size: { type: 'integer' },
+      video_status: { type: 'keyword' },
+      video_summary: { type: 'text' },
+      video_tags: { type: 'keyword' },
+      video_title: { type: 'text' },
+      video_type: { type: 'keyword' },
+
+      created_at: { type: 'date' },
+      updated_at: { type: 'date' },
+      error: { type: 'text' },
+      segment_count: { type: 'integer' },
+      total_duration: { type: 'integer' },
+      job_id: { type: 'keyword' },
+
+      video_metadata: { type: 'object' },
+      video_segments: { type: 'object' }
+    }
+  }
+};
+
 interface PresignRequest {
   fileName: string;
   fileType: string;
   fileSize: number;
+  indexId: string;
   metadata: {
     title?: string;
     description?: string;
@@ -52,10 +88,8 @@ interface PresignRequest {
 }
 
 interface CompleteUploadRequest {
+  indexId: string;
   videoId: string;
-  fileName: string;
-  fileSize: number;
-  fileType: string;
 }
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<LambdaResponse> => {
@@ -309,79 +343,138 @@ async function handleDeleteVideo(videoId: string): Promise<LambdaResponse> {
 }
 
 async function handlePresignRequest(event: APIGatewayProxyEvent): Promise<LambdaResponse> {
-  const request: PresignRequest = JSON.parse(event.body!);
-  const videoId = uuidv4();
-  const timestamp = new Date().toISOString().split('T')[0];
-  // Sanitize the file name by replacing spaces (and optionally other characters) with underscores
-  const sanitizedFileName = request.fileName.replace(/\s+/g, '_');
-  const s3Key = `RawVideos/${timestamp}/${videoId}/${sanitizedFileName}`;
+  try {
+    const request: PresignRequest = JSON.parse(event.body!);
+    console.log('Presign request: ', request);
+    // The video index will now be passed from the frontend with default value 'videos'
+    const videoIndex = request.indexId || 'videos';
+    const videoId = uuidv4();
+    // Get current date in YYYY-MM-DD format, e.g. '2024-01-25'
+    const timestamp = new Date().toISOString().split('T')[0];
+    // Sanitize the file name by replacing spaces (and optionally other characters) with underscores
+    const sanitizedFileName = request.fileName.replace(/\s+/g, '_');
+    // Add the video index to the S3 key
+    const s3Key = `RawVideos/${timestamp}/${videoIndex}/${videoId}/${sanitizedFileName}`;
 
-  // Align body schema with VideoMetadata
-  const aossInitialBody: VideoMetadata = {
-    video_id: videoId,
-    video_s3_path: s3Key,
-    video_name: request.fileName,
-    video_size: request.fileSize,
-    video_type: request.fileType,
-    video_title: request.metadata?.title || path.basename(request.fileName),
-    video_description: request.metadata?.description || '',
-    video_tags: request.metadata?.tags || [],
-    video_status: 'awaiting_upload' as VideoStatus,
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString()
-  };
+    // Align body schema with VideoMetadata
+    const aossInitialBody: VideoMetadata = {
+      video_index: videoIndex,
+      video_id: videoId,
+      video_s3_path: s3Key,
+      video_name: request.fileName,
+      video_size: request.fileSize,
+      video_type: request.fileType,
+      video_title: request.metadata?.title || path.basename(request.fileName),
+      video_description: request.metadata?.description || '',
+      video_tags: request.metadata?.tags || [],
+      video_status: 'awaiting_upload' as VideoStatus,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
 
-  // Create initial OpenSearch document
-  await openSearch.index({
-    index: 'videos',
-    id: videoId,
-    body: aossInitialBody
-  });
-
-  // Test the OpenSearch connection
-  const { body: testResult } = await openSearch.search({
-    index: 'videos',
-    body: {
-      query: { match_all: {} }
+    // Create the index if it doesn't exist
+    try {
+      const indexExists = await openSearch.indices.exists({ index: videoIndex });
+      if (!indexExists.body) {
+        console.log(`Index ${videoIndex} does not exist, creating it`);
+        // Use the indexSettings object to create the index
+        await openSearch.indices.create({ 
+          index: videoIndex, 
+          body: indexSettings 
+        });
+        console.log(`Successfully created index ${videoIndex}`);
+      }
+    } catch (error) {
+      // Log the error but continue - we'll try to create the document anyway
+      console.error(`Error checking/creating index ${videoIndex}:`, error);
+      // If the error is not that the index already exists, try to create it
+      if ((error as any).meta?.body?.error?.type !== 'resource_already_exists_exception') {
+        try {
+          console.log(`Attempting to create index ${videoIndex} after error`);
+          await openSearch.indices.create({ 
+            index: videoIndex,
+            body: indexSettings 
+          });
+          console.log(`Successfully created index ${videoIndex} after error`);
+        } catch (createError) {
+          console.error(`Failed second attempt to create index ${videoIndex}:`, createError);
+          // Continue anyway - the document creation might still work if the index exists
+        }
+      }
     }
-  });
 
-  console.log('OpenSearch test result:', testResult);
-
-  // Generate pre-signed URL
-  const command = new PutObjectCommand({
-    Bucket: process.env.VIDEO_BUCKET,
-    Key: s3Key,
-    ContentType: request.fileType,
-    Metadata: {
-      'video-id': videoId,
-      'title': request.metadata?.title || '',
-      'description': request.metadata?.description || '',
-      'tags': request.metadata?.tags ? JSON.stringify(request.metadata.tags) : '[]'
+    // Create initial OpenSearch document with error handling
+    try {
+      await openSearch.index({
+        index: videoIndex,
+        id: videoId,
+        body: aossInitialBody
+      });
+      console.log(`Successfully indexed initial document for video ${videoId} in index ${videoIndex}`);
+    } catch (indexError) {
+      console.error(`Error indexing initial document for video ${videoId} in index ${videoIndex}:`, indexError);
+      // If we can't index the document, we should still return a pre-signed URL
+      // but log the error for debugging
     }
-  });
 
-  const uploadUrl = await getSignedUrl(s3 as any, command as any, { expiresIn: 3600 }); // URL expires in 1 hour
+    // Test the OpenSearch connection - make this optional with error handling
+    try {
+      const { body: testResult } = await openSearch.search({
+        index: videoIndex,
+        body: {
+          query: { match_all: {} }
+        }
+      });
+      console.log(`OpenSearch test query result: ${JSON.stringify(testResult)}`);
+    } catch (searchError) {
+      // This is just a test query, so we can continue if it fails
+      console.warn(`OpenSearch test query failed for index ${videoIndex}:`, searchError);
+    }
 
-  return {
-    statusCode: STATUS_CODES.OK,
-    headers: corsHeaders,
-    body: JSON.stringify({
-      uploadUrl,
-      videoId,
-      expiresIn: 3600
-    })
-  };
+    // Generate pre-signed URL for S3 upload
+    const command = new PutObjectCommand({
+      Bucket: process.env.VIDEO_BUCKET!,
+      Key: s3Key,
+      ContentType: request.fileType,
+      Metadata: {
+        'video-index': videoIndex,
+        'video-id': videoId,
+        'title': request.metadata?.title || '',
+        'description': request.metadata?.description || '',
+        'tags': JSON.stringify(request.metadata?.tags || [])
+      }
+    });
+
+    const uploadUrl = await getSignedUrl(s3 as any, command as any, { expiresIn: 3600 });
+
+    return {
+      statusCode: STATUS_CODES.OK,
+      headers: corsHeaders,
+      body: JSON.stringify({
+        uploadUrl,
+        videoId,
+        videoIndex,
+        expiresIn: 3600
+      })
+    };
+  } catch (error) {
+    console.error('Error generating pre-signed URL:', error);
+    return {
+      statusCode: STATUS_CODES.INTERNAL_SERVER_ERROR,
+      headers: corsHeaders,
+      body: JSON.stringify({ error: (error as Error).message || 'Failed to generate pre-signed URL' })
+    };
+  }
 }
 
 async function handleCompleteUpload(event: APIGatewayProxyEvent): Promise<LambdaResponse> {
   const request: CompleteUploadRequest = JSON.parse(event.body!);
-  const { videoId, fileName, fileSize, fileType } = request;
-  console.log('Complete upload request: ', request, videoId, fileName, fileSize, fileType);
+  const { indexId, videoId } = request;
+  console.log('Complete upload request: ', request);
   try {
     // Verify the video exists in OpenSearch
     const { body: searchResult } = await openSearch.get({
-      index: 'videos',
+      index: indexId,
       id: videoId
     });
 
@@ -397,7 +490,7 @@ async function handleCompleteUpload(event: APIGatewayProxyEvent): Promise<Lambda
 
     // Update OpenSearch with additional metadata
     await openSearch.update({
-      index: 'videos',
+      index: indexId,
       id: videoId,
       body: {
         doc: {  // Wrap update fields in 'doc'
@@ -422,6 +515,7 @@ async function handleCompleteUpload(event: APIGatewayProxyEvent): Promise<Lambda
       headers: corsHeaders,
       body: JSON.stringify({
         message: 'Upload completed successfully',
+        indexId,
         videoId,
         status: 'processing'
       })
