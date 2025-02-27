@@ -24,13 +24,14 @@ export interface VideoSegment {
   start_time: number;        // Milliseconds from start
   end_time: number;          // Milliseconds from start
   duration: number;          // Segment duration in milliseconds
+  video_s3_path?: string;     // S3 storage location for each segment (shots)
   segment_audio?: {
     segment_audio_transcript?: string;     // Raw transcript text
     segment_audio_semantic_embedding?: number[];  // Audio embedding
     segment_audio_description?: string;    // Audio description
   };
   segment_visual?: {
-    segment_visual_keyframe_path?: string;  // S3 path to keyframe
+    segment_visual_keyframe_path?: string;  // S3 path to keyframe, will obsolete to use video_s3_path instead
     segment_visual_description?: string;    // Visual description
     segment_visual_objects?: VisualObject[];
     segment_visual_faces?: FaceDetection[];
@@ -60,6 +61,7 @@ export interface BoundingBox {
 
 export interface VideoResult {
   id: string;
+  indexId: string;
   title: string;
   description: string;
   thumbnailUrl: string;
@@ -94,19 +96,60 @@ export type ConfidencePreset = 'low' | 'medium' | 'high'
 export type ConfidenceAdjustment = 'less' | 'default' | 'more'
 
 export interface SearchOptions {
-  selectedIndex: string | null
-  searchType: 'text' | 'image' | 'video' | 'audio'
-  searchQuery: string
-  exactMatch: boolean
-  topK: number
-  weights: {
-    text: number
-    image: number
-    video: number
-    audio: number
-  };
-  minConfidence: number
-  showConfidenceScores: boolean
-  confidencePreset: ConfidencePreset
-  confidenceAdjustment: ConfidenceAdjustment
+  searchType: 'text' | 'visual' | 'audio';
+  visualSearch: boolean;
+  audioSearch: boolean;
+  minConfidence: number;
+  showConfidenceScores: boolean;
+  selectedIndex: string | null;
+  confidencePreset: ConfidencePreset;
+  confidenceAdjustment: ConfidenceAdjustment;
+}
+
+// Video metadata types
+export interface VideoMetadata {  
+  video_index: string;              // Index ID
+  video_description?: string;       // Original video description    
+  video_duration?: number;          // Total video duration in milliseconds
+  video_id?: string;
+  video_name?: string;              // Original file name
+  video_original_path?: string;     // Youtube URL or local video path
+  video_s3_path?: string;           // S3 storage location
+  video_size?: number;              // File size in bytes
+  video_status?: VideoStatus;       // Current processing status
+  video_summary?: string;           // Video summary, AI generated
+  video_tags?: string[];            // Tags for the video
+  video_title?: string;             // Video title
+  video_type?: string;              // MIME type
+  
+  created_at?: string;              // ISO timestamp
+  updated_at?: string;              // ISO timestamp
+  error?: string;                   // Error message if processing failed
+  segment_count?: number;           // Number of detected segments
+  total_duration?: number;          // Total duration in milliseconds
+  job_id?: string;                  // Job ID for the video processing
+  
+  video_metadata?: SearchMetadata;  // Quick search metadata
+  video_segments?: VideoSegment[];  // Video segments
+}
+
+export type WebVideoStatus = 
+  | 'processing'
+  | 'completed'
+  | 'failed';
+
+// Define the Index type that was missing
+export interface Index {
+  id: string;
+  name: string;
+  description?: string;
+  videoCount?: number;
+  createdAt?: string;
+}
+
+// Add OpenSearch result type with confidence
+export interface OpenSearchHit {
+  _id: string;
+  _score: number; // This is the OpenSearch confidence score
+  _source: any;
 }

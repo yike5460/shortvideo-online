@@ -14,6 +14,7 @@ import { cn } from '@/lib/utils'
 const ALL_MOCK_RESULTS: VideoResult[] = [
   {
     id: '1',
+    indexId: 'videos',
     title: 'Introduction to Machine Learning',
     description: 'A comprehensive guide to machine learning fundamentals.',
     thumbnailUrl: 'https://i.ytimg.com/vi/ABC123/maxresdefault.jpg',
@@ -50,6 +51,7 @@ const ALL_MOCK_RESULTS: VideoResult[] = [
   },
   {
     id: '2',
+    indexId: 'videos',
     title: 'Advanced Deep Learning Techniques',
     description: 'Exploring advanced concepts in deep learning.',
     thumbnailUrl: 'https://i.ytimg.com/vi/DEF456/maxresdefault.jpg',
@@ -87,16 +89,25 @@ const ALL_MOCK_RESULTS: VideoResult[] = [
 ]
 
 const initialSearchOptions: SearchOptions = {
+  // searchType: 'text' | 'visual' | 'audio';
+  // visualSearch: boolean;
+  // audioSearch: boolean;
+  // minConfidence: number;
+  // showConfidenceScores: boolean;
+  // selectedIndex: string | null;
+  // confidencePreset: ConfidencePreset;
+  // confidenceAdjustment: ConfidenceAdjustment;
   searchType: 'text',
-  searchQuery: '',
-  exactMatch: false,
-  topK: 20,
-  weights: {
-    text: 1.0,
-    image: 0.0,
-    video: 0.0,
-    audio: 0.0
-  },
+  visualSearch: false,
+  audioSearch: false,
+  // exactMatch: false,
+  // topK: 20,
+  // weights: {
+  //   text: 1.0,
+  //   image: 0.0,
+  //   video: 0.0,
+  //   audio: 0.0
+  // },
   minConfidence: 0.5,
   showConfidenceScores: true,
   selectedIndex: null,
@@ -175,6 +186,7 @@ export default function HomePage() {
     }
 
     const filterResults = () => {
+      // Use the mock data for now
       return ALL_MOCK_RESULTS.filter(result => {
         const query = searchQuery.toLowerCase();
         return (
