@@ -13,7 +13,7 @@ import { AwsSigv4Signer } from '@opensearch-project/opensearch/aws';
 import { v4 as uuidv4 } from 'uuid';
 
 // Initialize clients
-const dynamoClient = new DynamoDBClient({});
+const dynamoClient = new DynamoDBClient({endpoint: process.env.INDEXES_TABLE_DYNAMODB_DNS_NAME});
 const docClient = DynamoDBDocumentClient.from(dynamoClient);
 
 const openSearch = new Client({
@@ -90,6 +90,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
  * GET /indexes/{indexId} - Get specific index
  */
 async function handleGetIndex(event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> {
+  console.log('Getting index with event: ', event);
   const indexId = event.pathParameters?.indexId;
   
   // If indexId is provided, get specific index
