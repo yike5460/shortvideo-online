@@ -129,6 +129,7 @@ export interface OpenSearchHit {
 // Update VideoResult to include search confidence
 export interface VideoResult {
   id: string;
+  indexId: string;  
   title: string;
   description: string;
   thumbnailUrl: string;

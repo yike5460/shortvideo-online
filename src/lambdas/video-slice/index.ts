@@ -172,8 +172,10 @@ async function handleSNSEvent(event: SNSEvent): Promise<LambdaResponse> {
   const message = JSON.parse(event.Records[0].Sns.Message);
   const jobId = message.JobId;
   const status = message.Status;
-  const videoId = message.Video.S3ObjectName.split('/').pop()?.split('.')[0];
+  // e.g. RawVideos/2025-02-27/kyiamzn/bc4d6c51-0238-484c-9c8a-81a605e08774/VoC05.mp4
+  const videoId = message.Video.S3ObjectName.split('/')[3];
   const videoIndex = message.Video.S3ObjectName.split('/')[2];
+
   console.log('Processing Rekognition notification for job type:', message.API, 'jobId:', jobId, 'status:', status, 'videoIndex:', videoIndex, 'videoId:', videoId, 'message:', message);
   console.log('Video information before processing:', await openSearch.get({index: videoIndex, id: videoId}));
 

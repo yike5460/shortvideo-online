@@ -13,7 +13,8 @@ const API_ENDPOINT = process.env.NEXT_PUBLIC_API_URL
 interface UploadStepProps {
   onNext: (files: File[], uploadIds: string[]) => void
   onBack: () => void
-  indexId?: string  // Add indexId prop to receive from parent
+  indexId?: string
+  skipRedirect?: boolean
 }
 
 interface UploadProgress {
@@ -29,7 +30,12 @@ interface YouTubeUpload {
   tags?: string[]
 }
 
-export default function UploadStep({ onNext, onBack, indexId = 'videos' }: UploadStepProps) {
+export default function UploadStep({ 
+  onNext, 
+  onBack, 
+  indexId = 'videos',
+  skipRedirect = false 
+}: UploadStepProps) {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
   const [youtubeUrl, setYoutubeUrl] = useState('')
   const [error, setError] = useState<string>('')
@@ -213,13 +219,16 @@ export default function UploadStep({ onNext, onBack, indexId = 'videos' }: Uploa
 
       const uploadIds = await Promise.all(uploadPromises)
       
-      // Redirect to processing page with index parameter
-      if (indexId) {
-        router.push(`/indexing/progress?id=${indexId}`)
-      } else {
-        router.push('/videos')
+      // Only redirect if skipRedirect is false
+      if (!skipRedirect) {
+        if (indexId) {
+          router.push(`/videos?index=${indexId}`)
+        } else {
+          router.push('/videos')
+        }
       }
       
+      // Always call onNext with the files and uploadIds
       onNext(selectedFiles, uploadIds)
     } catch (err) {
       setError('Failed to upload one or more files. Please try again.')

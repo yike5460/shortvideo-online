@@ -16,8 +16,7 @@ const UploadStep = dynamic(() => import('@/components/indexing/UploadStep'), {
 })
 
 const IndexProgress = dynamic(() => import('@/components/indexing/IndexProgress'), {
-  loading: () => <div>Loading...</div>,
-  ssr: false
+  ssr: false,
 })
 
 type Step = 'create' | 'upload' | 'progress'
@@ -30,6 +29,7 @@ export default function CreatePage() {
     name: string;
     models: string[];
   } | null>(null)
+  const [uploadedVideoIds, setUploadedVideoIds] = useState<string[]>([])
 
   const handleIndexCreation = async (data: { name: string; models: string[] }) => {
     try {
@@ -46,15 +46,23 @@ export default function CreatePage() {
     }
   };
 
-  const handleUpload = async (files: File[]) => {
-    // Handle upload completion
-    console.log('Upload completed for files:', files)
-    router.push('/videos')
+  // This function is called when uploads are complete
+  const handleUpload = async (files: File[], uploadIds: string[]) => {
+    console.log('Upload completed for files:', files, 'with IDs:', uploadIds);
+    
+    // Store the uploaded video IDs for the progress step
+    setUploadedVideoIds(uploadIds);
+    
+    // Move to the progress step instead of redirecting
+    setStep('progress');
   }
 
+  // This function is called when indexing is complete
   const handleIndexingComplete = () => {
     if (indexData?.name) {
-      router.push(`/videos?index=${indexData.name}`)
+      router.push(`/videos?index=${indexData.name}`);
+    } else {
+      router.push('/videos');
     }
   }
 
@@ -80,14 +88,20 @@ export default function CreatePage() {
           )}
           {step === 'upload' && indexData && (
             <UploadStep
+              // Called when upload completes with files and uploadIds
               onNext={handleUpload}
-              onBack={() => setStep('create')}
+              // Returns to index creation step when back button clicked
+              onBack={() => setStep('create')} 
+              // Passes the index name to upload videos into the correct index
               indexId={indexData.name}
+              // Don't redirect in the component - let the parent handle it
+              skipRedirect={true}
             />
           )}
           {step === 'progress' && indexData?.name && (
             <IndexProgress
               indexId={indexData.name}
+              videoIds={uploadedVideoIds}
               onComplete={handleIndexingComplete}
             />
           )}

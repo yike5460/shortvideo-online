@@ -873,9 +873,9 @@ export class VideoSearchStack extends cdk.Stack {
     // /videos/upload                         POST - Start upload
     // /videos/upload/{videoId}/complete      POST - Complete upload
     // /videos/youtube                        POST - YouTube upload
-    // /videos/{videoId} or /videos/          GET  - Get specific video details or all videos
-    // /videos/{videoId} or /videos/          DELETE - Delete specific video or all videos
-    // /videos/status/{videoId}               GET  - Check status, uploading, slicing, indexing, completed, failed
+    // /videos/?index={indexId} or /videos/   GET  - Get specific video details or all videos
+    // /videos/?index={indexId} or /videos/   DELETE - Delete specific video or all videos
+    // /videos/status/?index={indexId}        GET  - Check status, uploading, slicing, indexing, completed, failed
     // /videos/search                         POST - Search videos
 
     // Dynamic index management

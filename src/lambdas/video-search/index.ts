@@ -225,7 +225,8 @@ const transformSearchResults = (hits: any[]): VideoResult[] => {
       status: hit._source.video_status,
       size: hit._source.video_size || 0,
       segments: limitedSegments,
-      searchConfidence: normalizedScore // Use normalized score
+      searchConfidence: normalizedScore, // Use normalized score
+      indexId: hit._source.video_index || 'videos'
     };
   });
 };

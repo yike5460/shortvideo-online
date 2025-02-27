@@ -111,19 +111,20 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<LambdaRespon
     // ```http
     //   GET    /videos                         - List all videos
     //   GET    /videos/{videoId}               - Get video details
+    //   GET    /videos/status?index={indexId}  - Get index status
     //   POST   /videos/upload                  - Start upload
     //   POST   /videos/upload/{videoId}/complete - Complete upload
     //   DELETE /videos/{videoId}               - Delete video
     // ```
 
     if (method === 'GET') {
-      if (path === '/videos' || path.endsWith('/videos/')) {
-        return handleListVideos();
-      } else if (path.startsWith('/videos/')) {
-        const videoId = path.split('/').pop();
-        if (videoId) {
-          return handleGetVideo(videoId);
-        }
+      // Handle status endpoint
+      if (path.endsWith('/videos/status') || path.endsWith('/videos/status/')) {
+        return handleGetIndexStatus(event);
+      }
+      // Handle query string for specific index, e.g. /videos?index=videos or wildcard search across all indexes, e.g. /videos or /videos/
+      else if (path === '/videos' || path.endsWith('/videos/')) {
+        return handleListVideos(event);
       }
     } else if (method === 'POST') {
       if (path.endsWith('/upload')) {
@@ -157,13 +158,25 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<LambdaRespon
   }
 };
 
-async function handleListVideos(): Promise<LambdaResponse> {
+async function handleListVideos(event: APIGatewayProxyEvent): Promise<LambdaResponse> {
+  // If the indexId is provided in the query string e.g. /videos?index=videos, use that index, otherwise it's wildcard search across all indexes
   try {
+    // Extract the index from query parameters
+    const queryParams = event.queryStringParameters || {};
+    const indexId = queryParams.index;
+    
+    console.log(`Listing videos with index filter: ${indexId || 'all indexes'}`);
+    
     // Add pagination parameters
     const pageSize = 20;  // Limit number of videos per request
+    const page = parseInt(queryParams.page || '1', 10);
+    const from = (page - 1) * pageSize;
+    
+    // Determine which index to search
+    const searchIndex = indexId || '*';
     
     const { body } = await openSearch.search({
-      index: 'videos',
+      index: searchIndex,
       body: {
         query: {
           bool: {
@@ -174,9 +187,11 @@ async function handleListVideos(): Promise<LambdaResponse> {
         },
         sort: [{ created_at: { order: 'desc' } }],
         size: pageSize,
+        from: from,
         // Only return necessary fields
         _source: [
           'video_id',
+          'video_index',
           'video_title',
           'video_description',
           'video_s3_path',
@@ -184,7 +199,7 @@ async function handleListVideos(): Promise<LambdaResponse> {
           'video_type',
           'video_status',
           'video_size',
-          'created_at'
+          'created_at',
         ]
       }
     });
@@ -201,7 +216,8 @@ async function handleListVideos(): Promise<LambdaResponse> {
       uploadDate: hit._source.created_at,
       format: hit._source.video_type,
       status: hit._source.video_status,
-      size: hit._source.video_size
+      size: hit._source.video_size,
+      indexId: hit._source.video_index || 'videos'
     }));
 
     return {
@@ -210,7 +226,9 @@ async function handleListVideos(): Promise<LambdaResponse> {
       body: JSON.stringify({
         videos,
         total: body.hits.total.value,
-        hasMore: body.hits.total.value > pageSize
+        hasMore: body.hits.total.value > (from + pageSize),
+        page,
+        pageSize
       })
     };
   } catch (error) {
@@ -218,18 +236,133 @@ async function handleListVideos(): Promise<LambdaResponse> {
     return {
       statusCode: STATUS_CODES.INTERNAL_SERVER_ERROR,
       headers: corsHeaders,
-      body: JSON.stringify({ error: 'Failed to list videos' })
+      body: JSON.stringify({ 
+        error: 'Failed to list videos',
+        details: error instanceof Error ? error.message : 'Unknown error'
+      })
     };
   }
 }
 
-async function handleGetVideo(videoId: string): Promise<LambdaResponse> {
+/**
+ * Handle getting the status of an index
+ * This endpoint returns the overall status of videos in an index
+ */
+async function handleGetIndexStatus(event: APIGatewayProxyEvent): Promise<LambdaResponse> {
   try {
+    const queryParams = event.queryStringParameters || {};
+    const indexId = queryParams.index;
+    
+    if (!indexId) {
+      return {
+        statusCode: STATUS_CODES.BAD_REQUEST,
+        headers: corsHeaders,
+        body: JSON.stringify({ error: 'Missing index parameter' })
+      };
+    }
+    
+    console.log(`Getting status for index: ${indexId}`);
+    
+    // Query OpenSearch for videos in this index
+    const { body } = await openSearch.search({
+      index: indexId,
+      body: {
+        query: {
+          bool: {
+            must_not: [
+              { term: { video_status: 'deleted' } }
+            ]
+          }
+        },
+        size: 100, // Limit to 100 videos
+        _source: ['video_id', 'video_status', 'video_title', 'error', 'created_at']
+      }
+    });
+    
+    // Count videos by status
+    const videos = body.hits.hits.map((hit: any) => ({
+      id: hit._id,
+      status: hit._source.video_status,
+      title: hit._source.video_title,
+      error: hit._source.error,
+      uploadDate: hit._source.created_at
+    }));
+    
+    const videoCount = videos.length;
+    const completedCount = videos.filter((v: VideoResult) => v.status === 'ready').length;
+    const processingCount = videos.filter((v: VideoResult) => 
+      v.status !== 'ready' && 
+      v.status !== 'error' && 
+      v.status !== 'deleted'
+    ).length;
+    const failedCount = videos.filter((v: VideoResult) => v.status === 'error').length;
+    
+    // Determine overall status
+    let status: 'processing' | 'completed' | 'failed' = 'processing';
+    if (videoCount === 0) {
+      status = 'completed'; // No videos is technically "complete"
+    } else if (failedCount > 0) {
+      status = 'failed';
+    } else if (completedCount === videoCount) {
+      status = 'completed';
+    }
+    
+    // Calculate progress percentage
+    const progress = videoCount > 0 
+      ? Math.round((completedCount / videoCount) * 100) 
+      : 100;
+    
+    // Get the most recently created video that's still processing
+    const currentVideo = videos
+      .filter((v: VideoResult) => v.status !== 'ready' && v.status !== 'error')
+      .sort((a: VideoResult, b: VideoResult) => new Date(b.uploadDate).getTime() - new Date(a.uploadDate).getTime())[0];
+    
+    // Format response to match IndexStatus interface in IndexProgress.tsx
+    const response = {
+      status,
+      progress,
+      videoCount,
+      completedCount,
+      failedCount,
+      processingCount,
+      currentVideo: currentVideo ? {
+        id: currentVideo.id,
+        name: currentVideo.title || 'Untitled Video',
+        status: currentVideo.status,
+        thumbnail: '' // We don't have thumbnails yet
+      } : undefined
+    };
+    
+    return {
+      statusCode: STATUS_CODES.OK,
+      headers: corsHeaders,
+      body: JSON.stringify(response)
+    };
+  } catch (error) {
+    console.error('Error getting index status:', error);
+    return {
+      statusCode: STATUS_CODES.INTERNAL_SERVER_ERROR,
+      headers: corsHeaders,
+      body: JSON.stringify({ 
+        error: 'Failed to get index status',
+        details: error instanceof Error ? error.message : 'Unknown error'
+      })
+    };
+  }
+}
+
+// Obsolete for now
+async function handleGetVideo(videoId: string, indexId?: string): Promise<LambdaResponse> {
+  try {
+    // Use the provided index or default to 'videos'
+    const searchIndex = indexId || 'videos';
+    
     const { body } = await openSearch.get({
-      index: 'videos',
+      index: searchIndex,
       id: videoId,
       // Only fetch required fields
       _source: [
+        'video_index',
         'video_title',
         'video_description',
         'video_s3_path',
@@ -258,6 +391,7 @@ async function handleGetVideo(videoId: string): Promise<LambdaResponse> {
     // Transform to minimal VideoResult interface
     const video: VideoResult = {
       id: videoId,
+      indexId: body._source.video_index || searchIndex,
       title: body._source.video_title || '',
       description: body._source.video_description || '',
       thumbnailUrl: '', // Will be generated separately
