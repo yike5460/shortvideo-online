@@ -388,6 +388,18 @@ export class VideoSearchStack extends cdk.Stack {
     lambdaSG.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(443), 'Allow HTTPS inbound');
     lambdaSG.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(80), 'Allow HTTP inbound');
 
+    // Extract just the DNS name part by splitting at ':' and selecting the second part, to remove DNS zone ID prefix 
+    const dynamoDbEndpointDns = cdk.Fn.select(
+      1, 
+      cdk.Fn.split(
+        ':', 
+        cdk.Fn.select(0, this.dynamodbEndpoint.vpcEndpointDnsEntries)
+      )
+    );
+
+    // Assemble to valid endpoint URL
+    const dynamoDbEndpointDnsHttp = `https://${dynamoDbEndpointDns}`;
+
     const commonLambdaProps = {
       runtime: lambda.Runtime.NODEJS_20_X,
       vpc: this.vpc,
@@ -399,6 +411,9 @@ export class VideoSearchStack extends cdk.Stack {
         // QUEUE_URL: this.videoProcessingQueue.queueUrl,
         OPENSEARCH_ENDPOINT: `https://${this.openSearchCollection.attrId}.${this.region}.aoss.amazonaws.com`,
         REDIS_ENDPOINT: this.redisCluster.attrRedisEndpointAddress,
+        // Explicitly specify the DynamoDB endpoint since Private DNS can't be enabled because the service com.amazonaws.<region>.dynamodb does not provide a privateDNS name. Use Fn.select to properly extract the first DNS entry from the list
+        INDEXES_TABLE_DYNAMODB_DNS_NAME: dynamoDbEndpointDnsHttp,
+        INDEXES_TABLE: this.indexesTable.tableName
       },
       bundling: {
         minify: true,
@@ -554,7 +569,7 @@ export class VideoSearchStack extends cdk.Stack {
         REDIS_ENDPOINT: this.redisCluster.attrRedisEndpointAddress,
         INDEXES_TABLE: this.indexesTable.tableName,
         // Explicitly specify the DynamoDB endpoint since Private DNS can't be enabled because the service com.amazonaws.<region>.dynamodb does not provide a privateDNS name. Use Fn.select to properly extract the first DNS entry from the list
-        INDEXES_TABLE_DYNAMODB_DNS_NAME: dynamoDbEndpointDnsHttp
+        INDEXES_TABLE_DYNAMODB_DNS_NAME: dynamoDbEndpointDnsHttp,
       },
       bundling: {
         // Minify the code to reduce bundle size
@@ -1116,7 +1131,8 @@ export class VideoSearchStack extends cdk.Stack {
     // queue.grantConsumeMessages(lambdaFunctions.videoSliceFunction);
 
     // Grant DynamoDB permissions
-    indexesTable.grantReadWriteData(lambdaFunctions.videoSearchFunction);
+    indexesTable.grantReadWriteData(lambdaFunctions.videoUploadFunction.videoUploadHandler);
+    indexesTable.grantReadWriteData(lambdaFunctions.videoUploadFunction.youtubeUploadHandler);
     indexesTable.grantReadWriteData(lambdaFunctions.indexCrudFunction);
     indexesTable.grantReadData(lambdaFunctions.videoSearchFunction);
   }

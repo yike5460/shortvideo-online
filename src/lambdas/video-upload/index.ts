@@ -9,6 +9,8 @@ import { defaultProvider } from '@aws-sdk/credential-provider-node';
 import { AwsSigv4Signer } from '@opensearch-project/opensearch/aws';
 import { v4 as uuidv4 } from 'uuid';
 import * as path from 'path';
+import { DynamoDBDocumentClient, PutCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 
 // Initialize clients
 const s3 = new S3Client({});
@@ -24,6 +26,9 @@ const openSearch = new Client({
   }),
   node: process.env.OPENSEARCH_ENDPOINT
 });
+const dynamoClient = new DynamoDBClient({endpoint: process.env.INDEXES_TABLE_DYNAMODB_DNS_NAME});
+const docClient = DynamoDBDocumentClient.from(dynamoClient);
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token',
@@ -90,6 +95,40 @@ interface PresignRequest {
 interface CompleteUploadRequest {
   indexId: string;
   videoId: string;
+}
+
+/**
+ * Utility function to perform OpenSearch operations with retry logic
+ * @param operation Function that performs the OpenSearch operation
+ * @param maxRetries Maximum number of retry attempts
+ * @param operationName Name of the operation for logging
+ * @returns Result of the operation
+ */
+async function withRetry<T>(
+  operation: () => Promise<T>, 
+  maxRetries: number = 3, 
+  operationName: string = 'OpenSearch operation'
+): Promise<T> {
+  let retries = 0;
+  
+  while (true) {
+    try {
+      return await operation();
+    } catch (error) {
+      retries++;
+      
+      if (retries >= maxRetries) {
+        console.error(`Failed ${operationName} after ${maxRetries} retries:`, error);
+        throw error;
+      }
+      
+      console.warn(`${operationName} failed (retry ${retries}/${maxRetries}):`, error);
+      
+      // Exponential backoff: 1s, 2s, 4s
+      const delay = Math.pow(2, retries) * 500;
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
 }
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<LambdaResponse> => {
@@ -161,11 +200,11 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<LambdaRespon
 async function handleListVideos(event: APIGatewayProxyEvent): Promise<LambdaResponse> {
   // If the indexId is provided in the query string e.g. /videos?index=videos, use that index, otherwise it's wildcard search across all indexes
   try {
-    // Extract the index from query parameters
+    console.log('Listing videos with query event: ', event);
+
     const queryParams = event.queryStringParameters || {};
-    const indexId = queryParams.index;
-    
-    console.log(`Listing videos with index filter: ${indexId || 'all indexes'}`);
+    // extra the index from the query string e.g. /videos/?index=videos
+    const indexId = event.queryStringParameters?.index;
     
     // Add pagination parameters
     const pageSize = 20;  // Limit number of videos per request
@@ -263,21 +302,25 @@ async function handleGetIndexStatus(event: APIGatewayProxyEvent): Promise<Lambda
     
     console.log(`Getting status for index: ${indexId}`);
     
-    // Query OpenSearch for videos in this index
-    const { body } = await openSearch.search({
-      index: indexId,
-      body: {
-        query: {
-          bool: {
-            must_not: [
-              { term: { video_status: 'deleted' } }
-            ]
-          }
-        },
-        size: 100, // Limit to 100 videos
-        _source: ['video_id', 'video_status', 'video_title', 'error', 'created_at']
-      }
-    });
+    // Query OpenSearch for videos in this index with retry logic
+    const { body } = await withRetry(
+      async () => openSearch.search({
+        index: indexId,
+        body: {
+          query: {
+            bool: {
+              must_not: [
+                { term: { video_status: 'deleted' } }
+              ]
+            }
+          },
+          size: 100, // Limit to 100 videos
+          _source: ['video_id', 'video_status', 'video_title', 'error', 'created_at']
+        }
+      }),
+      3,
+      `Search videos in index ${indexId}`
+    );
     
     // Count videos by status
     const videos = body.hits.hits.map((hit: any) => ({
@@ -540,63 +583,46 @@ async function handlePresignRequest(event: APIGatewayProxyEvent): Promise<Lambda
     };
 
     // Create the index if it doesn't exist
-    try {
-      const indexExists = await openSearch.indices.exists({ index: videoIndex });
-      if (!indexExists.body) {
-        console.log(`Index ${videoIndex} does not exist, creating it`);
-        // Use the indexSettings object to create the index
-        await openSearch.indices.create({ 
+
+    const indexExists = await openSearch.indices.exists({ index: videoIndex });
+    if (!indexExists.body) {
+      console.log(`Index ${videoIndex} does not exist, creating it`);
+      // Use the indexSettings object to create the index
+      const createResult = await withRetry(
+        async () => openSearch.indices.create({ 
           index: videoIndex, 
           body: indexSettings 
-        });
-        console.log(`Successfully created index ${videoIndex}`);
-      }
-    } catch (error) {
-      // Log the error but continue - we'll try to create the document anyway
-      console.error(`Error checking/creating index ${videoIndex}:`, error);
-      // If the error is not that the index already exists, try to create it
-      if ((error as any).meta?.body?.error?.type !== 'resource_already_exists_exception') {
-        try {
-          console.log(`Attempting to create index ${videoIndex} after error`);
-          await openSearch.indices.create({ 
-            index: videoIndex,
-            body: indexSettings 
-          });
-          console.log(`Successfully created index ${videoIndex} after error`);
-        } catch (createError) {
-          console.error(`Failed second attempt to create index ${videoIndex}:`, createError);
-          // Continue anyway - the document creation might still work if the index exists
-        }
-      }
+        }),
+        3,
+        `Create index ${videoIndex}`
+      );
+      console.log(`Successfully created index ${videoIndex}`);
     }
 
     // Create initial OpenSearch document with error handling
-    try {
-      await openSearch.index({
+    const indexResult = await withRetry(
+      async () => openSearch.index({
         index: videoIndex,
         id: videoId,
         body: aossInitialBody
-      });
-      console.log(`Successfully indexed initial document for video ${videoId} in index ${videoIndex}`);
-    } catch (indexError) {
-      console.error(`Error indexing initial document for video ${videoId} in index ${videoIndex}:`, indexError);
-      // If we can't index the document, we should still return a pre-signed URL
-      // but log the error for debugging
-    }
+      }),
+      3,
+      `Index initial document for video ${videoId} in index ${videoIndex}`
+    );
+    console.log(`Successfully indexed initial document for video ${videoId} in index ${videoIndex}`);
 
     // Test the OpenSearch connection - make this optional with error handling
-    try {
-      const { body: testResult } = await openSearch.search({
+    const testResult = await withRetry(
+      async () => openSearch.search({
         index: videoIndex,
         body: {
           query: { match_all: {} }
         }
-      });
-      console.log(`OpenSearch test query result: ${JSON.stringify(testResult)}`);
-    } catch (searchError) {
-      // This is just a test query, so we can continue if it fails
-      console.warn(`OpenSearch test query failed for index ${videoIndex}:`, searchError);
-    }
+      }),
+      3,
+      `Test query for index ${videoIndex}`
+    );
+    console.log(`OpenSearch test query result: ${JSON.stringify(testResult)}`);
 
     // Generate pre-signed URL for S3 upload
     const command = new PutObjectCommand({
@@ -637,13 +663,18 @@ async function handlePresignRequest(event: APIGatewayProxyEvent): Promise<Lambda
 async function handleCompleteUpload(event: APIGatewayProxyEvent): Promise<LambdaResponse> {
   const request: CompleteUploadRequest = JSON.parse(event.body!);
   const { indexId, videoId } = request;
-  console.log('Complete upload request: ', request);
+  console.log('Complete upload request: ', request, 'The DynamoDB table name is: ', process.env.INDEXES_TABLE);
+  
   try {
     // Verify the video exists in OpenSearch
-    const { body: searchResult } = await openSearch.get({
-      index: indexId,
-      id: videoId
-    });
+    const { body: searchResult } = await withRetry(
+      async () => openSearch.get({
+        index: indexId,
+        id: videoId
+      }),
+      3,
+      `Get video ${videoId} from index ${indexId}`
+    );
 
     if (!searchResult.found) {
       return {
@@ -655,17 +686,36 @@ async function handleCompleteUpload(event: APIGatewayProxyEvent): Promise<Lambda
 
     console.log('Search result before update:', searchResult);
 
-    // Update OpenSearch with additional metadata
-    await openSearch.update({
-      index: indexId,
-      id: videoId,
-      body: {
-        doc: {  // Wrap update fields in 'doc'
+    // Record the indexId and videoId in the indexes table
+    await withRetry(
+      async () => docClient.send(new PutCommand({
+        TableName: process.env.INDEXES_TABLE,
+        Item: {
+          indexId,
+          videoId,
           video_status: 'uploaded' as VideoStatus,
           updated_at: new Date().toISOString()
         }
-      }
-    });
+      })),
+      3,
+      `Record indexId and videoId in indexes table`
+    );
+
+    // Update OpenSearch with additional metadata
+    await withRetry(
+      async () => openSearch.update({
+        index: indexId,
+        id: videoId,
+        body: {
+          doc: {  // Wrap update fields in 'doc'
+            video_status: 'uploaded' as VideoStatus,
+            updated_at: new Date().toISOString()
+          }
+        }
+      }),
+      3,
+      `Update OpenSearch with additional metadata for video ${videoId} in index ${indexId}`
+    );
 
     // Queue processing job, using S3 event instead of SQS for now
     // await sqs.send(new SendMessageCommand({
@@ -688,6 +738,7 @@ async function handleCompleteUpload(event: APIGatewayProxyEvent): Promise<Lambda
       })
     };
   } catch (error) {
+    console.error('Error completing upload:', error);
     return {
       statusCode: STATUS_CODES.INTERNAL_SERVER_ERROR,
       body: JSON.stringify({ error: error }),
