@@ -1,6 +1,6 @@
 import { APIGatewayProxyEvent } from 'aws-lambda';
 import { LambdaContext, LambdaResponse } from '../../types/aws-lambda';
-import { VideoMetadata, VideoStatus, VideoResult } from '../../types/common';
+import { VideoMetadata, VideoStatus, VideoResult, WebVideoStatus } from '../../types/common';
 import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
@@ -289,21 +289,54 @@ async function handleGetIndexStatus(event: APIGatewayProxyEvent): Promise<Lambda
     }));
     
     const videoCount = videos.length;
-    const completedCount = videos.filter((v: VideoResult) => v.status === 'ready').length;
-    const processingCount = videos.filter((v: VideoResult) => 
-      v.status !== 'ready' && 
-      v.status !== 'error' && 
-      v.status !== 'deleted'
-    ).length;
-    const failedCount = videos.filter((v: VideoResult) => v.status === 'error').length;
     
-    // Determine overall status
-    let status: 'processing' | 'completed' | 'failed' = 'processing';
+    // Define which statuses are considered "complete"
+    const completeStatuses: VideoStatus[] = ['ready'];
+    
+    // Define which statuses are considered "in progress" but not error
+    const processingStatuses: VideoStatus[] = [
+      'awaiting_upload', 
+      'uploading', 
+      'uploaded', 
+      'processing',
+      'ready_for_face',
+      'ready_for_object',
+      'ready_for_shots',
+      'ready_for_video_embed',
+      'ready_for_audio_embed'
+    ];
+    
+    // Define which statuses are considered errors
+    const errorStatuses: VideoStatus[] = ['error'];
+    
+    // Check if a video has completed all processing steps
+    // A video is considered fully processed if it has reached the 'ready_for_face', 
+    // 'ready_for_object', and 'ready_for_shots' statuses
+    const isFullyProcessed = (status: string): boolean => {
+      return status === 'ready' || 
+        (status === 'ready_for_face' || status === 'ready_for_object' || status === 'ready_for_shots');
+    };
+    
+    // Count videos by their processing state
+    const completedCount = videos.filter((v: any) => 
+      completeStatuses.includes(v.status) || isFullyProcessed(v.status)
+    ).length;
+    
+    const processingCount = videos.filter((v: any) => 
+      processingStatuses.includes(v.status) && !isFullyProcessed(v.status)
+    ).length;
+    
+    const failedCount = videos.filter((v: any) => 
+      errorStatuses.includes(v.status)
+    ).length;
+    
+    // Aggregate statuses in consideration of our support for multiple video statuses handling
+    let status: WebVideoStatus = 'processing';
     if (videoCount === 0) {
       status = 'completed'; // No videos is technically "complete"
     } else if (failedCount > 0) {
       status = 'failed';
-    } else if (completedCount === videoCount) {
+    } else if (processingCount === 0) {
       status = 'completed';
     }
     
@@ -314,8 +347,8 @@ async function handleGetIndexStatus(event: APIGatewayProxyEvent): Promise<Lambda
     
     // Get the most recently created video that's still processing
     const currentVideo = videos
-      .filter((v: VideoResult) => v.status !== 'ready' && v.status !== 'error')
-      .sort((a: VideoResult, b: VideoResult) => new Date(b.uploadDate).getTime() - new Date(a.uploadDate).getTime())[0];
+      .filter((v: any) => processingStatuses.includes(v.status) && !isFullyProcessed(v.status))
+      .sort((a: any, b: any) => new Date(b.uploadDate).getTime() - new Date(a.uploadDate).getTime())[0];
     
     // Format response to match IndexStatus interface in IndexProgress.tsx
     const response = {

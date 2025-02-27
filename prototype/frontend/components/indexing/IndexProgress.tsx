@@ -29,6 +29,7 @@ interface IndexStatus {
 
 export default function IndexProgress({ indexId, videoIds, onComplete }: IndexProgressProps) {
   const [progress, setProgress] = useState(0)
+  // Align with the WebVideoStatus enum in types/common.ts
   const [status, setStatus] = useState<'processing' | 'completed' | 'error'>('processing')
   const [error, setError] = useState<string | null>(null)
   const [currentVideo, setCurrentVideo] = useState<string | null>(null)

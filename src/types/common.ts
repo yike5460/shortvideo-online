@@ -39,6 +39,11 @@ export type VideoStatus =
   | 'error'             // Processing failed
   | 'deleted';          // Video was deleted
 
+export type WebVideoStatus = 
+  | 'processing'
+  | 'completed'
+  | 'failed'
+
 export interface VideoSegment {
   segment_id: string;
   video_id: string;
