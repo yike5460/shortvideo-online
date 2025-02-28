@@ -381,15 +381,17 @@ sequenceDiagram
     participant OpenSearch
     participant S3
 
-    Client->>API Gateway: Search Request
+    Client->>API Gateway: Search Request with selectedIndex
     API Gateway->>SearchHandler: Trigger Lambda
-    SearchHandler->>Redis: Check Cache
+    SearchHandler->>DynamoDB: Get OpenSearch index name from indexId
+    SearchHandler->>OpenSearch: Test connection with minimal query
+        SearchHandler->>Redis: Check Cache
     alt Cache Miss
         SearchHandler->>OpenSearch: Search Query
         SearchHandler->>Redis: Update Cache
     end
-    SearchHandler->>S3: Generate Presigned URLs
-    SearchHandler->>Client: Return Results
+    Note over SearchHandler,OpenSearch: Transform results to VideoResult format
+    SearchHandler->>Client: Return normalized search results
 ```
 
 4. **Network Flow**
@@ -628,8 +630,10 @@ s3://bucket-name/
 ├── ProcessedVideos/
 │   └── video_id/
 │       ├── segments/
-│       │   ├── segment_001.mp4
-│       │   └── segment_002.mp4
+│       │   ├── original_001.mp4
+│       │   ├── original_001.jpg (keyframe)
+│       │   ├── original_002.mp4
+│       │   └── original_002.jpg (keyframe)
 │       └── metadata/
 │           ├── visual_embeddings.json
 │           └── audio_embeddings.json

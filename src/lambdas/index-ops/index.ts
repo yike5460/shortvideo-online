@@ -338,24 +338,24 @@ async function handleDeleteIndex(event: APIGatewayProxyEvent): Promise<APIGatewa
       TableName: process.env.INDEXES_TABLE,
       Key: { indexId }
     }));
-    
+
     if (!getResult.Item) {
       return {
-        statusCode: 404,
+        statusCode: STATUS_CODES.NOT_FOUND,
         headers: corsHeaders,
         body: JSON.stringify({ error: 'Index not found' })
       };
     }
-    
-    const openSearchIndexName = getResult.Item.openSearchIndexName;
+
+    const openSearchIndexName = getResult.Item.indexId;
     
     // Delete the index from OpenSearch
     try {
       await openSearch.indices.delete({
-        index: openSearchIndexName
+        index: indexId
       });
     } catch (deleteError) {
-      console.warn(`Error deleting OpenSearch index ${openSearchIndexName}:`, deleteError);
+      console.warn(`Error deleting OpenSearch index ${indexId}:`, deleteError);
       // Continue even if OpenSearch delete fails
     }
     
@@ -366,7 +366,7 @@ async function handleDeleteIndex(event: APIGatewayProxyEvent): Promise<APIGatewa
     }));
     
     return {
-      statusCode: 200,
+      statusCode: STATUS_CODES.OK ,
       headers: corsHeaders,
       body: JSON.stringify({
         message: 'Index deleted successfully',
@@ -376,7 +376,7 @@ async function handleDeleteIndex(event: APIGatewayProxyEvent): Promise<APIGatewa
   } catch (error) {
     console.error('Error deleting index:', error);
     return {
-      statusCode: 500,
+      statusCode: STATUS_CODES.INTERNAL_SERVER_ERROR,
       headers: corsHeaders,
       body: JSON.stringify({ 
         error: 'Failed to delete index',

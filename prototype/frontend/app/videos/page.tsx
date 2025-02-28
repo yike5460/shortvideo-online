@@ -28,11 +28,21 @@ export default function VideosPage() {
       try {
         setIsLoading(true)
         const response = await fetch(`${API_ENDPOINT}/videos`)
+        
+        // Only throw for actual HTTP errors, not for empty results
         if (!response.ok) {
-          throw new Error('Failed to fetch videos')
+          if (response.status === 404) {
+            // 404 could mean "no videos found" in some API designs - treat as empty array
+            setVideos([])
+            return
+          }
+          throw new Error(`Failed to fetch videos: ${response.statusText}`)
         }
+        
         const data: VideoResponse = await response.json()
-        setVideos(data.videos || []) // Ensure videos is always an array
+        
+        // Even if we get a successful response, videos might be null or undefined
+        setVideos(data.videos || []) 
       } catch (error) {
         console.error('Error fetching videos:', error)
         setError(error instanceof Error ? error.message : 'Failed to load videos')
@@ -77,7 +87,9 @@ export default function VideosPage() {
   if (!videos.length) {
     return (
       <div className="flex items-center justify-center h-screen">
-        <div className="text-gray-600">No videos found</div>
+        <div className="text-gray-600">
+          No videos found. <a href="/create" className="text-blue-600 hover:underline">Upload your first video</a>
+        </div>
       </div>
     )
   }

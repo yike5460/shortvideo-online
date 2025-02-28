@@ -502,11 +502,21 @@ export class VideoSearchStack extends cdk.Stack {
       }
     };
 
+    // Create FFmpeg layer for video slicing
+    const ffmpegLayer = new lambda.LayerVersion(this, 'FFmpegLayer', {
+      code: lambda.Code.fromAsset('src/layers/ffmpeg'),
+      description: 'FFmpeg binaries for video processing',
+      compatibleRuntimes: [lambda.Runtime.NODEJS_20_X],
+      compatibleArchitectures: [lambda.Architecture.X86_64],
+    });
+
     const videoSliceFunctionHandler = new nodejslambda.NodejsFunction(this, 'VideoSliceFunction', {
       ...commonLambdaProps,
       entry: 'src/lambdas/video-slice/index.ts',
       handler: 'handler',
       memorySize: 4096,
+      // Add the FFmpeg layer
+      layers: [ffmpegLayer],
       depsLockFilePath: 'src/lambdas/video-slice/package-lock.json'
     });
 

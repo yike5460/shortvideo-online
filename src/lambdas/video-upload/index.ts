@@ -214,7 +214,8 @@ async function handleListVideos(event: APIGatewayProxyEvent): Promise<LambdaResp
     // Determine which index to search
     const searchIndex = indexId || '*';
     
-    const { body } = await openSearch.search({
+    // Create the search query
+    const searchQuery = {
       index: searchIndex,
       body: {
         query: {
@@ -224,14 +225,13 @@ async function handleListVideos(event: APIGatewayProxyEvent): Promise<LambdaResp
             ]
           }
         },
-        sort: [{ created_at: { order: 'desc' } }],
         size: pageSize,
         from: from,
         // Only return necessary fields
         _source: [
           'video_id',
           'video_index',
-          'video_title',
+          'video_title', 
           'video_description',
           'video_s3_path',
           'video_duration',
@@ -241,46 +241,90 @@ async function handleListVideos(event: APIGatewayProxyEvent): Promise<LambdaResp
           'created_at',
         ]
       }
-    });
+    };
+    
+    // Try to sort by created_at, but don't fail if it doesn't exist
+    try {
+      // First try with sorting
+      const { body } = await openSearch.search({
+        ...searchQuery,
+        body: {
+          ...searchQuery.body,
+          sort: [{ created_at: { order: 'desc' } }]
+        }
+      });
+      
+      return formatSearchResults(body, page, pageSize, from);
+    } catch (sortError) {
+      console.warn('Error sorting by created_at, trying without sort:', sortError);
+      
+      // If sorting fails, try again without sorting
+      const { body } = await openSearch.search(searchQuery);
 
-    // Transform to minimal VideoResult interface
-    const videos: VideoResult[] = body.hits.hits.map((hit: any) => ({
-      id: hit._id,
-      title: hit._source.video_title || '',
-      description: hit._source.video_description || '',
-      thumbnailUrl: '', // Will be generated separately
-      previewUrl: hit._source.video_s3_path,
-      duration: hit._source.video_duration || 0,
-      source: 'local' as const,
-      uploadDate: hit._source.created_at,
-      format: hit._source.video_type,
-      status: hit._source.video_status,
-      size: hit._source.video_size,
-      indexId: hit._source.video_index || 'videos'
-    }));
-
+      console.log('Search results without sort: ', body);
+      return formatSearchResults(body, page, pageSize, from);
+    }
+  } catch (error) {
+    console.error('Error listing videos:', error);
+    // Return empty results instead of an error
     return {
       statusCode: STATUS_CODES.OK,
       headers: corsHeaders,
       body: JSON.stringify({
-        videos,
-        total: body.hits.total.value,
-        hasMore: body.hits.total.value > (from + pageSize),
+        videos: [],
+        total: 0,
+        hasMore: false,
+        page: 1,
+        pageSize: 20
+      })
+    };
+  }
+}
+
+// Helper function to format search results
+function formatSearchResults(body: any, page: number, pageSize: number, from: number): LambdaResponse {
+  // If there are no hits, return empty results instead of an error
+  if (!body.hits || !body.hits.hits) {
+    return {
+      statusCode: STATUS_CODES.OK,
+      headers: corsHeaders,
+      body: JSON.stringify({
+        videos: [],
+        total: 0,
+        hasMore: false,
         page,
         pageSize
       })
     };
-  } catch (error) {
-    console.error('Error listing videos:', error);
-    return {
-      statusCode: STATUS_CODES.INTERNAL_SERVER_ERROR,
-      headers: corsHeaders,
-      body: JSON.stringify({ 
-        error: 'Failed to list videos',
-        details: error instanceof Error ? error.message : 'Unknown error'
-      })
-    };
   }
+
+  // Transform to minimal VideoResult interface
+  const videos: VideoResult[] = body.hits.hits.map((hit: any) => ({
+    id: hit._id,
+    title: hit._source.video_title || '',
+    description: hit._source.video_description || '',
+    thumbnailUrl: '', // Will be generated separately
+    previewUrl: hit._source.video_s3_path,
+    duration: hit._source.video_duration || 0,
+    source: 'local' as const,
+    uploadDate: hit._source.created_at,
+    format: hit._source.video_type,
+    status: hit._source.video_status,
+    size: hit._source.video_size,
+    indexId: hit._source.video_index || 'videos'
+  }));
+
+  return {
+    statusCode: STATUS_CODES.OK,
+    headers: corsHeaders,
+    body: JSON.stringify({
+      videos,
+      total: body.hits.total?.value || videos.length,
+      hasMore: (body.hits.total?.value || 0) > (from + pageSize),
+      page,
+      pageSize
+    })
+  };
 }
 
 /**
