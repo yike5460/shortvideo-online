@@ -355,11 +355,11 @@ async function sendSegmentSlicingRequest(videoIndex: string, videoId: string, se
     const segment = sortedSegments[i];
     const segmentNumber = i + 1; // Start from 1 for human readability
     
-    // Check if this is a FIFO queue (ends with .fifo)
+    // Check if we're using a FIFO queue
     const isFifoQueue = queueUrl.endsWith('.fifo');
     
-    // Create the message command with appropriate settings based on queue type
-    const messageParams: any = {
+    // Create the base command parameters
+    const commandParams: any = {
       QueueUrl: queueUrl,
       MessageBody: JSON.stringify({ 
         videoIndex, 
@@ -367,16 +367,21 @@ async function sendSegmentSlicingRequest(videoIndex: string, videoId: string, se
         segment, 
         originalVideoKey,
         segmentNumber
-      }),
+      })
     };
     
-    // Only add FIFO-specific attributes if it's a FIFO queue
+    // Add FIFO-specific attributes if needed
     if (isFifoQueue) {
-      messageParams.MessageGroupId = videoId; // Group by videoId to ensure segments from same video are processed in order
-      messageParams.MessageDeduplicationId = `${videoId}-segment-${segmentNumber}`; // Ensure uniqueness
+      // Create multiple message groups for better parallelism
+      // This distributes processing across different message groups
+      // We'll create 10 message groups per video to allow parallel processing
+      const groupNumber = segmentNumber % 10; // Split into 10 groups (0-9)
+      
+      commandParams.MessageGroupId = `${videoId}-group-${groupNumber}`; // Distribute across groups
+      commandParams.MessageDeduplicationId = `${videoId}-segment-${segmentNumber}-${Date.now()}`; // Ensure uniqueness with timestamp
     }
     
-    const command = new SendMessageCommand(messageParams);
+    const command = new SendMessageCommand(commandParams);
     
     try {
       await sqs.send(command);
@@ -495,15 +500,24 @@ async function processSegmentDetection(
         const startTimeSeconds = slicedSegment.start_time / 1000;
         const durationSeconds = slicedSegment.duration / 1000;
         
-        console.log(`Running ffmpeg to slice video: ${ffmpegPath} -ss ${startTimeSeconds} -i ${localInputPath} -t ${durationSeconds} -c copy -y ${localOutputPath}`);
+        // Choose preset based on segment duration
+        // For longer segments, use a faster preset to prevent Lambda timeouts
+        // For shorter segments, we can afford better quality
+        const preset = durationSeconds > 20 ? 'veryfast' : 'medium';
         
-        // Use FFmpeg to slice the video from local file
+        console.log(`Running ffmpeg to slice video and re-encode to H.264 (preset: ${preset}): ${ffmpegPath} -ss ${startTimeSeconds} -i ${localInputPath} -t ${durationSeconds} -c:v libx264 -preset ${preset} -crf 23 -c:a aac -b:a 128k -y ${localOutputPath}`);
+        
+        // Use FFmpeg to slice the video from local file and re-encode to H.264
         const ffmpegProcess = spawn(ffmpegPath, [
           '-ss', startTimeSeconds.toString(),
           '-i', localInputPath,
           '-t', durationSeconds.toString(),
-          '-c', 'copy',  // Copy codec for faster processing, TODO, re-codec to h264
-          '-y',          // Overwrite output file
+          '-c:v', 'libx264',  // Encode to H.264
+          '-preset', preset,  // Dynamic preset based on segment duration
+          '-crf', '23',       // Constant Rate Factor for quality control (lower is better quality, 23 is default)
+          '-c:a', 'aac',      // Re-encode audio to AAC
+          '-b:a', '128k',     // Audio bitrate
+          '-y',               // Overwrite output file
           localOutputPath
         ]);
 

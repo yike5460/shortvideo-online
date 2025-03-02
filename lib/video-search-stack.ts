@@ -524,8 +524,14 @@ export class VideoSearchStack extends cdk.Stack {
       depsLockFilePath: 'src/lambdas/video-slice/package-lock.json'
     });
 
-    // Add event source from the video processing queue
-    videoSliceFunctionHandler.addEventSource(new SqsEventSource(this.videoProcessingQueue));
+    // Add event source from the video processing queue, set the batch size to 1, MaximumBatchingWindowInSeconds to 10 seconds
+    videoSliceFunctionHandler.addEventSource(new SqsEventSource(this.videoProcessingQueue, {
+      batchSize: 1,
+      // Don't wait to accumulate messages
+      maxBatchingWindow: cdk.Duration.seconds(0),
+      // Report batch item failures, refer to https://docs.aws.amazon.com/lambda/latest/dg/services-sqs-errorhandling.html#services-sqs-batchfailurereporting
+      reportBatchItemFailures: true
+    }));
 
     // Add event source from sns topic
     videoSliceFunctionHandler.addEventSource(new SnsEventSource(this.rekognitionTopic));

@@ -431,10 +431,8 @@ async function handleGetIndexStatus(event: APIGatewayProxyEvent): Promise<Lambda
       ? Math.round((completedCount / videoCount) * 100) 
       : 100;
     
-    // Get the most recently created video that's still processing
-    const currentVideo = videos
-      .filter((v: any) => processingStatuses.includes(v.status) && !isFullyProcessed(v.status))
-      .sort((a: any, b: any) => new Date(b.uploadDate).getTime() - new Date(a.uploadDate).getTime())[0];
+    // Get the most recently created video
+    const currentVideo = videos.sort((a: any, b: any) => new Date(b.uploadDate).getTime() - new Date(a.uploadDate).getTime())[0];
     
     // Format response to match IndexStatus interface in IndexProgress.tsx
     const response = {
