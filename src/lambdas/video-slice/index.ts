@@ -54,7 +54,7 @@ const STATUS_CODES = {
   INTERNAL_SERVER_ERROR: 500
 };
 
-export const handler = async (event: S3Event | SNSEvent, _context: LambdaContext): Promise<LambdaResponse> => {
+export const handler = async (event: S3Event | SNSEvent | SQSEvent, _context: LambdaContext): Promise<LambdaResponse> => {
   try {
     console.log('Received event:', event);
     // Handle S3 event for new video upload, sample format below:
@@ -90,6 +90,40 @@ export const handler = async (event: S3Event | SNSEvent, _context: LambdaContext
     // }
     if ('Records' in event && 'EventSource' in event.Records[0] && event.Records[0].EventSource === 'aws:sns') {
       return handleSNSEvent(event as SNSEvent);
+    }
+
+    // Handle SQS message for video slicing, sample format below:
+    // {
+    //  Records: [
+    //    {
+    //      messageId: '3879ceb7-5c0f-4236-ae03-814654de7b88',
+    //      receiptHandle: '',
+    //      body: '{"videoIndex":"xx",
+    //              "videoId":"yy",
+    //              "segment":{"DurationFrames":19,
+    //                        "DurationMillis":3000,
+    //                        "DurationSMPTE":"00:00:03:00",
+    //                        "EndFrameNumber":19,
+    //                        "EndTimecodeSMPTE":"00:00:03:00",
+    //                        "EndTimestampMillis":3000,
+    //                        "ShotSegment":{"Confidence":99.9995346069336,
+    //                                      "Index":0},
+    //                        "StartFrameNumber":0,
+    //                        "StartTimecodeSMPTE":"00:00:00:00",
+    //                        "StartTimestampMillis":0,
+    //                        "Type":"SHOT"},
+    //                        "originalVideoKey":"RawVideos/2025-03-02/videoIndex/videoId/videoFileNameWithExtension"}',
+    //      attributes: [Object],
+    //      messageAttributes: {},
+    //      md5OfBody: '',
+    //      eventSource: 'aws:sqs',
+    //      eventSourceARN: '',
+    //      awsRegion: ''
+    //    }
+    //  ]
+    // }
+    if ('Records' in event && 'eventSource' in event.Records[0] && event.Records[0].eventSource === 'aws:sqs') {
+      return handleVideoSlicingEvent(event as unknown as SQSEvent);
     }
 
     return {
@@ -178,7 +212,7 @@ async function handleSNSEvent(event: SNSEvent): Promise<LambdaResponse> {
   const message = JSON.parse(event.Records[0].Sns.Message);
   const jobId = message.JobId;
   const status = message.Status;
-  // e.g. RawVideos/2025-02-27/kyiamzn/bc4d6c51-0238-484c-9c8a-81a605e08774/VoC05.mp4
+  // e.g. RawVideos/2025-02-27/indexId/videoId/videoFileName
   const videoId = message.Video.S3ObjectName.split('/')[3];
   const videoIndex = message.Video.S3ObjectName.split('/')[2];
 
@@ -190,8 +224,9 @@ async function handleSNSEvent(event: SNSEvent): Promise<LambdaResponse> {
       // Get job results based on job type
       if (message.API === 'StartSegmentDetection') {
         const segments = await getSegmentDetectionResults(jobId);
-        const slicedSegments = await processSegmentDetection(videoIndex, videoId, segments);
-        await updateVideoSegments(videoIndex, videoId, slicedSegments);
+        await sendSegmentSlicingRequest(videoIndex, videoId, segments);
+        // const slicedSegments = await processSegmentDetection(videoIndex, videoId, segments);
+        // await updateVideoSegments(videoIndex, videoId, slicedSegments);
       } else if (message.API === 'StartLabelDetection') {
         const labels = await getLabelDetectionResults(jobId);
         await updateVideoLabels(videoIndex, videoId, labels);
@@ -227,6 +262,50 @@ async function handleSNSEvent(event: SNSEvent): Promise<LambdaResponse> {
   };
 }
 
+async function handleVideoSlicingEvent(event: SQSEvent): Promise<LambdaResponse> {
+  try {
+    // Parse the SQS message body
+    const { videoIndex, videoId, segment, originalVideoKey, segmentNumber } = JSON.parse(event.Records[0].body);
+    
+    // Make sure we have the bucket name from environment variables
+    const bucketName = process.env.VIDEO_BUCKET;
+    if (!bucketName) {
+      throw new Error('VIDEO_BUCKET environment variable is not set');
+    }
+    
+    console.log(`Processing video segment ${segmentNumber} for videoId: ${videoId}, index: ${videoIndex}, bucket: ${bucketName}, key: ${originalVideoKey}, segment: ${JSON.stringify(segment)}`);
+    
+    // Pass the bucket name and segment number explicitly to the processing function
+    const slicedSegments = await processSegmentDetection(
+      videoIndex, 
+      videoId, 
+      segment, 
+      originalVideoKey, 
+      bucketName,
+      segmentNumber // Use the sequential segment number instead of messageId
+    );
+    
+    if (slicedSegments) {
+      await updateVideoSegments(videoIndex, videoId, [slicedSegments]);
+    }
+    
+    return {
+      statusCode: STATUS_CODES.OK,
+      headers: corsHeaders,
+      body: JSON.stringify({ 
+        message: 'Video slicing completed',
+        videoId,
+        videoIndex,
+        segmentNumber,
+        segmentId: slicedSegments?.segment_id
+      })
+    };
+  } catch (error) {
+    console.error('Error processing video segments:', error);
+    throw error; // Re-throw to trigger Lambda retry mechanism
+  }
+}
+
 async function updateVideoStatus(videoIndex: string, videoId: string, status: VideoStatus, additionalFields?: Partial<VideoMetadata>) {
   await openSearch.update({
     index: videoIndex,
@@ -241,184 +320,309 @@ async function updateVideoStatus(videoIndex: string, videoId: string, status: Vi
   });
 }
 
-async function processSegmentDetection(videoIndex: string, videoId: string, segments: SegmentDetection[]): Promise<VideoSegment[]> {
+async function sendSegmentSlicingRequest(videoIndex: string, videoId: string, segments: SegmentDetection[]): Promise<void> {
+  // Send a message to the video slicing queue per segment
+  const queueUrl = process.env.VIDEO_SLICING_QUEUE_URL;
+  if (!queueUrl) {
+    throw new Error('VIDEO_SLICING_QUEUE_URL is not set');
+  }
+  
+  // Get the original video (video_s3_path) from OpenSearch
+  const { body: videoMetadata } = await openSearch.get({
+    index: videoIndex,
+    id: videoId
+  });
+
+  if (!videoMetadata || !videoMetadata.found) {
+    console.warn('Video metadata not found for video:', videoId);
+    return;
+  }
+
+  // The video_s3_path is in format `RawVideos/${timestamp}/${videoIndex}/${videoId}/${sanitizedFileName}`
+  const originalVideoKey = videoMetadata._source.video_s3_path;
+  if (!originalVideoKey) {
+    console.warn('Original video path not found for video:', videoId);
+    return;
+  }
+
+  // Sort segments by start time to ensure they're processed in chronological order
+  const sortedSegments = [...segments].sort((a, b) => 
+    (a.StartTimestampMillis || 0) - (b.StartTimestampMillis || 0)
+  );
+
+  // Send a message to the video slicing queue per segment with sequential segment numbers
+  for (let i = 0; i < sortedSegments.length; i++) {
+    const segment = sortedSegments[i];
+    const segmentNumber = i + 1; // Start from 1 for human readability
+    
+    // Check if this is a FIFO queue (ends with .fifo)
+    const isFifoQueue = queueUrl.endsWith('.fifo');
+    
+    // Create the message command with appropriate settings based on queue type
+    const messageParams: any = {
+      QueueUrl: queueUrl,
+      MessageBody: JSON.stringify({ 
+        videoIndex, 
+        videoId, 
+        segment, 
+        originalVideoKey,
+        segmentNumber
+      }),
+    };
+    
+    // Only add FIFO-specific attributes if it's a FIFO queue
+    if (isFifoQueue) {
+      messageParams.MessageGroupId = videoId; // Group by videoId to ensure segments from same video are processed in order
+      messageParams.MessageDeduplicationId = `${videoId}-segment-${segmentNumber}`; // Ensure uniqueness
+    }
+    
+    const command = new SendMessageCommand(messageParams);
+    
+    try {
+      await sqs.send(command);
+      console.log(`Sent segment ${segmentNumber}/${sortedSegments.length} for video ${videoId} to processing queue`);
+    } catch (error) {
+      console.error('Error sending segment slicing request:', error, " for the segment:", segment);
+    }
+  }
+}
+
+async function processSegmentDetection(
+  videoIndex: string,
+  videoId: string,
+  segment: SegmentDetection,
+  originalVideoKey: string,
+  bucketName: string,
+  segmentNumber: number
+): Promise<VideoSegment | null> {
   try {
-    // 1. Check if the segments are already processed
-    if (!segments || segments.length === 0) {
-      console.log('No segments detected for video:', videoId);
-      return [];
+    // Check if the segments are already processed
+    if (!segment) {
+      console.warn('No segments detected for video:', videoId);
+      return null;
+    }
+
+    const slicedSegment: VideoSegment = {
+      segment_id: `${videoId}_segment_${segmentNumber}`,
+      video_id: videoId,
+      start_time: segment.StartTimestampMillis || 0,
+      end_time: segment.EndTimestampMillis || 0,
+      duration: segment.DurationMillis || 0,
+    }
+
+    // Skip very short segments (less than 1 second)
+    if (slicedSegment.duration < 1000) {
+      console.warn(`Skipping short segment ${slicedSegment.segment_id} with duration ${slicedSegment.duration}ms`);
+      return null;
     }
     
-    // 2. Get the original video (video_s3_path) from OpenSearch
-    const { body: videoMetadata } = await openSearch.get({
-      index: videoIndex,
-      id: videoId
+    // Create the output path for the sliced video, use the sanitized file name from the original video, in format `ProcessedVideos/${timestamp}/${videoIndex}/${videoId}/segments/sanitizedFileNameWithIndex`, e.g. the originalVideoKey is `RawVideos/2025-02-27/kyiamzn/bc4d6c51-0238-484c-9c8a-81a605e08774/VoC05.mp4`, the segmentVideoS3Path is `ProcessedVideos/2025-02-27/kyiamzn/bc4d6c51-0238-484c-9c8a-81a605e08774/segments/VoC05_001.mp4` and the keyframe is `ProcessedVideos/2025-02-27/kyiamzn/bc4d6c51-0238-484c-9c8a-81a605e08774/segments/VoC05_001.jpg`
+    const segmentVideoS3Path = (() => {
+      // Extract components from original key
+      const [_, timestamp, indexId, vidId, filename] = originalVideoKey.split('/');
+      
+      // Split filename into name and extension
+      const [name, ext] = filename.split('.');
+      
+      // Create segment number with padding (001, 002, etc.)
+      const paddedSegmentNum = String(segmentNumber).padStart(3, '0');
+      
+      // Construct new key with same structure but under ProcessedVideos
+      return [`ProcessedVideos/${timestamp}/${indexId}/${vidId}/segments/${name}_${paddedSegmentNum}.${ext}`, 
+              `ProcessedVideos/${timestamp}/${indexId}/${vidId}/segments/${name}_${paddedSegmentNum}.jpg`];
+    })();
+    
+    // Use FFmpeg to slice the video and extract keyframes
+    const localInputPath = `/tmp/${videoId}_input.mp4`;
+    const localOutputPath = `/tmp/${videoId}_segment_${segmentNumber}.mp4`;
+    const localKeyframePath = `/tmp/${videoId}_keyframe_${segmentNumber}.jpg`;
+
+    // Download the video segment from S3
+    const command = new GetObjectCommand({
+      Bucket: bucketName,
+      Key: originalVideoKey
     });
-    if (!videoMetadata) {
-      console.log('Video metadata not found for video:', videoId);
-      return [];
-    }
-    // The video_s3_path is in format `RawVideos/${timestamp}/${videoIndex}/${videoId}/${sanitizedFileName}`
-    const originalVideoKey = videoMetadata.video_s3_path;
-    if (!originalVideoKey) {
-      console.log('Original video path not found for video:', videoId);
-      return [];
-    }
-    
-    // 3. For each segment, create a slice and store it in the appropriate S3 location
-    const slicedSegments: VideoSegment[] = [];
-    
-    for (let i = 0; i < segments.length; i++) {
-      const segment = segments[i];
-      const segmentId = `${videoId}_segment_${i + 1}`;
-      const startTime = segment.StartTimestampMillis || 0;
-      const endTime = segment.EndTimestampMillis || 0;
-      const duration = segment.DurationMillis || 0;
-      
-      // Skip very short segments (less than 1 second)
-      if (duration < 1000) {
-        console.log(`Skipping short segment ${segmentId} with duration ${duration}ms`);
-        continue;
-      }
-      
-      // Create the output path for the sliced video, use the sanitized file name from the original video, in format `ProcessedVideos/${timestamp}/${videoIndex}/${videoId}/segments/sanitizedFileNameWithIndex`, e.g. the originalVideoKey is `RawVideos/2025-02-27/kyiamzn/bc4d6c51-0238-484c-9c8a-81a605e08774/VoC05.mp4`, the segmentVideoS3Path is `ProcessedVideos/2025-02-27/kyiamzn/bc4d6c51-0238-484c-9c8a-81a605e08774/segments/VoC05_001.mp4` and the keyframe is `ProcessedVideos/2025-02-27/kyiamzn/bc4d6c51-0238-484c-9c8a-81a605e08774/segments/VoC05_001.jpg`
-      const segmentVideoS3Path = (() => {
-        // Extract components from original key
-        const [_, timestamp, indexId, vidId, filename] = originalVideoKey.split('/');
-        
-        // Split filename into name and extension
-        const [name, ext] = filename.split('.');
-        
-        // Create segment number with padding
-        const segmentNum = String(i + 1).padStart(3, '0');
-        
-        // Construct new key with same structure but under ProcessedVideos
-        return [`ProcessedVideos/${timestamp}/${indexId}/${vidId}/segments/${name}_${segmentNum}.${ext}`, `ProcessedVideos/${timestamp}/${indexId}/${vidId}/segments/${name}_${segmentNum}.jpg`];
-      })();
-      
-      // Use FFmpeg to slice the video and extract keyframes
-      const bucket = process.env.VIDEO_BUCKET_NAME;
-      const localInputPath = `/tmp/${videoId}_input.mp4`;
-      const localOutputPath = `/tmp/${videoId}_segment_${i + 1}.mp4`;
-      const localKeyframePath = `/tmp/${videoId}_keyframe_${i + 1}.jpg`;
 
-      // Download the video segment from S3
-      const command = new GetObjectCommand({
-        Bucket: bucket,
-        Key: originalVideoKey
+    // Get a signed URL for the original video
+    const signedUrl = await getSignedUrl(s3 as any, command as any, { expiresIn: 3600 });
+    
+    console.log(`Generated signed URL for video: ${signedUrl.substring(0, 100)}...`);
+
+    // Define ffmpeg path explicitly - it's in the Lambda layer
+    const ffmpegPath = process.env.LAMBDA_TASK_ROOT ? '/opt/bin/ffmpeg' : 'ffmpeg';
+    
+    // Ensure ffmpeg exists and has execute permissions
+    try {
+      // Use child_process.exec to check if ffmpeg is executable
+      const { exec } = require('child_process');
+      await new Promise((resolve, reject) => {
+        exec(`${ffmpegPath} -version`, (error: any, stdout: any, stderr: any) => {
+          if (error) {
+            console.error(`Error checking ffmpeg: ${error}`);
+            console.error(`stderr: ${stderr}`);
+            reject(error);
+            return;
+          }
+          console.log(`ffmpeg version: ${stdout.substring(0, 100)}`);
+          resolve(stdout);
+        });
       });
+    } catch (error) {
+      console.error('FFmpeg check failed:', error);
+      throw new Error('FFmpeg not accessible or not executable');
+    }
 
-      // Get a signed URL for the original video
-      const signedUrl = await getSignedUrl(s3 as any, command as any, { expiresIn: 3600 });
+    // Use FFmpeg to download, slice the video, and extract keyframe
+    try {
+      // First, download the original video to a local file
+      console.log(`Downloading video from S3 to ${localInputPath}`);
+      const response = await s3.send(new GetObjectCommand({
+        Bucket: bucketName,
+        Key: originalVideoKey
+      }));
+      
+      if (response.Body) {
+        // Convert the response body to a buffer and write to file
+        const buf = Buffer.from(await response.Body.transformToByteArray());
+        fs.writeFileSync(localInputPath, buf);
+        console.log(`Downloaded video file, size: ${buf.length} bytes`);
+      } else {
+        throw new Error('Empty response body from S3');
+      }
 
-      // Use FFmpeg to download, slice the video, and extract keyframe
-      try {
-        // First, slice the video
-        await new Promise<void>((resolve, reject) => {
-          const startTimeSeconds = startTime / 1000;
-          const durationSeconds = duration / 1000;
-          
-          // Use FFmpeg to slice the video directly from S3 URL to output file
-          const ffmpegProcess = spawn('ffmpeg', [
-            '-ss', startTimeSeconds.toString(),
-            '-i', signedUrl,
-            '-t', durationSeconds.toString(),
-            '-c', 'copy',  // Copy codec for faster processing, TODO, re-codec to h264
-            '-y',          // Overwrite output file
-            localOutputPath
-          ]);
-
-          ffmpegProcess.on('close', (code) => {
-            if (code === 0) {
-              console.log(`Successfully sliced video segment ${i + 1}`);
-              resolve();
-            } else {
-              console.error(`FFmpeg process exited with code ${code}`);
-              reject(new Error(`FFmpeg slicing failed with code ${code}`));
-            }
-          });
-        });
-
-        // Then extract a keyframe from the middle of the segment
-        await new Promise<void>((resolve, reject) => {
-          // Extract a keyframe from the middle of the segment
-          const keyframeProcess = spawn('ffmpeg', [
-            '-i', localOutputPath,
-            '-ss', '0',  // Start from the beginning of the slice
-            '-frames:v', '1',  // Extract just one frame
-            '-q:v', '2',  // High quality
-            '-y',
-            localKeyframePath
-          ]);
-
-          keyframeProcess.on('close', (code) => {
-            if (code === 0) {
-              console.log(`Successfully extracted keyframe for segment ${i + 1}`);
-              resolve();
-            } else {
-              console.error(`FFmpeg keyframe process exited with code ${code}`);
-              reject(new Error(`FFmpeg keyframe extraction failed with code ${code}`));
-            }
-          });
-        });
-
-        // Upload the segment and keyframe to S3
-        await Promise.all([
-          s3.send(new PutObjectCommand({
-            Bucket: bucket,
-            Key: segmentVideoS3Path[0],
-            Body: fs.readFileSync(localOutputPath),
-            ContentType: 'video/mp4'
-          })),
-          s3.send(new PutObjectCommand({
-            Bucket: bucket,
-            Key: segmentVideoS3Path[1],
-            Body: fs.readFileSync(localKeyframePath),
-            ContentType: 'image/jpeg'
-          }))
+      // Now slice the video using the downloaded file
+      await new Promise<void>((resolve, reject) => {
+        const startTimeSeconds = slicedSegment.start_time / 1000;
+        const durationSeconds = slicedSegment.duration / 1000;
+        
+        console.log(`Running ffmpeg to slice video: ${ffmpegPath} -ss ${startTimeSeconds} -i ${localInputPath} -t ${durationSeconds} -c copy -y ${localOutputPath}`);
+        
+        // Use FFmpeg to slice the video from local file
+        const ffmpegProcess = spawn(ffmpegPath, [
+          '-ss', startTimeSeconds.toString(),
+          '-i', localInputPath,
+          '-t', durationSeconds.toString(),
+          '-c', 'copy',  // Copy codec for faster processing, TODO, re-codec to h264
+          '-y',          // Overwrite output file
+          localOutputPath
         ]);
 
-        console.log(`Successfully uploaded segment ${i + 1} and keyframe to S3`);
+        // Capture and log ffmpeg output
+        ffmpegProcess.stdout.on('data', (data) => {
+          console.log(`ffmpeg stdout: ${data}`);
+        });
 
-        // Clean up local files
+        ffmpegProcess.stderr.on('data', (data) => {
+          console.log(`ffmpeg stderr: ${data}`);
+        });
+
+        ffmpegProcess.on('close', (code) => {
+          if (code === 0) {
+            console.log(`Successfully sliced video segment ${segmentNumber}`);
+            resolve();
+          } else {
+            console.error(`FFmpeg process exited with code ${code}`);
+            reject(new Error(`FFmpeg slicing failed with code ${code}`));
+          }
+        });
+        
+        ffmpegProcess.on('error', (err) => {
+          console.error('FFmpeg process error:', err);
+          reject(err);
+        });
+      });
+
+      // Then extract a keyframe from the middle of the segment
+      await new Promise<void>((resolve, reject) => {
+        console.log(`Extracting keyframe: ${ffmpegPath} -i ${localOutputPath} -ss 0 -frames:v 1 -q:v 2 -y ${localKeyframePath}`);
+        
+        // Extract a keyframe from the beginning of the slice
+        const keyframeProcess = spawn(ffmpegPath, [
+          '-i', localOutputPath,
+          '-ss', '0',  // Start from the beginning of the slice
+          '-frames:v', '1',  // Extract just one frame
+          '-q:v', '2',  // High quality
+          '-y',
+          localKeyframePath
+        ]);
+
+        // Capture and log ffmpeg output
+        keyframeProcess.stdout.on('data', (data) => {
+          console.log(`keyframe ffmpeg stdout: ${data}`);
+        });
+
+        keyframeProcess.stderr.on('data', (data) => {
+          console.log(`keyframe ffmpeg stderr: ${data}`);
+        });
+
+        keyframeProcess.on('close', (code) => {
+          if (code === 0) {
+            console.log(`Successfully extracted keyframe for segment ${segmentNumber}`);
+            resolve();
+          } else {
+            console.error(`FFmpeg keyframe process exited with code ${code}`);
+            reject(new Error(`FFmpeg keyframe extraction failed with code ${code}`));
+          }
+        });
+        
+        keyframeProcess.on('error', (err) => {
+          console.error('FFmpeg keyframe process error:', err);
+          reject(err);
+        });
+      });
+
+      // Check that the files were created
+      if (!fs.existsSync(localOutputPath)) {
+        throw new Error(`Output video file was not created: ${localOutputPath}`);
+      }
+      
+      if (!fs.existsSync(localKeyframePath)) {
+        throw new Error(`Keyframe file was not created: ${localKeyframePath}`);
+      }
+
+      console.log(`Files created successfully, uploading to S3`);
+
+      // Upload the segment and keyframe to S3
+      await Promise.all([
+        s3.send(new PutObjectCommand({
+          Bucket: bucketName,
+          Key: segmentVideoS3Path[0],
+          Body: fs.readFileSync(localOutputPath),
+          ContentType: 'video/mp4'
+        })),
+        s3.send(new PutObjectCommand({
+          Bucket: bucketName,
+          Key: segmentVideoS3Path[1],
+          Body: fs.readFileSync(localKeyframePath),
+          ContentType: 'image/jpeg'
+        }))
+      ]);
+
+      console.log(`Successfully uploaded segment ${segmentNumber} and keyframe to S3`);
+
+      // Clean up local files
+      try {
+        fs.unlinkSync(localInputPath);
         fs.unlinkSync(localOutputPath);
         fs.unlinkSync(localKeyframePath);
-
-        // Add the segment to our results
-        slicedSegments.push({
-          segment_id: segmentId,
-          video_id: videoId,
-          start_time: startTime,
-          end_time: endTime,
-          duration: duration,
-          video_s3_path: segmentVideoS3Path[0],
-          segment_visual: {
-            segment_visual_description: segment.ShotSegment ? 'Shot boundary detected' : 'Technical cue detected',
-            segment_visual_keyframe_path: segmentVideoS3Path[1]
-          }
-        });   
-      } catch (error) {
-        console.error(`Error processing video segment ${i + 1}:`, error);
-        // Continue with the next segment even if this one fails
+        console.log(`Cleaned up temporary files`);
+      } catch (cleanupError) {
+        console.warn(`Warning: Failed to clean up some temporary files:`, cleanupError);
       }
+
+      // Add the segment to our results
+      slicedSegment.video_s3_path = segmentVideoS3Path[0];
+      slicedSegment.segment_visual = {
+        segment_visual_description: segment.ShotSegment ? 'Shot boundary detected' : 'Technical cue detected',
+        segment_visual_keyframe_path: segmentVideoS3Path[1],
+      };
+
+      return slicedSegment;
+    } catch (error) {
+      console.error(`Error processing video segment ${segmentNumber}:`, error);
+      // Continue with the next segment even if this one fails
+      return null;
     }
- 
-    // Now update the video metadata in OpenSearch with the processed segments
-    await openSearch.update({
-      index: videoIndex,
-      id: videoId,
-      body: {
-        doc: {
-          video_status: 'processing_segments_complete' as VideoStatus,
-          video_segments: slicedSegments,
-          segment_count: slicedSegments.length,
-          updated_at: new Date().toISOString()
-        }
-      }
-    });
-
-    console.log(`Updated video metadata in OpenSearch with ${slicedSegments.length} processed segments`);
-    return slicedSegments;
   } catch (error) {
     console.error('Error processing video segments:', error);
     throw error;
@@ -461,10 +665,15 @@ async function updateVideoSegments(videoIndex: string, videoId: string, segments
     body: {
       doc: {
         video_status: 'ready_for_shots' as VideoStatus,
-        video_segments: segments,
+        // video_segments: segments,
         segment_count: segments.length,
         total_duration: Math.max(...segments.map(s => s.end_time)),
-        updated_at: new Date().toISOString()
+        updated_at: new Date().toISOString(),
+        // Update the each segment within the segments array with segment_id
+        video_segments: segments.map(s => ({
+          ...s,
+          segment_id: s.segment_id || `unassigned_segment_id`
+        }))
       }
     }
   });
@@ -499,7 +708,7 @@ async function updateVideoLabels(videoIndex: string, videoId: string, labels: an
   });
 
   const processedSegments: VideoSegment[] = labels.map((label, index) => ({
-    segment_id: `${videoId}_label_${index}`,
+    // segment_id: `${videoId}_label_${index}`,  it should be updated once in segment detection
     video_id: videoId,
     start_time: label.Timestamp,
     end_time: label.Timestamp + 1000, // Assume 1 second duration
@@ -558,7 +767,7 @@ async function updateVideoFaces(videoIndex: string, videoId: string, faces: any[
   });
 
   const processedSegments: VideoSegment[] = faces.map((face, index) => ({
-    segment_id: `${videoId}_face_${index}`,
+    // segment_id: `${videoId}_face_${index}`,  it should be updated once in segment detection
     video_id: videoId,
     start_time: face.Timestamp,
     end_time: face.Timestamp + 1000, // Assume 1 second duration

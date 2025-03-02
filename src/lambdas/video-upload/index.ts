@@ -124,8 +124,8 @@ async function withRetry<T>(
       
       console.warn(`${operationName} failed (retry ${retries}/${maxRetries}):`, error);
       
-      // Exponential backoff: 1s, 2s, 4s
-      const delay = Math.pow(2, retries) * 500;
+      // Exponential backoff: 4s, 16s, 64s
+      const delay = Math.pow(4, retries) * 1000;
       await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
@@ -344,8 +344,6 @@ async function handleGetIndexStatus(event: APIGatewayProxyEvent): Promise<Lambda
       };
     }
     
-    console.log(`Getting status for index: ${indexId}`);
-    
     // Query OpenSearch for videos in this index with retry logic
     const { body } = await withRetry(
       async () => openSearch.search({
@@ -365,7 +363,8 @@ async function handleGetIndexStatus(event: APIGatewayProxyEvent): Promise<Lambda
       3,
       `Search videos in index ${indexId}`
     );
-    
+    console.log(`Getting status for index: ${indexId} with body: ${JSON.stringify(body)}`);
+
     // Count videos by status
     const videos = body.hits.hits.map((hit: any) => ({
       id: hit._id,
@@ -654,19 +653,6 @@ async function handlePresignRequest(event: APIGatewayProxyEvent): Promise<Lambda
       `Index initial document for video ${videoId} in index ${videoIndex}`
     );
     console.log(`Successfully indexed initial document for video ${videoId} in index ${videoIndex}`);
-
-    // Test the OpenSearch connection - make this optional with error handling
-    const testResult = await withRetry(
-      async () => openSearch.search({
-        index: videoIndex,
-        body: {
-          query: { match_all: {} }
-        }
-      }),
-      3,
-      `Test query for index ${videoIndex}`
-    );
-    console.log(`OpenSearch test query result: ${JSON.stringify(testResult)}`);
 
     // Generate pre-signed URL for S3 upload
     const command = new PutObjectCommand({

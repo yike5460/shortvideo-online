@@ -371,6 +371,32 @@ sequenceDiagram
     Lambda->>OpenSearch: Update Video Status
 ```
 
+The video status transition workflow:
+```mermaid
+graph TD
+    A[awaiting_upload] -->|User uploads file| B[uploading]
+    B -->|Upload completed| C[uploaded]
+    C -->|Processing starts| D[processing]
+    
+    D -->|Shot detection| E[ready_for_shots]
+    D -->|Face detection| F[ready_for_face]
+    D -->|Object detection| G[ready_for_object]
+    D -->|Video embedding| H[ready_for_video_embed]
+    D -->|Audio embedding| I[ready_for_audio_embed]
+    
+    E & F & G & H & I -->|All processing complete| J[ready]
+    
+    B -->|Upload fails| K[error]
+    D -->|Processing fails| K
+    E -->|Shot detection fails| K
+    F -->|Face detection fails| K
+    G -->|Object detection fails| K
+    H -->|Video embedding fails| K
+    I -->|Audio embedding fails| K
+    
+    J -->|Video deleted| L[deleted]
+```
+
 3. **Search Flow**
 ```mermaid
 sequenceDiagram

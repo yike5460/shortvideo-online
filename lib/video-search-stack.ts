@@ -54,7 +54,7 @@ export class VideoSearchStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
-    // this.videoProcessingQueue = this.createQueueInfrastructure();
+    this.videoProcessingQueue = this.createQueueInfrastructure();
     const { topic, rekognitionRole } = this.createRekognitionTopic();
     this.rekognitionTopic = topic;
     this.rekognitionRole = rekognitionRole;
@@ -357,14 +357,18 @@ export class VideoSearchStack extends cdk.Stack {
 
   private createQueueInfrastructure(): sqs.Queue {
     const dlq = new sqs.Queue(this, 'VideoProcessingDLQ', {
-      queueName: 'video-processing-dlq',
+      queueName: 'video-processing-dlq.fifo',
       retentionPeriod: cdk.Duration.days(14),
+      fifo: true,
+      contentBasedDeduplication: true
     });
 
     return new sqs.Queue(this, 'VideoProcessingQueue', {
-      queueName: 'video-processing-queue',
+      queueName: 'video-processing-queue.fifo',
       visibilityTimeout: cdk.Duration.minutes(15),
       retentionPeriod: cdk.Duration.days(14),
+      fifo: true,
+      contentBasedDeduplication: true,
       deadLetterQueue: {
         queue: dlq,
         maxReceiveCount: 3,
@@ -484,7 +488,7 @@ export class VideoSearchStack extends cdk.Stack {
       timeout: cdk.Duration.minutes(15),
       environment: {
         VIDEO_BUCKET: this.videoBucket.bucketName,
-        // QUEUE_URL: this.videoProcessingQueue.queueUrl,
+        VIDEO_SLICING_QUEUE_URL: this.videoProcessingQueue.queueUrl,
         SNS_TOPIC_ARN: this.rekognitionTopic.topicArn,
         REKOGNITION_ROLE_ARN: this.rekognitionRole.roleArn,
         OPENSEARCH_ENDPOINT: `https://${this.openSearchCollection.attrId}.${this.region}.aoss.amazonaws.com`,
@@ -521,7 +525,7 @@ export class VideoSearchStack extends cdk.Stack {
     });
 
     // Add event source from the video processing queue
-    // videoSliceFunctionHandler.addEventSource(new SqsEventSource(this.videoProcessingQueue));
+    videoSliceFunctionHandler.addEventSource(new SqsEventSource(this.videoProcessingQueue));
 
     // Add event source from sns topic
     videoSliceFunctionHandler.addEventSource(new SnsEventSource(this.rekognitionTopic));
@@ -1060,6 +1064,9 @@ export class VideoSearchStack extends cdk.Stack {
     // SQS permissions
     // queue.grantSendMessages(lambdaFunctions.videoUploadFunction.videoUploadHandler);
     // queue.grantConsumeMessages(lambdaFunctions.videoSliceFunction);
+    
+    // Grant SQS send message permissions to videoSliceFunction
+    this.videoProcessingQueue.grantSendMessages(lambdaFunctions.videoSliceFunction);
 
     // SNS permissions for Rekognition notifications subscription
     snsTopic.grantSubscribe(lambdaFunctions.videoSliceFunction);
@@ -1119,8 +1126,6 @@ export class VideoSearchStack extends cdk.Stack {
     // textEmbeddingService.taskDefinition.addToTaskRolePolicy(openSearchPolicy);
     videoEmbeddingService.taskDefinition.addToTaskRolePolicy(openSearchPolicy);
 
-
-
     // Grant Rekognition permissions to video slice function
     const rekognitionPolicy = new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
@@ -1149,10 +1154,6 @@ export class VideoSearchStack extends cdk.Stack {
 
     lambdaFunctions.videoSliceFunction.addToRolePolicy(rekognitionPolicy);
     lambdaFunctions.videoSliceFunction.addToRolePolicy(passRolePolicy);
-
-
-    // Grant SQS permissions
-    // queue.grantConsumeMessages(lambdaFunctions.videoSliceFunction);
 
     // Grant DynamoDB permissions
     indexesTable.grantReadWriteData(lambdaFunctions.videoUploadFunction.videoUploadHandler);

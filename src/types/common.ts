@@ -46,7 +46,7 @@ export type WebVideoStatus =
   | 'failed'
 
 export interface VideoSegment {
-  segment_id: string;
+  segment_id?: string;        // Segment ID, will be updated once in segment detection, in format of `${videoId}_segment_${segmentNumber}`,
   video_id: string;
   start_time: number;        // Milliseconds from start
   end_time: number;          // Milliseconds from start
