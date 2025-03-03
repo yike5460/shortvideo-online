@@ -77,7 +77,6 @@ const indexSettings = {
       updated_at: { type: 'date' },
       error: { type: 'text' },
       segment_count: { type: 'integer' },
-      total_duration: { type: 'integer' },
       job_id: { type: 'keyword' },
 
       video_metadata: { type: 'object' },
@@ -240,12 +239,14 @@ async function handleListVideos(event: APIGatewayProxyEvent): Promise<LambdaResp
           'video_title', 
           'video_description',
           'video_s3_path',
+          'video_preview_url',
           'video_duration',
           'video_type',
           'video_status',
           'video_size',
           'created_at',
-          'video_preview_url',
+          'video_thumbnail_s3_path',
+          'video_thumbnail_url'
         ]
       }
     };
@@ -304,23 +305,27 @@ async function formatSearchResults(body: any, page: number, pageSize: number, fr
   }
 
   // Refresh the thumbnail URL using the pre-signed URL
-  const refreshvideoPreviewUrl = async (video_s3_path: string): Promise<string> => {
+  const refreshvideoPreviewUrl = async (s3Path: string): Promise<string> => {
     // Extract the key from the original video path, `RawVideos/${timestamp}/${videoIndex}/${videoId}/${sanitizedFileName}`, e.g. RawVideos/2025-03-02/videos/ABC123/video.mp4
     const getCommand = new GetObjectCommand({
       Bucket: process.env.VIDEO_BUCKET,
-      Key: video_s3_path,
+      Key: s3Path,
     });
     return await getSignedUrl(s3 as any, getCommand as any, { expiresIn: 3600 });
   };
 
   const videos: VideoResult[] = await Promise.all(body.hits.hits.map(async (hit: any) => {
-    const videoPreviewUrlValue = await refreshvideoPreviewUrl(hit._source.video_s3_path);
+    // Use dummy s3 path for thumbnail if it doesn't exist, avoid error like "No value provided for input HTTP label: Key"
+    const videoPreviewUrlValue = await refreshvideoPreviewUrl(hit._source.video_s3_path || 'dummy_s3_path');
+    const thumbnailUrlValue = await refreshvideoPreviewUrl(hit._source.video_thumbnail_s3_path || 'dummy_s3_path');
     return {
       id: hit._id,
       title: hit._source.video_title || '',
       description: hit._source.video_description || '',
-      videoPreviewUrl: videoPreviewUrlValue,
       videoS3Path: hit._source.video_s3_path,
+      videoPreviewUrl: videoPreviewUrlValue,
+      videoThumbnailS3Path: hit._source.video_thumbnail_s3_path,
+      videoThumbnailUrl: thumbnailUrlValue,
       duration: hit._source.video_duration || 0,
       source: 'local' as const,
       uploadDate: hit._source.created_at,
@@ -739,7 +744,9 @@ async function handleCompleteUpload(event: APIGatewayProxyEvent): Promise<Lambda
     // If the video path is RawVideos/2025-03-02/indexId/videoId/videoFileName.mp4
     // The thumbnail path will be RawVideos/2025-03-02/indexId/videoId/videoFileName.jpg
     const thumbnailS3Path = videoS3Path.replace(/\.[^/.]+$/, '.jpg');
-    const thumbnailUrl = await extractAndUploadThumbnail(videoS3Path, thumbnailS3Path);
+    
+    // Extract thumbnail and get video duration
+    const { thumbnailUrl, duration } = await extractAndUploadThumbnail(videoS3Path, thumbnailS3Path);
 
     // Generate a video preview url for the video
     const getCommand = new GetObjectCommand({
@@ -763,7 +770,19 @@ async function handleCompleteUpload(event: APIGatewayProxyEvent): Promise<Lambda
       `Record indexId and videoId in indexes table`
     );
 
-    // Update OpenSearch with additional metadata including thumbnail path
+    // Format the duration as a human-readable string (HH:MM:SS)
+    const formatDuration = (ms: number): string => {
+      if (!ms) return '00:00:00';
+      
+      const totalSeconds = Math.floor(ms / 1000);
+      const hours = Math.floor(totalSeconds / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+      const seconds = totalSeconds % 60;
+      
+      return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+    };
+
+    // Update the video metadata in OpenSearch with the thumbnail URL and duration
     await withRetry(
       async () => openSearch.update({
         index: indexId,
@@ -772,7 +791,9 @@ async function handleCompleteUpload(event: APIGatewayProxyEvent): Promise<Lambda
           doc: {  // Wrap update fields in 'doc'
             video_status: 'uploaded' as VideoStatus,
             video_preview_url: videoPreviewUrl,
+            video_thumbnail_s3_path: thumbnailS3Path,
             video_thumbnail_url: thumbnailUrl,
+            video_duration: formatDuration(duration),
             updated_at: new Date().toISOString()
           }
         }
@@ -802,7 +823,7 @@ async function handleCompleteUpload(event: APIGatewayProxyEvent): Promise<Lambda
   }
 }
 
-async function extractAndUploadThumbnail(videoS3Path: string, thumbnailS3Path: string): Promise<string> {
+async function extractAndUploadThumbnail(videoS3Path: string, thumbnailS3Path: string): Promise<{ thumbnailUrl: string; duration: number }> {
   try {
     console.log(`Extracting thumbnail from video: ${videoS3Path} to ${thumbnailS3Path}`);
     
@@ -839,11 +860,54 @@ async function extractAndUploadThumbnail(videoS3Path: string, thumbnailS3Path: s
     
     console.log(`Downloaded video to ${tempVideoPath}`);
     
-    // Use ffmpeg to extract a thumbnail from the video (at 1 second mark)
-    // Similar to the approach in processSegmentDetection
+    // Probe the video to get its duration
+    let duration = 0;
+    try {
+      // Use ffprobe to get video duration
+      const ffprobeCommand = [
+        '-v', 'error',
+        '-show_entries', 'format=duration',
+        '-of', 'default=noprint_wrappers=1:nokey=1',
+        tempVideoPath
+      ];
+      
+      console.log(`Running ffprobe command: ffprobe ${ffprobeCommand.join(' ')}`);
+      
+      const ffprobeProcess = spawn('ffprobe', ffprobeCommand);
+      let ffprobeOutput = '';
+      
+      ffprobeProcess.stdout.on('data', (data) => {
+        ffprobeOutput += data.toString();
+      });
+      
+      // Wait for the process to complete
+      await new Promise<void>((resolve, reject) => {
+        ffprobeProcess.on('close', (code) => {
+          if (code === 0) {
+            console.log('Successfully probed video duration');
+            resolve();
+          } else {
+            reject(new Error(`ffprobe process exited with code ${code}`));
+          }
+        });
+        
+        ffprobeProcess.stderr.on('data', (data) => {
+          console.log(`ffprobe stderr: ${data}`);
+        });
+      });
+      
+      // Parse the duration (in seconds) and convert to milliseconds
+      duration = parseFloat(ffprobeOutput.trim()) * 1000;
+      console.log(`Video duration: ${duration}ms`);
+    } catch (probeError) {
+      console.error('Error probing video duration:', probeError);
+      // Continue with thumbnail extraction even if duration probe fails
+    }
+    
+    // Use ffmpeg to extract a thumbnail from the video
     const ffmpegCommand = [
       '-i', tempVideoPath,
-      '-ss', '00:00:03', // Take frame at 3 seconds instead of 1 second to avoid black frames
+      '-ss', '00:00:06', // Take frame at 6 seconds instead of 1 second to avoid black frames
       '-vframes', '1',   // Extract 1 frame
       '-q:v', '2',       // High quality
       tempThumbnailPath
@@ -908,7 +972,7 @@ async function extractAndUploadThumbnail(videoS3Path: string, thumbnailS3Path: s
       console.warn('Failed to clean up temporary files:', cleanupError);
     }
     
-    return thumbnailUrl;
+    return { thumbnailUrl, duration };
   } catch (error) {
     console.error('Error extracting and uploading thumbnail:', error);
     
@@ -920,7 +984,8 @@ async function extractAndUploadThumbnail(videoS3Path: string, thumbnailS3Path: s
     
     // Return a signed URL even if the thumbnail doesn't exist yet
     // The client can handle missing thumbnails gracefully
-    return await getSignedUrl(s3 as any, getSignedUrlCommand as any, { expiresIn: 3600 });
+    const thumbnailUrl = await getSignedUrl(s3 as any, getSignedUrlCommand as any, { expiresIn: 3600 });
+    return { thumbnailUrl, duration: 0 };
   }
 }
 

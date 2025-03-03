@@ -21,7 +21,6 @@ export interface VideoMetadata {
   updated_at?: string;              // ISO timestamp
   error?: string;                   // Error message if processing failed
   segment_count?: number;           // Number of detected segments
-  total_duration?: number;          // Total duration in milliseconds
   job_id?: string;                  // Job ID for the video processing
   
   video_metadata?: SearchMetadata;  // Quick search metadata

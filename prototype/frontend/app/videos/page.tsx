@@ -283,10 +283,11 @@ export default function VideosPage() {
         </select>
       </div>
       
-      {/* Status sections */}
+      {/* Status sections, only show videos with status ready */}
       {Object.entries(videosByStatus).map(([status, statusVideos]) => (
-        <div key={status} className="mb-12">
-          <h2 className="mb-4 text-lg font-semibold text-gray-900 capitalize">
+        status === 'ready' && (
+          <div key={status} className="mb-12">
+            <h2 className="mb-4 text-lg font-semibold text-gray-900 capitalize">
             {status.replace('_', ' ')}
             <span className="ml-2 text-sm text-gray-500">
               ({statusVideos.length})
@@ -297,7 +298,8 @@ export default function VideosPage() {
             onVideoSelect={setSelectedVideo}
             selectedVideo={selectedVideo}
           />
-        </div>
+          </div>
+        )
       ))}
       
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -312,7 +314,7 @@ export default function VideosPage() {
               {/* Display static thumbnail instead of video */}
               {video.videoPreviewUrl ? (
                 <img
-                  src={video.videoPreviewUrl}
+                  src={video.videoThumbnailUrl}
                   alt={video.title || video.description || "Video thumbnail"}
                   className="w-full h-full object-cover"
                   loading="lazy"

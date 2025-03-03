@@ -38,7 +38,7 @@ export default function VideoGrid({ videos, onVideoSelect, selectedVideo }: Vide
               />
             ) : (
               <img
-                src={video.videoPreviewUrl}
+                src={video.videoThumbnailUrl}
                 alt={video.title}
                 className="w-full h-full object-cover"
               />

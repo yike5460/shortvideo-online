@@ -681,7 +681,6 @@ async function updateVideoSegments(videoIndex: string, videoId: string, segments
         video_status: 'ready_for_shots' as VideoStatus,
         // video_segments: segments,
         segment_count: segments.length,
-        total_duration: Math.max(...segments.map(s => s.end_time)),
         updated_at: new Date().toISOString(),
         // Update the each segment within the segments array with segment_id
         video_segments: segments.map(s => ({
