@@ -339,7 +339,7 @@ export default function VideosPage() {
               
               {/* Duration badge */}
               <div className="absolute bottom-2 right-2 bg-black bg-opacity-70 text-white text-xs px-2 py-1 rounded">
-                {video.duration || '00:00'}
+                {video.videoDuration || '00:00'}
               </div>
             </div>
             

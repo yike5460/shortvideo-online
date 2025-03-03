@@ -217,7 +217,7 @@ const transformSearchResults = (hits: any[]): VideoResult[] => {
       description: hit._source.video_description || '',
       videoPreviewUrl: hit._source.video_preview_url || '',
       videoS3Path: hit._source.video_s3_path || '',
-      duration: hit._source.video_duration || 0,
+      videoDuration: hit._source.video_duration || "00:00:00",
       source: hit._source.video_original_path?.includes('youtube.com') ? 'youtube' : 'local',
       sourceUrl: hit._source.video_original_path || '',
       uploadDate: hit._source.created_at,

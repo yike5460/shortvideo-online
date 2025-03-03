@@ -217,7 +217,6 @@ async function handleSNSEvent(event: SNSEvent): Promise<LambdaResponse> {
   const videoIndex = message.Video.S3ObjectName.split('/')[2];
 
   console.log('Processing Rekognition notification for job type:', message.API, 'jobId:', jobId, 'status:', status, 'videoIndex:', videoIndex, 'videoId:', videoId, 'message:', message);
-  console.log('Video information before processing:', await openSearch.get({index: videoIndex, id: videoId}));
 
   try {
     if (status === 'SUCCEEDED') {
@@ -240,12 +239,6 @@ async function handleSNSEvent(event: SNSEvent): Promise<LambdaResponse> {
       });
     }
 
-    // Display the video information in aoss for debugging
-    const fullVideoMetadata = await openSearch.get({
-      index: videoIndex,
-      id: videoId
-    });
-    console.log('Video information after processing:', fullVideoMetadata);
   } catch (error) {
     console.error('Error in handle Rekognition notification for job type:', message.API, 'jobId:', jobId, 'error message:', error, 'videoId:', videoId, 'message:', message);
     return {
@@ -272,9 +265,7 @@ async function handleVideoSlicingEvent(event: SQSEvent): Promise<LambdaResponse>
     if (!bucketName) {
       throw new Error('VIDEO_BUCKET environment variable is not set');
     }
-    
-    console.log(`Processing video segment ${segmentNumber} for videoId: ${videoId}, index: ${videoIndex}, bucket: ${bucketName}, key: ${originalVideoKey}, segment: ${JSON.stringify(segment)}`);
-    
+
     // Pass the bucket name and segment number explicitly to the processing function
     const slicedSegments = await processSegmentDetection(
       videoIndex, 
@@ -385,7 +376,6 @@ async function sendSegmentSlicingRequest(videoIndex: string, videoId: string, se
     
     try {
       await sqs.send(command);
-      console.log(`Sent segment ${segmentNumber}/${sortedSegments.length} for video ${videoId} to processing queue`);
     } catch (error) {
       console.error('Error sending segment slicing request:', error, " for the segment:", segment);
     }
@@ -451,7 +441,7 @@ async function processSegmentDetection(
     // Get a signed URL for the original video
     const signedUrl = await getSignedUrl(s3 as any, command as any, { expiresIn: 3600 });
     
-    console.log(`Generated signed URL for video: ${signedUrl.substring(0, 100)}...`);
+    // console.log(`Generated signed URL for video: ${signedUrl.substring(0, 100)}...`);
 
     // Define ffmpeg path explicitly - it's in the Lambda layer
     const ffmpegPath = process.env.LAMBDA_TASK_ROOT ? '/opt/bin/ffmpeg' : 'ffmpeg';
@@ -490,7 +480,7 @@ async function processSegmentDetection(
         // Convert the response body to a buffer and write to file
         const buf = Buffer.from(await response.Body.transformToByteArray());
         fs.writeFileSync(localInputPath, buf);
-        console.log(`Downloaded video file, size: ${buf.length} bytes`);
+        // console.log(`Downloaded video file, size: ${buf.length} bytes`);
       } else {
         throw new Error('Empty response body from S3');
       }
@@ -522,13 +512,13 @@ async function processSegmentDetection(
         ]);
 
         // Capture and log ffmpeg output
-        ffmpegProcess.stdout.on('data', (data) => {
-          console.log(`ffmpeg stdout: ${data}`);
-        });
+        // ffmpegProcess.stdout.on('data', (data) => {
+        //   console.log(`ffmpeg stdout: ${data}`);
+        // });
 
-        ffmpegProcess.stderr.on('data', (data) => {
-          console.log(`ffmpeg stderr: ${data}`);
-        });
+        // ffmpegProcess.stderr.on('data', (data) => {
+        //   console.log(`ffmpeg stderr: ${data}`);
+        // });
 
         ffmpegProcess.on('close', (code) => {
           if (code === 0) {
@@ -561,13 +551,13 @@ async function processSegmentDetection(
         ]);
 
         // Capture and log ffmpeg output
-        keyframeProcess.stdout.on('data', (data) => {
-          console.log(`keyframe ffmpeg stdout: ${data}`);
-        });
+        // keyframeProcess.stdout.on('data', (data) => {
+        //   console.log(`keyframe ffmpeg stdout: ${data}`);
+        // });
 
-        keyframeProcess.stderr.on('data', (data) => {
-          console.log(`keyframe ffmpeg stderr: ${data}`);
-        });
+        // keyframeProcess.stderr.on('data', (data) => {
+        //   console.log(`keyframe ffmpeg stderr: ${data}`);
+        // });
 
         keyframeProcess.on('close', (code) => {
           if (code === 0) {

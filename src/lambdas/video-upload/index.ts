@@ -58,7 +58,7 @@ const indexSettings = {
     properties: {
       video_index: { type: 'keyword' },
       video_description: { type: 'text' },
-      video_duration: { type: 'integer' },
+      video_duration: { type: 'text' },
       video_id: { type: 'keyword' },
       video_name: { type: 'keyword' },
       video_original_path: { type: 'keyword' },
@@ -326,7 +326,7 @@ async function formatSearchResults(body: any, page: number, pageSize: number, fr
       videoPreviewUrl: videoPreviewUrlValue,
       videoThumbnailS3Path: hit._source.video_thumbnail_s3_path,
       videoThumbnailUrl: thumbnailUrlValue,
-      duration: hit._source.video_duration || 0,
+      videoDuration: hit._source.video_duration || '00:00:00',
       source: 'local' as const,
       uploadDate: hit._source.created_at,
       format: hit._source.video_type,
@@ -536,7 +536,7 @@ async function handleGetVideo(videoId: string, indexId?: string): Promise<Lambda
       description: body._source.video_description || '',
       videoPreviewUrl: '', // Will be generated separately
       videoS3Path: body._source.video_s3_path,
-      duration: body._source.video_duration || 0,
+      videoDuration: body._source.video_duration || '00:00:00',
       source: 'local' as const,
       uploadDate: body._source.created_at,
       format: body._source.video_type,

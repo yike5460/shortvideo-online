@@ -2,7 +2,7 @@
 export interface VideoMetadata {  
   video_index: string;              // Index ID
   video_description?: string;       // Original video description    
-  video_duration?: number;          // Total video duration in milliseconds
+  video_duration?: string;          // Total video duration in "HH:MM:SS"
   video_id?: string;
   video_name?: string;              // Original file name
   video_original_path?: string;     // Youtube URL or local video path
@@ -141,7 +141,7 @@ export interface VideoResult {
   description: string;
   videoPreviewUrl: string;
   videoS3Path: string;
-  duration: number;
+  videoDuration: string;
   source: 'local' | 'youtube';
   sourceUrl?: string;
   uploadDate: string;
