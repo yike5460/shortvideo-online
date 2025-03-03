@@ -52,3 +52,5 @@ cdk.context.json
 .parcel-cache/
 !/.projenrc.ts
 .next/
+
+src/layers/ffmpeg/bin/
