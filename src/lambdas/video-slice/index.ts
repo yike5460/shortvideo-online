@@ -634,7 +634,7 @@ async function processSegmentDetection(
       return slicedSegment;
     } catch (error) {
       console.error(`Error processing video segment ${segmentNumber}:`, error);
-      // Continue with the next segment even if this one fails
+      // Continue with the next segment even if this one fails, but note since we set the batch size to 1, there is only one message in the batch
       return null;
     }
   } catch (error) {

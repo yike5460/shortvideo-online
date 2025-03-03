@@ -29,7 +29,7 @@ export default function VideoGrid({ videos, onVideoSelect, selectedVideo }: Vide
           <div className="aspect-video relative rounded-t-lg overflow-hidden">
             {hoveredVideo === video.id ? (
               <ReactPlayer
-                url={video.previewUrl}
+                url={video.thumbnailUrl}
                 width="100%"
                 height="100%"
                 playing

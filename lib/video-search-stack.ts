@@ -528,7 +528,7 @@ export class VideoSearchStack extends cdk.Stack {
     videoSliceFunctionHandler.addEventSource(new SqsEventSource(this.videoProcessingQueue, {
       batchSize: 1,
       // Don't wait to accumulate messages
-      maxBatchingWindow: cdk.Duration.seconds(0),
+      // maxBatchingWindow: cdk.Duration.seconds(0),
       // Report batch item failures, refer to https://docs.aws.amazon.com/lambda/latest/dg/services-sqs-errorhandling.html#services-sqs-batchfailurereporting
       reportBatchItemFailures: true
     }));
