@@ -66,8 +66,8 @@ const indexSettings = {
       video_summary: { type: 'text' },
       video_tags: { type: 'keyword' },
       video_title: { type: 'text' },
-      video_thumbnail_path: { type: 'keyword' },
-      video_thumbnail_url: { type: 'keyword' },
+      video_thumbnail_s3_path: { type: 'keyword' },
+      video_preview_url: { type: 'keyword' },
       video_type: { type: 'keyword' },
 
       created_at: { type: 'date' },
@@ -242,7 +242,7 @@ async function handleListVideos(event: APIGatewayProxyEvent): Promise<LambdaResp
           'video_status',
           'video_size',
           'created_at',
-          'video_thumbnail_url',
+          'video_preview_url',
         ]
       }
     };
@@ -301,7 +301,7 @@ async function formatSearchResults(body: any, page: number, pageSize: number, fr
   }
 
   // Refresh the thumbnail URL using the pre-signed URL
-  const refreshThumbnailUrl = async (video_s3_path: string): Promise<string> => {
+  const refreshvideoPreviewUrl = async (video_s3_path: string): Promise<string> => {
     // Extract the key from the original video path, `RawVideos/${timestamp}/${videoIndex}/${videoId}/${sanitizedFileName}`, e.g. RawVideos/2025-03-02/videos/ABC123/video.mp4
     const getCommand = new GetObjectCommand({
       Bucket: process.env.VIDEO_BUCKET,
@@ -311,12 +311,12 @@ async function formatSearchResults(body: any, page: number, pageSize: number, fr
   };
 
   const videos: VideoResult[] = await Promise.all(body.hits.hits.map(async (hit: any) => {
-    const thumbnailUrlValue = await refreshThumbnailUrl(hit._source.video_s3_path);
+    const videoPreviewUrlValue = await refreshvideoPreviewUrl(hit._source.video_s3_path);
     return {
       id: hit._id,
       title: hit._source.video_title || '',
       description: hit._source.video_description || '',
-      thumbnailUrl: thumbnailUrlValue,
+      videoPreviewUrl: videoPreviewUrlValue,
       videoS3Path: hit._source.video_s3_path,
       duration: hit._source.video_duration || 0,
       source: 'local' as const,
@@ -386,7 +386,7 @@ async function handleGetIndexStatus(event: APIGatewayProxyEvent): Promise<Lambda
       title: hit._source.video_title,
       error: hit._source.error,
       uploadDate: hit._source.created_at,
-      thumbnailUrl: hit._source.video_thumbnail_url
+      videoPreviewUrl: hit._source.video_preview_url
     }));
     
     const videoCount = videos.length;
@@ -461,7 +461,7 @@ async function handleGetIndexStatus(event: APIGatewayProxyEvent): Promise<Lambda
         id: currentVideo.id,
         name: currentVideo.title || 'Untitled Video',
         status: currentVideo.status,
-        thumbnail: videos.thumbnailUrl
+        thumbnail: videos.videoPreviewUrl
       } : undefined
     };
     
@@ -526,7 +526,7 @@ async function handleGetVideo(videoId: string, indexId?: string): Promise<Lambda
       indexId: body._source.video_index || searchIndex,
       title: body._source.video_title || '',
       description: body._source.video_description || '',
-      thumbnailUrl: '', // Will be generated separately
+      videoPreviewUrl: '', // Will be generated separately
       videoS3Path: body._source.video_s3_path,
       duration: body._source.video_duration || 0,
       source: 'local' as const,
@@ -740,8 +740,8 @@ async function handleCompleteUpload(event: APIGatewayProxyEvent): Promise<Lambda
       Bucket: process.env.VIDEO_BUCKET,
       Key: videoS3Path,
     });
-    const thumbnailUrl = await getSignedUrl(s3 as any, getCommand as any, { expiresIn: 3600 });
-    console.log(`Generating thumbnail for video: ${videoS3Path}: thumbnailUrl: ${thumbnailUrl}`);
+    const videoPreviewUrl = await getSignedUrl(s3 as any, getCommand as any, { expiresIn: 3600 });
+    console.log(`Generating thumbnail for video: ${videoS3Path}: videoPreviewUrl: ${videoPreviewUrl}`);
 
     // Record the indexId and videoId in the indexes table
     await withRetry(
@@ -766,7 +766,7 @@ async function handleCompleteUpload(event: APIGatewayProxyEvent): Promise<Lambda
         body: {
           doc: {  // Wrap update fields in 'doc'
             video_status: 'uploaded' as VideoStatus,
-            video_thumbnail_url: thumbnailUrl,
+            video_preview_url: videoPreviewUrl,
             updated_at: new Date().toISOString()
           }
         }
@@ -783,7 +783,7 @@ async function handleCompleteUpload(event: APIGatewayProxyEvent): Promise<Lambda
         indexId,
         videoId,
         status: 'processing',
-        thumbnailUrl
+        videoPreviewUrl
       })
     };
   } catch (error) {
@@ -805,7 +805,7 @@ async function extractAndUploadThumbnail(videoS3Path: string, thumbnailS3Path: s
     Bucket: bucketName,
     Key: videoS3Path,
   });
-  const thumbnailUrl = await getSignedUrl(s3 as any, getCommand as any, { expiresIn: 3600 });
+  const videoPreviewUrl = await getSignedUrl(s3 as any, getCommand as any, { expiresIn: 3600 });
 
-  return thumbnailUrl;
+  return videoPreviewUrl;
 }

@@ -41,7 +41,7 @@ export default function SearchResults({
         <div key={result.id} className="bg-white rounded-lg shadow-sm overflow-hidden">
           <div className="aspect-video relative">
             <img
-              src={result.thumbnailUrl}
+              src={result.videoPreviewUrl}
               alt={result.title}
               className="w-full h-full object-cover"
             />
@@ -75,7 +75,7 @@ export default function SearchResults({
           <div className="flex gap-6">
             <div className="w-64 aspect-video rounded-lg overflow-hidden relative">
               <img
-                src={result.thumbnailUrl}
+                src={result.videoPreviewUrl}
                 alt={result.title}
                 className="w-full h-full object-cover"
               />
