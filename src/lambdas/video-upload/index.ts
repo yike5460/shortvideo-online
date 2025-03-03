@@ -12,6 +12,8 @@ import * as path from 'path';
 import { DynamoDBDocumentClient, PutCommand } from '@aws-sdk/lib-dynamodb';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import * as fs from 'fs';
+import { Readable } from 'stream';
+import { spawn } from 'child_process';
 
 // Initialize clients
 const s3 = new S3Client({});
@@ -67,6 +69,7 @@ const indexSettings = {
       video_tags: { type: 'keyword' },
       video_title: { type: 'text' },
       video_thumbnail_s3_path: { type: 'keyword' },
+      video_thumbnail_url: { type: 'keyword' },
       video_preview_url: { type: 'keyword' },
       video_type: { type: 'keyword' },
 
@@ -732,16 +735,18 @@ async function handleCompleteUpload(event: APIGatewayProxyEvent): Promise<Lambda
       throw new Error('Video S3 path not found in metadata');
     }
     
-    // Generate a thumbnail path for the video
+    // Generate a video preview url for the video and thumbnail url for the thumbnail image
     // If the video path is RawVideos/2025-03-02/indexId/videoId/videoFileName.mp4
     // The thumbnail path will be RawVideos/2025-03-02/indexId/videoId/videoFileName.jpg
     const thumbnailS3Path = videoS3Path.replace(/\.[^/.]+$/, '.jpg');
+    const thumbnailUrl = await extractAndUploadThumbnail(videoS3Path, thumbnailS3Path);
+
+    // Generate a video preview url for the video
     const getCommand = new GetObjectCommand({
       Bucket: process.env.VIDEO_BUCKET,
       Key: videoS3Path,
     });
     const videoPreviewUrl = await getSignedUrl(s3 as any, getCommand as any, { expiresIn: 3600 });
-    console.log(`Generating thumbnail for video: ${videoS3Path}: videoPreviewUrl: ${videoPreviewUrl}`);
 
     // Record the indexId and videoId in the indexes table
     await withRetry(
@@ -767,6 +772,7 @@ async function handleCompleteUpload(event: APIGatewayProxyEvent): Promise<Lambda
           doc: {  // Wrap update fields in 'doc'
             video_status: 'uploaded' as VideoStatus,
             video_preview_url: videoPreviewUrl,
+            video_thumbnail_url: thumbnailUrl,
             updated_at: new Date().toISOString()
           }
         }
@@ -796,16 +802,134 @@ async function handleCompleteUpload(event: APIGatewayProxyEvent): Promise<Lambda
   }
 }
 
-// This function is obsolete for now, will used for thumbnail generation in the future
 async function extractAndUploadThumbnail(videoS3Path: string, thumbnailS3Path: string): Promise<string> {
+  try {
+    console.log(`Extracting thumbnail from video: ${videoS3Path} to ${thumbnailS3Path}`);
+    
+    // Create temporary file paths for processing
+    const tempDir = '/tmp';
+    const tempVideoPath = `${tempDir}/${Date.now()}-video.mp4`;
+    const tempThumbnailPath = `${tempDir}/${Date.now()}-thumbnail.jpg`;
+    
+    // Download the video from S3
+    const bucketName = process.env.VIDEO_BUCKET;
+    if (!bucketName) {
+      throw new Error('VIDEO_BUCKET environment variable is not set');
+    }
+    
+    // Download the video file
+    const getObjectCommand = new GetObjectCommand({
+      Bucket: bucketName,
+      Key: videoS3Path
+    });
+    
+    const videoResponse = await s3.send(getObjectCommand);
+    
+    // Write the video to a temporary file
+    if (!videoResponse.Body) {
+      throw new Error('Failed to get video content from S3');
+    }
+    
+    // Create the temp directory if it doesn't exist
+    await fs.promises.mkdir(tempDir, { recursive: true });
+    
+    // Write the video data to the temp file
+    const videoData = await streamToBuffer(videoResponse.Body as Readable);
+    await fs.promises.writeFile(tempVideoPath, videoData);
+    
+    console.log(`Downloaded video to ${tempVideoPath}`);
+    
+    // Use ffmpeg to extract a thumbnail from the video (at 1 second mark)
+    // Similar to the approach in processSegmentDetection
+    const ffmpegCommand = [
+      '-i', tempVideoPath,
+      '-ss', '00:00:03', // Take frame at 3 seconds instead of 1 second to avoid black frames
+      '-vframes', '1',   // Extract 1 frame
+      '-q:v', '2',       // High quality
+      tempThumbnailPath
+    ];
+    
+    console.log(`Running ffmpeg command: ffmpeg ${ffmpegCommand.join(' ')}`);
+    
+    // Execute ffmpeg command
+    const ffmpegProcess = spawn('ffmpeg', ffmpegCommand);
+    
+    // Wait for the process to complete
+    await new Promise<void>((resolve, reject) => {
+      ffmpegProcess.on('close', (code) => {
+        if (code === 0) {
+          console.log('Successfully extracted thumbnail');
+          resolve();
+        } else {
+          reject(new Error(`ffmpeg process exited with code ${code}`));
+        }
+      });
+      
+      ffmpegProcess.stderr.on('data', (data) => {
+        console.log(`ffmpeg stderr: ${data}`);
+      });
+    });
+    
+    // Check if thumbnail was created
+    try {
+      await fs.promises.access(tempThumbnailPath);
+    } catch (error) {
+      console.error('Thumbnail file was not created:', error);
+      throw new Error('Failed to create thumbnail');
+    }
+    
+    // Upload the thumbnail to S3
+    const thumbnailData = await fs.promises.readFile(tempThumbnailPath);
+    
+    const putObjectCommand = new PutObjectCommand({
+      Bucket: bucketName,
+      Key: thumbnailS3Path,
+      Body: thumbnailData,
+      ContentType: 'image/jpeg'
+    });
+    
+    await s3.send(putObjectCommand);
+    console.log(`Uploaded thumbnail to S3: ${thumbnailS3Path}`);
+    
+    // Generate a signed URL for the thumbnail
+    const getSignedUrlCommand = new GetObjectCommand({
+      Bucket: bucketName,
+      Key: thumbnailS3Path
+    });
+    
+    const thumbnailUrl = await getSignedUrl(s3 as any, getSignedUrlCommand as any, { expiresIn: 3600 });
+    
+    // Clean up temporary files
+    try {
+      await fs.promises.unlink(tempVideoPath);
+      await fs.promises.unlink(tempThumbnailPath);
+      console.log('Cleaned up temporary files');
+    } catch (cleanupError) {
+      console.warn('Failed to clean up temporary files:', cleanupError);
+    }
+    
+    return thumbnailUrl;
+  } catch (error) {
+    console.error('Error extracting and uploading thumbnail:', error);
+    
+    // If thumbnail extraction fails, create a default signed URL without the thumbnail
+    const getSignedUrlCommand = new GetObjectCommand({
+      Bucket: process.env.VIDEO_BUCKET,
+      Key: thumbnailS3Path
+    });
+    
+    // Return a signed URL even if the thumbnail doesn't exist yet
+    // The client can handle missing thumbnails gracefully
+    return await getSignedUrl(s3 as any, getSignedUrlCommand as any, { expiresIn: 3600 });
+  }
+}
 
-  // Create a pre-signed URL for the video thumbnail and return directly, consider to add the ffmpeg part back if we want to extract the thumbnail image from the video
-  const bucketName = process.env.VIDEO_BUCKET;
-  const getCommand = new GetObjectCommand({
-    Bucket: bucketName,
-    Key: videoS3Path,
+// Helper function to convert a readable stream to a buffer
+async function streamToBuffer(stream: Readable): Promise<Buffer> {
+  return new Promise<Buffer>((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    stream.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+    stream.on('error', reject);
+    stream.on('end', () => resolve(Buffer.concat(chunks)));
   });
-  const videoPreviewUrl = await getSignedUrl(s3 as any, getCommand as any, { expiresIn: 3600 });
-
-  return videoPreviewUrl;
 }

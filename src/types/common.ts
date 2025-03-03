@@ -14,6 +14,7 @@ export interface VideoMetadata {
   video_tags?: string[];            // Tags for the video
   video_title?: string;             // Video title
   video_thumbnail_s3_path?: string; // S3 path to thumbnail (image)
+  video_thumbnail_url?: string;     // Pre-signed URL for thumbnail (image thumbnail)
   video_type?: string;              // MIME type
   
   created_at?: string;              // ISO timestamp
