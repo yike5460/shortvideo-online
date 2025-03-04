@@ -804,7 +804,3 @@ s3://bucket-name/
     - Interface endpoints for AWS services
     - Private DNS enabled
     - Security group controls
-
-
-## TODO List
-- [ ] Redirect the index progress page after the video is uploaded, with extra button to jump out to see all the videos while the index is processing

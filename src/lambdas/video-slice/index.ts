@@ -156,13 +156,77 @@ async function handleS3Event(event: S3Event): Promise<LambdaResponse> {
     };
   }
 
-  // The s3Key format is `RawVideos/${timestamp}/${videoIndex}/${videoId}/${sanitizedFileName}`
+  // The s3Key format is `RawVideos/${timestamp}/${videoIndex}/${videoId}/${sanitizedFileNameWithExtension}`
   const videoIndex = key.split('/')[2];
   const videoId = key.split('/').pop()?.split('.')[0];
 
   if (!videoId) throw new Error('Invalid video key format');
 
-  // TODO, we need to do video valiation according to the Amazon Rekognition restriction: https://docs.aws.amazon.com/rekognition/latest/dg/video.html, e.g. The video must be encoded using the H.264 codec. The supported file formats are MPEG-4 and MOV.
+  // Validate the video format and codec for Rekognition compatibility, refer to https://aws.amazon.com/rekognition/faqs/
+  try {
+    // Download the video to a temporary location for validation
+    const tempVideoPath = `/tmp/${videoId}_validation.mp4`;
+    
+    // Download the video file from S3
+    const downloadCommand = new GetObjectCommand({
+      Bucket: bucket,
+      Key: key
+    });
+    
+    const response = await s3.send(downloadCommand);
+    if (response.Body) {
+      // Convert the response body to a buffer and write to file
+      const buf = Buffer.from(await response.Body.transformToByteArray());
+      fs.writeFileSync(tempVideoPath, buf);
+      console.log(`Downloaded video for validation, size: ${buf.length} bytes`);
+    } else {
+      throw new Error('Empty response body from S3 during validation');
+    }
+    
+    // Use ffprobe to check the video codec and format
+    const isValidVideo = await validateVideoForRekognition(tempVideoPath, videoId, videoIndex);
+    
+    // Clean up the temporary file
+    try {
+      fs.unlinkSync(tempVideoPath);
+    } catch (err) {
+      console.warn('Failed to clean up temporary validation file:', err);
+    }
+    
+    if (!isValidVideo) {
+      // Update the video status in OpenSearch to indicate incompatibility
+      await updateVideoStatus(videoIndex, videoId, 'error', {
+        error: 'Video format not compatible with Amazon Rekognition. Only H.264 codec in MP4 or MOV container is supported.'
+      });
+      
+      return {
+        statusCode: STATUS_CODES.BAD_REQUEST,
+        headers: corsHeaders,
+        body: JSON.stringify({ 
+          error: 'Video format not compatible with Amazon Rekognition',
+          message: 'Only H.264 codec in MP4 or MOV container is supported'
+        })
+      };
+    }
+    
+    console.log('Video validation successful, proceeding with Rekognition jobs');
+  } catch (validationError) {
+    console.error('Error validating video:', validationError);
+    
+    // Update the video status in OpenSearch
+    await updateVideoStatus(videoIndex, videoId, 'error', {
+      error: `Video validation failed: ${validationError instanceof Error ? validationError.message : 'Unknown error'}`
+    });
+    
+    return {
+      statusCode: STATUS_CODES.INTERNAL_SERVER_ERROR,
+      headers: corsHeaders,
+      body: JSON.stringify({ 
+        error: 'Video validation failed',
+        details: validationError instanceof Error ? validationError.message : 'Unknown error'
+      })
+    };
+  }
 
   // Start Rekognition jobs
   const notificationChannel: NotificationChannel = {
@@ -206,6 +270,109 @@ async function handleS3Event(event: S3Event): Promise<LambdaResponse> {
       }
     })
   };
+}
+
+/**
+ * Validates if a video file is compatible with Amazon Rekognition
+ * 
+ * Requirements:
+ * - Video must be encoded using the H.264 codec
+ * - Supported file formats are MPEG-4 and MOV
+ * 
+ * @param videoPath Path to the video file
+ * @param videoId ID of the video
+ * @param videoIndex Index of the video
+ * @returns Boolean indicating if the video is valid for Rekognition
+ */
+async function validateVideoForRekognition(videoPath: string, videoId: string, videoIndex: string): Promise<boolean> {
+  // Define ffprobe path - it's included in the FFmpeg Lambda layer
+  const ffprobePath = process.env.LAMBDA_TASK_ROOT ? '/opt/bin/ffprobe' : 'ffprobe';
+  
+  try {
+    // Use ffprobe to get the video codec and format information
+    const ffprobeProcess = spawn(ffprobePath, [
+      '-v', 'error',
+      '-select_streams', 'v:0',  // Select video stream
+      '-show_entries', 'stream=codec_name,codec_type:format=format_name,format_long_name',
+      '-of', 'json',
+      videoPath
+    ]);
+    
+    let ffprobeOutput = '';
+    
+    ffprobeProcess.stdout.on('data', (data) => {
+      ffprobeOutput += data.toString();
+    });
+    
+    // Wait for the process to complete
+    await new Promise<void>((resolve, reject) => {
+      ffprobeProcess.on('close', (code) => {
+        if (code === 0) {
+          resolve();
+        } else {
+          reject(new Error(`ffprobe process exited with code ${code}`));
+        }
+      });
+      
+      ffprobeProcess.stderr.on('data', (data) => {
+        console.error(`ffprobe stderr: ${data}`);
+      });
+      
+      ffprobeProcess.on('error', (err) => {
+        reject(err);
+      });
+    });
+    
+    // Parse the ffprobe output
+    const videoInfo = JSON.parse(ffprobeOutput);
+    console.log('Video information:', JSON.stringify(videoInfo, null, 2));
+    
+    // Extract codec and format information
+    const videoCodec = videoInfo.streams?.[0]?.codec_name?.toLowerCase();
+    const videoFormat = videoInfo.format?.format_name?.toLowerCase();
+    const formatLongName = videoInfo.format?.format_long_name?.toLowerCase();
+    
+    console.log(`Video codec: ${videoCodec}, format: ${videoFormat}, format long name: ${formatLongName}`);
+    
+    // Check if the video is in a supported format
+    const isH264 = videoCodec === 'h264';
+    
+    // Check for MP4 or MOV container formats
+    // ffprobe may return formats like 'mov,mp4,m4a,3gp,3g2,mj2' for MP4/MOV files
+    const isSupportedFormat = videoFormat && (
+      videoFormat.includes('mp4') || 
+      videoFormat.includes('mov') || 
+      videoFormat.includes('quicktime')
+    );
+    
+    const isValid = isH264 && isSupportedFormat;
+    
+    // Log validation result
+    if (isValid) {
+      console.log(`Video ID ${videoId} is compatible with Amazon Rekognition`);
+    } else {
+      console.warn(`Video ID ${videoId} is not compatible with Amazon Rekognition:`, {
+        isH264,
+        isSupportedFormat,
+        videoCodec,
+        videoFormat
+      });
+      
+      // Update video status with more specific error message
+      const errorMessage = !isH264 
+        ? `Unsupported video codec: ${videoCodec}. Only H.264 is supported.`
+        : `Unsupported video format: ${videoFormat}. Only MP4 and MOV containers are supported.`;
+      
+      await updateVideoStatus(videoIndex, videoId, 'error', {
+        error: errorMessage
+      });
+    }
+    
+    return isValid;
+  } catch (error) {
+    console.error('Error validating video for Rekognition:', error);
+    throw error;
+  }
 }
 
 async function handleSNSEvent(event: SNSEvent): Promise<LambdaResponse> {

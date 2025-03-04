@@ -37,7 +37,7 @@ export class VideoSearchStack extends cdk.Stack {
   private readonly openSearchCollection: opensearchserverless.CfnCollection;
   private readonly indexesTable: dynamodb.Table;
   private readonly dynamodbEndpoint: ec2.InterfaceVpcEndpoint;
-
+  private readonly videoEmbeddingService: ecs.FargateService;
   constructor(scope: Construct, id: string, props: VideoSearchStackProps) {
     super(scope, id, props);
 
@@ -61,8 +61,11 @@ export class VideoSearchStack extends cdk.Stack {
     this.redisCluster = this.createCacheInfrastructure();
     this.cluster = this.createContainerInfrastructure();
     
-    // Create OpenSearch collection first
+    // Create OpenSearch collection
     this.openSearchCollection = this.createSearchInfrastructure(deploymentEnv);
+
+    // Create video embedding service
+    this.videoEmbeddingService = this.createVideoEmbeddingService();
 
     // Create Lambda functions after OpenSearch collection
     const lambdaFunctions = {
@@ -72,17 +75,22 @@ export class VideoSearchStack extends cdk.Stack {
       indexCrudFunction: this.crudIndexFunction()
     };
 
+    // Add dependencies for the lambda functions on the video embedding service and open search collection
+    lambdaFunctions.videoUploadFunction.videoUploadHandler.node.addDependency(this.videoEmbeddingService);
+    lambdaFunctions.videoUploadFunction.videoUploadHandler.node.addDependency(this.openSearchCollection);
+    lambdaFunctions.videoSliceFunction.node.addDependency(this.videoEmbeddingService);
+    lambdaFunctions.videoSliceFunction.node.addDependency(this.openSearchCollection);
+    lambdaFunctions.videoSearchFunction.node.addDependency(this.openSearchCollection);
+    lambdaFunctions.indexCrudFunction.node.addDependency(this.openSearchCollection);
+
     // Update OpenSearch access policies with Lambda roles
     this.updateOpenSearchPolicies(deploymentEnv, lambdaFunctions);
-
-    // Create video embedding service
-    const videoEmbeddingService = this.createVideoEmbeddingService();
 
     // Initialize API Gateway
     const api = this.createApiGateway(lambdaFunctions);
 
     // Set up permissions
-    this.setupPermissions(lambdaFunctions, videoEmbeddingService, this.rekognitionTopic, this.indexesTable);
+    this.setupPermissions(lambdaFunctions, this.videoEmbeddingService, this.rekognitionTopic, this.indexesTable);
 
     // Create stack outputs
     this.createStackOutputs(api);
@@ -503,6 +511,7 @@ export class VideoSearchStack extends cdk.Stack {
         REKOGNITION_ROLE_ARN: this.rekognitionRole.roleArn,
         OPENSEARCH_ENDPOINT: `https://${this.openSearchCollection.attrId}.${this.region}.aoss.amazonaws.com`,
         REDIS_ENDPOINT: this.redisCluster.attrRedisEndpointAddress,
+        VIDEO_EMBEDDING_SERVICE_NAME: this.videoEmbeddingService.serviceName,
       },
       bundling: {
         minify: true,
@@ -821,11 +830,15 @@ export class VideoSearchStack extends cdk.Stack {
     });
 
     // Allow inbound traffic on service port
-    videoEmbeddingServiceSG.addIngressRule(
-      ec2.Peer.ipv4(this.vpc.vpcCidrBlock),
-      ec2.Port.tcp(8001),
-      'Allow inbound from VPC'
-    );
+    videoEmbeddingServiceSG.addIngressRule(ec2.Peer.ipv4(this.vpc.vpcCidrBlock), ec2.Port.tcp(8001), 'Allow inbound from VPC');
+    
+    // Now add ingress rules to allow incoming traffic on HTTP and HTTPS (needed for VPC endpoint access)
+    videoEmbeddingServiceSG.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(443), 'Allow HTTPS inbound');
+    videoEmbeddingServiceSG.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(80), 'Allow HTTP inbound');
+    
+    // Allow outbound connections to HTTP and HTTPS (already needed)
+    videoEmbeddingServiceSG.addEgressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(443), 'Allow HTTPS outbound');
+    videoEmbeddingServiceSG.addEgressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(80), 'Allow HTTP outbound');
 
     // Add container to task definition
     const container = taskDefinition.addContainer('VideoEmbeddingContainer', {

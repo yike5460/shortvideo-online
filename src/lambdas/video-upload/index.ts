@@ -356,7 +356,8 @@ async function formatSearchResults(body: any, page: number, pageSize: number, fr
 async function handleGetIndexStatus(event: APIGatewayProxyEvent): Promise<LambdaResponse> {
   try {
     const queryParams = event.queryStringParameters || {};
-    const indexId = queryParams.index;
+    // Transform the indexId to lowercase
+    const indexId = (queryParams.index || 'videos').toLowerCase();
     
     if (!indexId) {
       return {
@@ -620,8 +621,8 @@ async function handlePresignRequest(event: APIGatewayProxyEvent): Promise<Lambda
   try {
     const request: PresignRequest = JSON.parse(event.body!);
     console.log('Presign request: ', request);
-    // The video index will now be passed from the frontend with default value 'videos'
-    const videoIndex = request.indexId || 'videos';
+    // The video index will now be passed from the frontend with default value 'videos', note the index must be lowercase
+    const videoIndex = (request.indexId || 'videos').toLowerCase();
     const videoId = uuidv4();
     // Get current date in YYYY-MM-DD format, e.g. '2024-01-25'
     const timestamp = new Date().toISOString().split('T')[0];
@@ -647,7 +648,6 @@ async function handlePresignRequest(event: APIGatewayProxyEvent): Promise<Lambda
     };
 
     // Create the index if it doesn't exist
-
     const indexExists = await openSearch.indices.exists({ index: videoIndex });
     if (!indexExists.body) {
       console.log(`Index ${videoIndex} does not exist, creating it`);
@@ -713,8 +713,10 @@ async function handlePresignRequest(event: APIGatewayProxyEvent): Promise<Lambda
 
 async function handleCompleteUpload(event: APIGatewayProxyEvent): Promise<LambdaResponse> {
   const request: CompleteUploadRequest = JSON.parse(event.body!);
-  const { indexId, videoId } = request;
-  
+  // Transform the indexId to lowercase
+  const indexId = (request.indexId || 'videos').toLowerCase();
+  const { videoId } = request;
+
   try {
     // Verify the video exists in OpenSearch
     const { body: searchResult } = await withRetry(

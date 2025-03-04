@@ -40,33 +40,35 @@ export default function VideosPage() {
   useEffect(() => {
     const fetchVideos = async () => {
       try {
-        setIsLoading(true)
-        const response = await fetch(`${API_ENDPOINT}/videos`)
+        setIsLoading(true);
+        // Add the selectedIndexId to the query parameters if it exists
+        const queryParams = selectedIndexId ? `?index=${selectedIndexId}` : '';
+        const response = await fetch(`${API_ENDPOINT}/videos${queryParams}`);
         
         // Only throw for actual HTTP errors, not for empty results
         if (!response.ok) {
           if (response.status === 404) {
             // 404 could mean "no videos found" in some API designs - treat as empty array
-            setVideos([])
-            return
+            setVideos([]);
+            return;
           }
-          throw new Error(`Failed to fetch videos: ${response.statusText}`)
+          throw new Error(`Failed to fetch videos: ${response.statusText}`);
         }
         
-        const data: VideoResponse = await response.json()
+        const data: VideoResponse = await response.json();
         
         // Even if we get a successful response, videos might be null or undefined
-        setVideos(data.videos || []) 
+        setVideos(data.videos || []); 
       } catch (error) {
-        console.error('Error fetching videos:', error)
-        setError(error instanceof Error ? error.message : 'Failed to load videos')
+        console.error('Error fetching videos:', error);
+        setError(error instanceof Error ? error.message : 'Failed to load videos');
       } finally {
-        setIsLoading(false)
+        setIsLoading(false);
       }
-    }
+    };
 
-    fetchVideos()
-  }, [])
+    fetchVideos();
+  }, [selectedIndexId]); // Add selectedIndexId as a dependency so videos are refreshed when index changes
 
   // Fetch indexes from backend - similar to implementation in page.tsx
   useEffect(() => {
@@ -156,128 +158,237 @@ export default function VideosPage() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-screen">
-        <div className="text-gray-600">Loading videos...</div>
+      <div className="container mx-auto p-4">
+        <h1 className="text-2xl font-bold mb-6">My Videos</h1>
+        
+        {/* Index Selection Dropdown - show even during loading */}
+        <div className="mb-6">
+          <label htmlFor="index-select" className="block text-sm font-medium text-gray-700 mb-1">
+            Select Index
+          </label>
+          <select
+            id="index-select"
+            className="w-full md:w-64 px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+            value={selectedIndexId || ''}
+            onChange={(e) => setSelectedIndexId(e.target.value || null)}
+            disabled={isLoadingIndexes || isLoading}
+          >
+            {indexes.map((index) => (
+              <option key={index.id} value={index.id}>
+                {index.name} ({index.videoCount} videos)
+              </option>
+            ))}
+            {indexes.length === 0 && (
+              <option value="" disabled>
+                {isLoadingIndexes ? 'Loading indexes...' : 'No indexes available'}
+              </option>
+            )}
+          </select>
+        </div>
+        
+        <div className="flex items-center justify-center h-64">
+          <div className="flex flex-col items-center">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-500 mb-4"></div>
+            <div className="text-gray-600">Loading videos{selectedIndexId ? ` from ${selectedIndexId}` : ''}...</div>
+          </div>
+        </div>
       </div>
-    )
+    );
   }
 
   if (error) {
     return (
-      <div className="flex items-center justify-center h-screen">
-        <div className="text-red-600">{error}</div>
+      <div className="container mx-auto p-4">
+        <h1 className="text-2xl font-bold mb-6">My Videos</h1>
+        
+        {/* Index Selection Dropdown - show even during error */}
+        <div className="mb-6">
+          <label htmlFor="index-select" className="block text-sm font-medium text-gray-700 mb-1">
+            Select Index
+          </label>
+          <select
+            id="index-select"
+            className="w-full md:w-64 px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+            value={selectedIndexId || ''}
+            onChange={(e) => setSelectedIndexId(e.target.value || null)}
+            disabled={isLoadingIndexes}
+          >
+            {indexes.map((index) => (
+              <option key={index.id} value={index.id}>
+                {index.name} ({index.videoCount} videos)
+              </option>
+            ))}
+            {indexes.length === 0 && (
+              <option value="" disabled>
+                {isLoadingIndexes ? 'Loading indexes...' : 'No indexes available'}
+              </option>
+            )}
+          </select>
+        </div>
+        
+        <div className="flex items-center justify-center h-64">
+          <div className="text-red-600">{error}</div>
+        </div>
       </div>
-    )
+    );
   }
 
   if (!videos.length) {
     return (
-      <div className="flex items-center justify-center h-screen">
-        <div className="text-gray-600">
-          No videos found. <a href="/create" className="text-blue-600 hover:underline">Upload your first video</a>
+      <div className="container mx-auto p-4">
+        <h1 className="text-2xl font-bold mb-6">My Videos</h1>
+        
+        {/* Index Selection Dropdown - show even when no videos */}
+        <div className="mb-6">
+          <label htmlFor="index-select" className="block text-sm font-medium text-gray-700 mb-1">
+            Select Index
+          </label>
+          <select
+            id="index-select"
+            className="w-full md:w-64 px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+            value={selectedIndexId || ''}
+            onChange={(e) => setSelectedIndexId(e.target.value || null)}
+            disabled={isLoadingIndexes}
+          >
+            {indexes.map((index) => (
+              <option key={index.id} value={index.id}>
+                {index.name} ({index.videoCount} videos)
+              </option>
+            ))}
+            {indexes.length === 0 && (
+              <option value="" disabled>
+                {isLoadingIndexes ? 'Loading indexes...' : 'No indexes available'}
+              </option>
+            )}
+          </select>
+        </div>
+        
+        <div className="flex items-center justify-center h-64">
+          <div className="text-gray-600">
+            {selectedIndexId 
+              ? `No videos found in index "${selectedIndexId}".` 
+              : "No videos found."} <a href="/create" className="text-blue-600 hover:underline">Upload your first video</a>
+          </div>
         </div>
       </div>
-    )
+    );
   }
 
   return (
     <div className="container mx-auto p-4">
-      <h1 className="text-2xl font-bold mb-6">My Videos</h1>
+      <h1 className="text-2xl font-bold mb-6">
+        {selectedIndexId ? `Videos in "${selectedIndexId}"` : "All Videos"}
+      </h1>
       
       {/* Index Selection Dropdown */}
       <div className="mb-6">
         <label htmlFor="index-select" className="block text-sm font-medium text-gray-700 mb-1">
           Select Index
         </label>
-        <select
-          id="index-select"
-          className="w-full md:w-64 px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
-          value={selectedIndexId || ''}
-          onChange={(e) => setSelectedIndexId(e.target.value || null)}
-          disabled={isLoadingIndexes}
-        >
-          {indexes.map((index) => (
-            <option key={index.id} value={index.id}>
-              {index.name}
-            </option>
-          ))}
-          {indexes.length === 0 && (
-            <option value="" disabled>
-              {isLoadingIndexes ? 'Loading indexes...' : 'No indexes available'}
-            </option>
+        <div className="relative">
+          <select
+            id="index-select"
+            className="w-full md:w-64 px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+            value={selectedIndexId || ''}
+            onChange={(e) => {
+              const newIndex = e.target.value || null;
+              setSelectedIndexId(newIndex);
+              // Reset videos array to show loading state when changing indexes
+              setVideos([]);
+              setIsLoading(true);
+            }}
+            disabled={isLoadingIndexes}
+          >
+            {indexes.length > 0 ? (
+              indexes.map((index) => (
+                <option key={index.id} value={index.id}>
+                  {index.name} ({index.videoCount} videos)
+                </option>
+              ))
+            ) : (
+              <option value="" disabled>
+                {isLoadingIndexes ? 'Loading indexes...' : 'No indexes available'}
+              </option>
+            )}
+          </select>
+          {isLoading && (
+            <div className="absolute right-10 top-3">
+              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-indigo-500"></div>
+            </div>
           )}
-        </select>
+        </div>
       </div>
       
-      {/* Status sections, only show videos with status ready */}
+      {/* Status sections, only show videos with status ready or similar processing states */}
       {Object.entries(videosByStatus).map(([status, statusVideos]) => (
-        status === 'ready' && (
+        (status === 'ready' || status.startsWith('ready_for_')) && (
           <div key={status} className="mb-12">
             <h2 className="mb-4 text-lg font-semibold text-gray-900 capitalize">
-            {status.replace('_', ' ')}
-            <span className="ml-2 text-sm text-gray-500">
-              ({statusVideos.length})
-            </span>
-          </h2>
-          <VideoGrid
-            videos={statusVideos}
-            onVideoSelect={setSelectedVideo}
-            selectedVideo={selectedVideo}
-          />
+              {status.replace(/_/g, ' ')}
+              <span className="ml-2 text-sm text-gray-500">
+                ({statusVideos.length})
+              </span>
+            </h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+              {statusVideos.map((video) => (
+                <button 
+                  key={video.id} 
+                  className="bg-white rounded-lg shadow-md overflow-hidden cursor-pointer transition-all hover:shadow-lg hover:scale-[1.02] text-left block w-full"
+                  onClick={() => handleVideoClick(video)}
+                  type="button"
+                >
+                  <div className="relative aspect-video bg-gray-100">
+                    {/* Display static thumbnail instead of video */}
+                    {video.videoThumbnailUrl ? (
+                      <img
+                        src={video.videoThumbnailUrl}
+                        alt={video.title || video.description || "Video thumbnail"}
+                        className="w-full h-full object-cover"
+                        loading="lazy"
+                      />
+                    ) : (
+                      <div className="w-full h-full bg-gray-200 flex items-center justify-center">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                        </svg>
+                      </div>
+                    )}
+                    
+                    {/* Play icon overlay */}
+                    <div className="absolute inset-0 flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity">
+                      <div className="w-16 h-16 bg-black bg-opacity-60 rounded-full flex items-center justify-center">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                      </div>
+                    </div>
+                    
+                    {/* Duration badge */}
+                    <div className="absolute bottom-2 right-2 bg-black bg-opacity-70 text-white text-xs px-2 py-1 rounded">
+                      {video.videoDuration || '00:00'}
+                    </div>
+                    
+                    {/* Index badge - show the index if we're not already filtering by index */}
+                    {!selectedIndexId && video.indexId && (
+                      <div className="absolute top-2 left-2 bg-black bg-opacity-70 text-white text-xs px-2 py-1 rounded">
+                        {video.indexId}
+                      </div>
+                    )}
+                  </div>
+                  
+                  <div className="p-4">
+                    <h3 className="text-lg font-medium truncate">{video.title || video.description || "Untitled Video"}</h3>
+                    <p className="text-sm text-gray-500 mt-1">
+                      Uploaded {new Date(video.uploadDate || Date.now()).toLocaleDateString()}
+                    </p>
+                  </div>
+                </button>
+              ))}
+            </div>
           </div>
         )
       ))}
-      
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {videos.map((video) => (
-          <button 
-            key={video.id} 
-            className="bg-white rounded-lg shadow-md overflow-hidden cursor-pointer transition-all hover:shadow-lg text-left block w-full"
-            onClick={() => handleVideoClick(video)}
-            type="button"
-          >
-            <div className="relative aspect-video bg-gray-100">
-              {/* Display static thumbnail instead of video */}
-              {video.videoPreviewUrl ? (
-                <img
-                  src={video.videoThumbnailUrl}
-                  alt={video.title || video.description || "Video thumbnail"}
-                  className="w-full h-full object-cover"
-                  loading="lazy"
-                />
-              ) : (
-                <div className="w-full h-full bg-gray-200 flex items-center justify-center">
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                  </svg>
-                </div>
-              )}
-              
-              {/* Play icon overlay - simplified */}
-              <div className="absolute inset-0 flex items-center justify-center">
-                <div className="w-16 h-16 bg-black bg-opacity-60 rounded-full flex items-center justify-center">
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                </div>
-              </div>
-              
-              {/* Duration badge */}
-              <div className="absolute bottom-2 right-2 bg-black bg-opacity-70 text-white text-xs px-2 py-1 rounded">
-                {video.videoDuration || '00:00'}
-              </div>
-            </div>
-            
-            <div className="p-4">
-              <h3 className="text-lg font-medium truncate">{video.title || video.description || "Untitled Video"}</h3>
-              <p className="text-sm text-gray-500 mt-1">
-                Uploaded {new Date(video.uploadDate || Date.now()).toLocaleDateString()}
-              </p>
-            </div>
-          </button>
-        ))}
-      </div>
       
       {/* Use the shared VideoModal component */}
       <VideoModal
