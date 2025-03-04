@@ -72,7 +72,8 @@ export default function VideoGrid({ videos, onVideoSelect, selectedVideo }: Vide
             <div className="mt-2 flex items-center gap-2 text-sm text-gray-600">
               <span>{new Date(video.uploadDate).toLocaleDateString()}</span>
               <span>•</span>
-              <span>{Math.floor(video.duration / 60)}:{String(video.duration % 60).padStart(2, '0')}</span>
+              {/* The video duration is in the format of HH:MM:SS */}
+              <span>{video.videoDuration}</span>
             </div>
           </div>
         </div>

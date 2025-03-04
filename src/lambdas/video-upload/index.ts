@@ -61,7 +61,7 @@ const indexSettings = {
       video_duration: { type: 'text' },
       video_id: { type: 'keyword' },
       video_name: { type: 'keyword' },
-      video_original_path: { type: 'keyword' },
+      video_source: { type: 'keyword' },
       video_s3_path: { type: 'keyword' },
       video_size: { type: 'integer' },
       video_status: { type: 'keyword' },

@@ -126,7 +126,7 @@ Using Amazon Opensearch to store the video information and enable multimodal sea
 ```json
 {
     "video_id": "string",  // Unique identifier for the video
-    "video_original_path": "string",  // Youtube URL or local video path
+    "video_source": "string",  // Youtube URL or local video path
     "video_s3_path": "string",  // S3 storage location
     "video_title": "string",  // Video title
     "video_description": "string",  // Original video description    

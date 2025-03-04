@@ -231,7 +231,7 @@ async function handleCreateIndex(event: APIGatewayProxyEvent): Promise<APIGatewa
         video_preview_url: { type: 'keyword' },
         video_s3_path: { type: 'keyword' },
         video_duration: { type: 'text' },
-        video_original_path: { type: 'keyword' },
+        video_source: { type: 'keyword' },
         created_at: { type: 'date' },
         video_type: { type: 'keyword' },
         video_status: { type: 'keyword' },

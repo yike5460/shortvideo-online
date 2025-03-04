@@ -70,7 +70,6 @@ export interface VideoResult {
   videoThumbnailUrl: string;
   videoDuration: string;
   source: 'local' | 'youtube';
-  sourceUrl?: string;
   uploadDate: string;
   format: string;
   status: VideoStatus;
@@ -115,7 +114,7 @@ export interface VideoMetadata {
   video_duration?: string;          // Total video duration in "HH:MM:SS"
   video_id?: string;
   video_name?: string;              // Original file name
-  video_original_path?: string;     // Youtube URL or local video path
+  video_source?: string;     // Youtube URL or local video path
   video_s3_path?: string;           // S3 storage location
   video_preview_url?: string;       // Pre-signed URL for thumbnail (video thumbnail)
   video_size?: number;              // File size in bytes

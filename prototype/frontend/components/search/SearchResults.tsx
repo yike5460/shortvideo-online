@@ -1,8 +1,8 @@
 'use client'
 
 import { useState, useCallback, useMemo } from 'react'
-import { Tab } from '@headlessui/react'
-import { VideoCameraIcon, ClockIcon } from '@heroicons/react/24/outline'
+import { Tab, Dialog } from '@headlessui/react'
+import { VideoCameraIcon, ClockIcon, XMarkIcon } from '@heroicons/react/24/outline'
 import { cn } from '@/lib/utils'
 import { VideoResult } from '@/types'
 
@@ -16,6 +16,8 @@ export default function SearchResults({
   showConfidenceScores
 }: SearchResultsProps) {
   const [selectedView, setSelectedView] = useState<'clip' | 'video'>('clip')
+  const [selectedVideo, setSelectedVideo] = useState<VideoResult | null>(null)
+  const [isModalOpen, setIsModalOpen] = useState(false)
 
   const getAverageConfidence = useCallback((segments: VideoResult['segments']): number => {
     console.log('segments', segments)
@@ -29,16 +31,39 @@ export default function SearchResults({
     return sum / segments.length;
   }, []);
 
-  const formatDuration = useCallback((duration: number): string => {
-    const minutes = Math.floor(duration / 60)
-    const seconds = String(duration % 60).padStart(2, '0')
-    return `${minutes}:${seconds}`
+  const formatDuration = useCallback((videoDuration: string | undefined): number => {
+    if (!videoDuration) return 0;
+    
+    try {
+      const [hours, minutes, seconds] = videoDuration.split(':').map(Number);
+      const totalSeconds = hours * 3600 + minutes * 60 + seconds;
+      return totalSeconds * 1000;
+    } catch (error) {
+      console.warn('Error parsing video duration:', videoDuration);
+      return 0;
+    }
   }, [])
+
+  const handleVideoClick = useCallback((video: VideoResult) => {
+    setSelectedVideo(video);
+    setIsModalOpen(true);
+  }, []);
+
+  const closeModal = useCallback(() => {
+    setIsModalOpen(false);
+    // Give time for the animation to complete before clearing the selected video
+    setTimeout(() => setSelectedVideo(null), 300);
+  }, []);
 
   const renderGridView = useCallback(() => (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
       {results.map((result) => (
-        <div key={result.id} className="bg-white rounded-lg shadow-sm overflow-hidden">
+        <button
+          key={result.id}
+          className="bg-white rounded-lg shadow-sm overflow-hidden text-left transition-transform hover:scale-[1.02] focus:outline-none focus:ring-2 focus:ring-primary-500"
+          onClick={() => handleVideoClick(result)}
+          type="button"
+        >
           <div className="aspect-video relative">
             <img
               src={result.videoThumbnailUrl}
@@ -60,18 +85,23 @@ export default function SearchResults({
             </p>
             <div className="mt-4 flex items-center justify-between text-sm text-gray-600">
               <span>{new Date(result.uploadDate).toLocaleDateString()}</span>
-              <span>{formatDuration(result.duration)}</span>
+              <span>{result.videoDuration}</span>
             </div>
           </div>
-        </div>
+        </button>
       ))}
     </div>
-  ), [results, showConfidenceScores, formatDuration])
+  ), [results, showConfidenceScores, handleVideoClick])
 
   const renderTimelineView = useCallback(() => (
     <div className="space-y-6">
       {results.map((result) => (
-        <div key={result.id} className="bg-white rounded-lg shadow-sm p-6">
+        <button
+          key={result.id}
+          className="bg-white rounded-lg shadow-sm p-6 w-full text-left transition-transform hover:scale-[1.01] focus:outline-none focus:ring-2 focus:ring-primary-500"
+          onClick={() => handleVideoClick(result)}
+          type="button"
+        >
           <div className="flex gap-6">
             <div className="w-64 aspect-video rounded-lg overflow-hidden relative">
               <img
@@ -95,7 +125,7 @@ export default function SearchResults({
               <div className="mt-4">
                 <div className="relative">
                   {showConfidenceScores && result.segments?.map((segment, index) => {
-                    const centerPercent = ((segment.start_time + (segment.end_time - segment.start_time) / 2) / result.duration) * 100;
+                    const centerPercent = ((segment.start_time + (segment.end_time - segment.start_time) / 2) / formatDuration(result.videoDuration)) * 100;
                     const confidence = segment.segment_visual?.segment_visual_objects?.[0]?.confidence || 0;
                     return (
                       <div
@@ -109,8 +139,8 @@ export default function SearchResults({
                   })}
                   <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
                     {result.segments?.map((segment, index) => {
-                      const startPercent = (segment.start_time / result.duration) * 100;
-                      const widthPercent = ((segment.end_time - segment.start_time) / result.duration) * 100;
+                      const startPercent = (segment.start_time / formatDuration(result.videoDuration)) * 100;
+                      const widthPercent = ((segment.end_time - segment.start_time) / formatDuration(result.videoDuration)) * 100;
                       const confidence = segment.segment_visual?.segment_visual_objects?.[0]?.confidence || 0;
                       return (
                         <div
@@ -128,15 +158,15 @@ export default function SearchResults({
                 </div>
                 <div className="mt-1 flex justify-between text-sm text-gray-600">
                   <span>0:00</span>
-                  <span>{formatDuration(result.duration)}</span>
+                  <span>{result.videoDuration}</span>
                 </div>
               </div>
             </div>
           </div>
-        </div>
+        </button>
       ))}
     </div>
-  ), [results, showConfidenceScores, getAverageConfidence, formatDuration])
+  ), [results, showConfidenceScores, getAverageConfidence, formatDuration, handleVideoClick])
 
   const handleViewChange = useCallback((view: 'clip' | 'video') => {
     setSelectedView(view)
@@ -185,6 +215,57 @@ export default function SearchResults({
       </div>
 
       {tabPanels[selectedView]}
+
+      {/* Video Player Modal */}
+      <Dialog
+        open={isModalOpen}
+        onClose={closeModal}
+        className="relative z-50"
+      >
+        <div className="fixed inset-0 bg-black/70" aria-hidden="true" />
+        
+        <div className="fixed inset-0 flex items-center justify-center p-4">
+          <Dialog.Panel className="mx-auto max-w-4xl w-full bg-white rounded-xl shadow-xl overflow-hidden">
+            <div className="relative">
+              <button
+                type="button"
+                onClick={closeModal}
+                className="absolute top-4 right-4 z-10 p-2 rounded-full bg-black/50 text-white hover:bg-black/70 focus:outline-none"
+              >
+                <XMarkIcon className="h-6 w-6" />
+              </button>
+              
+              {selectedVideo && (
+                <div>
+                  <div className="aspect-video w-full">
+                    <video
+                      src={selectedVideo.videoPreviewUrl}
+                      controls
+                      autoPlay
+                      className="w-full h-full object-contain"
+                    >
+                      Your browser does not support the video tag.
+                    </video>
+                  </div>
+                  
+                  <div className="p-6">
+                    <h2 className="text-xl font-semibold text-gray-900">
+                      {selectedVideo.title}
+                    </h2>
+                    <p className="mt-2 text-gray-600">
+                      {selectedVideo.description}
+                    </p>
+                    <div className="mt-4 flex items-center justify-between text-sm text-gray-500">
+                      <span>Uploaded: {new Date(selectedVideo.uploadDate).toLocaleDateString()}</span>
+                      <span>Duration: {selectedVideo.videoDuration}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </Dialog.Panel>
+        </div>
+      </Dialog>
     </div>
   )
 } 
