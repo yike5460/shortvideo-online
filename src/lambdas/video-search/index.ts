@@ -8,6 +8,8 @@ import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedroc
 import { AwsSigv4Signer } from '@opensearch-project/opensearch/aws';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand } from '@aws-sdk/lib-dynamodb';
+import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 // Update search query interface to match frontend
 interface SearchQuery {
@@ -54,6 +56,7 @@ const openSearch = new Client({
 });
 
 const bedrock = new BedrockRuntimeClient({});
+const s3 = new S3Client({});
 let redisClient: RedisClientType | null = null;
 const dynamoClient = new DynamoDBClient({endpoint: process.env.INDEXES_TABLE_DYNAMODB_DNS_NAME});
 const docClient = DynamoDBDocumentClient.from(dynamoClient);
@@ -193,11 +196,28 @@ const getTestQuery = (indexName: string) => ({
 });
 
 // Update the transform function to normalize OpenSearch confidence scores, such score is relative and per index and per query, calculated using TF-IDF by default
-const transformSearchResults = (hits: any[]): VideoResult[] => {
+const transformSearchResults = async (hits: any[]): Promise<VideoResult[]> => {
   // Find the max score for normalization
   const maxScore = Math.max(...hits.map(hit => hit._score || 0));
   
-  return hits.map(hit => {
+  // Helper function to generate signed URLs
+  const generateSignedUrl = async (s3Path: string): Promise<string> => {
+    if (!s3Path) return '';
+    
+    try {
+      const getCommand = new GetObjectCommand({
+        Bucket: process.env.VIDEO_BUCKET,
+        Key: s3Path,
+      });
+      return await getSignedUrl(s3 as any, getCommand as any, { expiresIn: 3600 });
+    } catch (error) {
+      console.warn(`Failed to generate signed URL for ${s3Path}:`, error);
+      return '';
+    }
+  };
+  
+  // Process all results in parallel
+  return await Promise.all(hits.map(async hit => {
     // Extract only the essential segments data
     const segments = hit._source.video_segments?.map((segment: any): VideoSegment => ({
       segment_id: segment.segment_id,
@@ -213,15 +233,19 @@ const transformSearchResults = (hits: any[]): VideoResult[] => {
     // Normalize the score to be between 0 and 1
     const normalizedScore = maxScore > 0 ? (hit._score || 0) / maxScore : 0;
     
+    // Generate fresh signed URLs for video preview and thumbnail
+    const videoPreviewUrl = await generateSignedUrl(hit._source.video_s3_path);
+    const thumbnailUrl = await generateSignedUrl(hit._source.video_thumbnail_s3_path);
+    
     return {
       id: hit._id,
       title: hit._source.video_title || '',
       description: hit._source.video_description || '',
-      videoPreviewUrl: hit._source.video_preview_url || '',
+      videoPreviewUrl: videoPreviewUrl,
       videoS3Path: hit._source.video_s3_path || '',
       videoDuration: hit._source.video_duration || "00:00:00",
       videoThumbnailS3Path: hit._source.video_thumbnail_s3_path || '',
-      videoThumbnailUrl: hit._source.video_thumbnail_url || '',
+      videoThumbnailUrl: thumbnailUrl,
       source: hit._source.video_source?.includes('youtube.com') ? 'youtube' : 'local',
       uploadDate: hit._source.created_at,
       format: hit._source.video_type || '',
@@ -231,7 +255,7 @@ const transformSearchResults = (hits: any[]): VideoResult[] => {
       searchConfidence: normalizedScore, // Use normalized score
       indexId: hit._source.video_index || 'videos'
     };
-  });
+  }));
 };
 
 // Update the handler to use the dynamic index
@@ -268,25 +292,10 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
     // }
 
     const openSearchIndexName = await getOpenSearchIndexName(searchQuery.selectedIndex || '')
-    
-    // Test the OpenSearch connection with minimal data
-    const testQuery = getTestQuery(openSearchIndexName);
-    console.log('Test query:', JSON.stringify(testQuery, null, 2));
-    
-    const { body: testResult } = await openSearch.search(testQuery);
-    
-    // Log only essential test data
-    if (testResult.hits?.hits) {
-      console.log(`Found ${testResult.hits.total.value} documents in index ${openSearchIndexName}`);
-      console.log('Sample documents:', testResult.hits.hits.slice(0, 3).map((hit: any) => ({
-        id: hit._id,
-        title: hit._source.video_title,
-        status: hit._source.video_status
-      })));
-    }
 
     // Build and execute the search with limited results
     const searchBody = buildSearchQuery(searchQuery);
+
     const { body } = await openSearch.search({
       index: openSearchIndexName,
       body: searchBody
@@ -297,7 +306,7 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
     console.log('Result IDs:', body.hits.hits.map((hit: any) => hit._id));
 
     // Transform results to match VideoResult interface with limited data
-    const results: VideoResult[] = transformSearchResults(body.hits.hits);
+    const results: VideoResult[] = await transformSearchResults(body.hits.hits);
 
     // Cache results, skip the redis cache for now
     // await redisClient.set(cacheKey, JSON.stringify(results), {
