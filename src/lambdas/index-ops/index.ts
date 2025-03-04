@@ -144,11 +144,27 @@ async function handleGetIndex(event: APIGatewayProxyEvent): Promise<APIGatewayPr
         
         while (retries > 0 && !success) {
           try {
-            const { body } = await openSearch.count({
-              index: index.openSearchIndexName
+            // Use the same filtering logic as in video-upload/index.ts
+            // to exclude deleted videos and get an accurate count
+            const { body } = await openSearch.search({
+              // Use the indexId directly as the index name, which is what
+              // video-upload/index.ts does when querying videos
+              index: index.indexId,
+              body: {
+                query: {
+                  bool: {
+                    must_not: [
+                      { term: { video_status: 'deleted' } }
+                    ]
+                  }
+                },
+                size: 0, // We only need the count, not the actual documents
+              }
             });
             
-            videoCount = body.count || 0;
+            // Extract count from the total hits
+            console.log('List all videos from index: ', index.indexId, ' body: ', JSON.stringify(body, null, 2), ' total hits: ', body.hits.total.value);
+            videoCount = body.hits.total.value || 0;
             success = true;
           } catch (countError) {
             console.warn(`Error getting video count for index ${index.indexId} (retry ${4-retries}/3):`, countError);
