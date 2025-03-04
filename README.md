@@ -123,74 +123,160 @@ https://huggingface.co/alibaba-pai/VideoCLIP-XL/tree/main
 **Video Metadata Injection**
 Using Amazon Opensearch to store the video information and enable multimodal search capabilities. The schema is optimized for both exact keyword matching and semantic search across visual and audio content:
 
-```json
-{
-    "video_id": "string",  // Unique identifier for the video
-    "video_source": "string",  // Youtube URL or local video path
-    "video_s3_path": "string",  // S3 storage location
-    "video_title": "string",  // Video title
-    "video_description": "string",  // Original video description    
-    "video_duration": "string",  // Total video duration in SMPTE format
-    "video_summary": "string",  // Video summary, AI generated
-    // Here the video segment is general concept of the video shot, which is "a series of interrelated consecutive pictures taken contiguously by a single camera and representing a continuous action in time and space. "
-    "video_segments": [
-        {
-            "segment_id": "string",
-            "segment_start_time": "string",  // SMPTE format
-            "segment_end_time": "string",    // SMPTE format
-            "segment_duration": "string",  // SMPTE format
-            "segment_audio": {
-                "segment_audio_transcript": "string",  // Raw transcript text
-                "segment_audio_semantic_embedding": [0.0],  // Audio embedding
-                "segment_audio_description": "string"  // Audio description, AI generated
-            },
-            "segment_visual": {
-                "segment_visual_keyframe_path": "string",  // S3 path to keyframe
-                "segment_visual_description": "string",  // Visual description, AI generated
-                // Object detection results
-                "segment_visual_objects": [
-                    {
-                        "label": "string",  // Object label (e.g., "hummingbird", "person")
-                        "confidence": "float",
-                        "bounding_box": {
-                            "left": "float",
-                            "top": "float",
-                            "width": "float",
-                            "height": "float"
-                        },
-                    }
-                ],
-                // Face detection results
-                "segment_visual_faces": [
-                    {
-                        "person_name": "string",  // Identified person (e.g., "Joe Biden")
-                        "confidence": "float",
-                        "bounding_box": {
-                            "left": "float",
-                            "top": "float",
-                            "width": "float",
-                            "height": "float"
-                        }
-                    }
-                ],
-                "segment_visual_embedding": [0.0],  // Visual embedding for image similarity search
-                "segment_visual_ocr_text": ["string"]  // Extracted text from images
-            }
-        }
-    ],
-    // Quick search data - used for initial search
-    "video_metadata": {
-        "exact_match_keywords": {
-            "visual": ["string"],  // All visual objects and faces for exact matching
-            "audio": ["string"],   // Important phrases and keywords from audio
-            "text": ["string"]     // OCR and caption text for exact matching
-        },
-        "semantic_vectors": {
-            "visual_embedding": [0.0],  // A numerical vector representing the overall visual content of the video. Used for finding visually similar videos or when searching with an image query.
-            "text_embedding": [0.0],    // A numerical vector representing the semantic meaning of all text content. Used for fuzzy text search where exact matches aren't required (e.g., searching for "birds" might match "parrots" or "hummingbirds").
-            "audio_embedding": [0.0]    // A numerical vector representing the audio content. Used for finding videos with similar audio content or when searching with an audio query.
-        }
-    }
+```typescript
+// Video metadata types
+export interface VideoMetadata {  
+  video_index: string;              // Index ID
+  video_description?: string;       // Original video description    
+  video_duration?: string;          // Total video duration in "HH:MM:SS"
+  video_id?: string;
+  video_name?: string;              // Original file name
+  video_source?: string;     // Youtube URL or local video path
+  video_s3_path?: string;           // S3 storage location
+  video_preview_url?: string;       // Pre-signed URL for thumbnail (video thumbnail)
+  video_size?: number;              // File size in bytes
+  video_status?: VideoStatus;       // Current processing status
+  video_summary?: string;           // Video summary, AI generated
+  video_tags?: string[];            // Tags for the video
+  video_title?: string;             // Video title
+  video_thumbnail_s3_path?: string; // S3 path to thumbnail (image)
+  video_thumbnail_url?: string;     // Pre-signed URL for thumbnail (image thumbnail)
+  video_type?: string;              // MIME type
+  
+  created_at?: string;              // ISO timestamp
+  updated_at?: string;              // ISO timestamp
+  error?: string;                   // Error message if processing failed
+  segment_count?: number;           // Number of detected segments
+  job_id?: string;                  // Job ID for the video processing
+  
+  video_metadata?: SearchMetadata;  // Quick search metadata
+  video_segments?: VideoSegment[];  // Video segments
+}
+
+export type VideoStatus = 
+  | 'awaiting_upload'   // Initial state when pre-signed URL is generated
+  | 'uploading'         // File is being uploaded to S3
+  | 'uploaded'          // File upload completed
+  | 'processing'        // Video is being processed (slicing/indexing)
+  | 'ready_for_face'    // Video completed face detection
+  | 'ready_for_object'  // Video completed object detection
+  | 'ready_for_shots'   // Video completed shot detection
+  | 'ready_for_video_embed'   // Video completed video embedding
+  | 'ready_for_audio_embed'   // Video completed audio embedding
+  | 'ready'             // Video is fully processed and searchable
+  | 'error'             // Processing failed
+  | 'deleted';          // Video was deleted
+
+export type WebVideoStatus = 
+  | 'processing'
+  | 'completed'
+  | 'failed'
+
+export interface VideoSegment {
+  segment_id?: string;        // Segment ID, will be updated once in segment detection, in format of `${videoId}_segment_${segmentNumber}`,
+  video_id: string;
+  start_time: number;        // Milliseconds from start
+  end_time: number;          // Milliseconds from start
+  duration: number;          // Segment duration in milliseconds
+  video_s3_path?: string;     // S3 storage location for each segment (shots)
+  segment_audio?: {
+    segment_audio_transcript?: string;     // Raw transcript text
+    segment_audio_semantic_embedding?: number[];  // Audio embedding
+    segment_audio_description?: string;    // Audio description
+  };
+  segment_visual?: {
+    segment_visual_keyframe_path?: string;  // S3 path to keyframe, will obsolete to use video_s3_path instead
+    segment_visual_description?: string;    // Visual description
+    segment_visual_objects?: VisualObject[];
+    segment_visual_faces?: FaceDetection[];
+    segment_visual_embedding?: number[];    // Visual embedding
+    segment_visual_ocr_text?: string[];    // Extracted text
+  };
+}
+
+export interface VisualObject {
+  label: string;
+  confidence: number;
+  bounding_box: BoundingBox;
+}
+
+export interface FaceDetection {
+  person_name?: string;
+  confidence: number;
+  bounding_box: BoundingBox;
+}
+
+export interface BoundingBox {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+// Quick search metadata
+export interface SearchMetadata {
+  exact_match_keywords: {
+    visual: string[];    // All visual objects and faces
+    audio: string[];     // Important phrases and keywords
+    text: string[];      // OCR and caption text
+  };
+  semantic_vectors: {
+    visual_embedding?: number[];  // Overall visual content vector
+    text_embedding?: number[];    // Semantic text vector
+    audio_embedding?: number[];   // Audio content vector
+  };
+}
+
+export type ConfidencePreset = 'low' | 'medium' | 'high'
+export type ConfidenceAdjustment = 'less' | 'default' | 'more'
+
+export interface SearchOptions {
+  visualSearch: boolean
+  audioSearch: boolean
+  minConfidence: number
+  showConfidenceScores: boolean
+  selectedIndex: string | null
+  confidencePreset: ConfidencePreset
+  confidenceAdjustment: ConfidenceAdjustment
+}
+
+// Processing job types
+export interface VideoProcessingJob {
+  videoId: string;
+  bucket: string;
+  key: string;
+  metadata?: {
+    fileName?: string;
+    fileSize?: number;
+    fileType?: string;
+  };
+}
+
+// Add OpenSearch result type with confidence
+export interface OpenSearchHit {
+  _id: string;
+  _score: number; // This is the OpenSearch confidence score
+  _source: any;
+}
+
+// Align with the web frontend in frontend/types/index.ts
+export interface VideoResult {
+  id: string;
+  indexId: string;  
+  title: string;
+  description: string;
+  videoPreviewUrl: string;
+  videoS3Path: string;
+  videoDuration: string;
+  videoThumbnailS3Path?: string;  // S3 path to thumbnail (image)
+  videoThumbnailUrl?: string;     // Pre-signed URL for thumbnail (image thumbnail)
+  source: 'local' | 'youtube';
+  uploadDate: string;
+  format: string;
+  status: VideoStatus;
+  size: number;
+  segments: VideoSegment[];
+  searchConfidence?: number; // Add OpenSearch confidence score
 }
 ```
 
@@ -317,7 +403,9 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     participant S3
-    participant Lambda
+    participant Lambda_Initial as Lambda (Initial)
+    participant SQS
+    participant Lambda_Slicing as Lambda (Slicing)
     participant SNS
     participant Rekognition
     participant ECS
@@ -326,49 +414,72 @@ sequenceDiagram
     participant Bedrock
     participant OpenSearch
 
+    rect rgb(241, 250, 238)
     %% Initial S3 Event Trigger
-    S3->>Lambda: Object Created Event
-    Lambda->>OpenSearch: Create Initial Video Entry
-    
-    %% Start Rekognition Jobs
-    Lambda->>Rekognition: Start jobs for shots/labels/faces detection
-    Note over Rekognition: Async Processing
-    Rekognition-->>SNS: Job Complete Notification
-    SNS->>Lambda: Process Rekognition Results
-    
-    %% Parallel Processing after Segments
-    par Parallel Processing after Segments
-        %% Audio Processing (FFMPEG + Transcribe)
-        Lambda->>FFMPEG: Extract Audio
-        FFMPEG-->>S3: Store Audio File
-        Lambda->>Transcribe: Process Audio
-        Transcribe-->>S3: Store Transcription
-        
-        %% Visual Processing for keyframes and description (FFMPEG + Bedrock)
-        Lambda->>FFMPEG: Extract Keyframes
-        FFMPEG-->>S3: Store Keyframes
-        Lambda->>Bedrock: Generate Frame Descriptions
-        Bedrock-->>Lambda: Return Descriptions
-        
-        %% Visual Processing for shots & object & face detection (Rekognition)
-        Lambda->>OpenSearch: Update the object/face detection results (texts)
+    S3->>Lambda_Initial: Object Created Event
+    Lambda_Initial->>OpenSearch: Create Initial Video Entry
     end
 
+    rect rgb(224, 242, 241)
+    %% Start Rekognition Jobs
+    Lambda_Initial->>Rekognition: Start jobs for shots/labels/faces detection
+    Note over Rekognition: Async Processing
+    Rekognition-->>SNS: Job Complete Notification
+    SNS->>Lambda_Initial: Process Rekognition Results
+    end
+
+    rect rgb(249, 234, 235)
+    %% SQS Message for Each Shot
+    Lambda_Initial->>SQS: Send SQS message per Rekognition shot
+    end
+
+    rect rgb(230, 237, 249)
+    %% Parallel Processing after Shots via SQS
+    par Parallel Shot Processing via SQS
+        SQS-->>Lambda_Slicing: SQS Message (Shot Detected)
+        Lambda_Slicing->>FFMPEG: Slice Video Shot & Extract Thumbnail
+        FFMPEG-->>S3: Store Video Shot & Thumbnail
+        Lambda_Slicing->>OpenSearch: Update Shot Info (thumbnail path)
+    end
+    end
+
+    rect rgb(255, 249, 242)
+    %% Parallel Audio & Visual leftovers
+    par Parallel Audio & Visual leftovers
+        %% Audio Processing (FFMPEG + Transcribe)
+        Lambda_Initial->>FFMPEG: Extract Audio
+        FFMPEG-->>S3: Store Audio File
+        Lambda_Initial->>Transcribe: Process Audio
+        Transcribe-->>S3: Store Transcription
+
+        %% Visual Processing for video description (FFMPEG + Bedrock)
+        Lambda_Initial->>Bedrock: Generate Frame Descriptions
+        Bedrock-->>Lambda_Initial: Return Descriptions
+
+        %% Visual Processing for object & face detection (Rekognition)
+        Lambda_Initial->>OpenSearch: Update the object/face detection results (texts)
+    end
+    end
+
+    rect rgb(243, 249, 255)
     %% Embedding Generation
-    Lambda->>ECS: Start Embedding Task for audio & shots
+    Lambda_Initial->>ECS: Start Embedding Task for audio & shots
     Note over ECS: Generate Embeddings
         note over ECS: BGE Model for Text/Audio
         note over ECS: VideoCLIP-XL for Video
-    ECS-->>Lambda: Return Embeddings
-    
+    ECS-->>Lambda_Initial: Return Embeddings
+    end
+
+    rect rgb(241, 250, 238)
     %% Final Processing
-    Lambda->>OpenSearch: Store complete VideoMetadata
+    Lambda_Initial->>OpenSearch: Store complete VideoMetadata
         note over OpenSearch: Store VideoMetadata:
         note over OpenSearch: - Brief Video Info (name, description, duration, etc.)
-        note over OpenSearch: - Video Segment Data (audio, visual)
+        note over OpenSearch: - Video Segment Data (audio, visual, shots)
         note over OpenSearch: - Search Metadata (Not used for now)
-    
-    Lambda->>OpenSearch: Update Video Status
+
+    Lambda_Initial->>OpenSearch: Update Video Status
+    end
 ```
 
 The video status transition workflow:
@@ -437,40 +548,31 @@ graph TD
         OS[OpenSearch Serverless]
         S3[S3]
         SQS[SQS]
+        DynamoDB[DynamoDB]
+        ECR[ECR]
+        ECRDocker[ECR Docker]
+        CloudWatchLogs[CloudWatch Logs]
+        Rekognition[Rekognition]
+        ElastiCache[ElastiCache]
+        Redis[Redis]
     end
 
     APIGW --> Lambda
     Lambda --> VPCEndpoints
     ECS --> VPCEndpoints
+    Redis --> VPCEndpoints
+
     VPCEndpoints --> OS
     VPCEndpoints --> S3
     VPCEndpoints --> SQS
+    VPCEndpoints --> DynamoDB
+    VPCEndpoints --> ECR
+    VPCEndpoints --> ECRDocker
+    VPCEndpoints --> CloudWatchLogs
+    VPCEndpoints --> Rekognition
+    VPCEndpoints --> ElastiCache
 ```
 
-5. **Security Flow**
-```mermaid
-graph TD
-    subgraph "IAM & Security"
-        IAM[IAM Roles]
-        SG[Security Groups]
-        VP[VPC Endpoints]
-    end
-
-    subgraph "Services"
-        Lambda[Lambda]
-        ECS[ECS Tasks]
-        OS[OpenSearch]
-    end
-
-    IAM --> Lambda
-    IAM --> ECS
-    SG --> Lambda
-    SG --> ECS
-    SG --> VP
-    VP --> OS
-```
-
-This architecture ensures:
 1. Complete VPC isolation for OpenSearch Serverless
 2. No internet access required for core services
 3. Least privilege access through IAM roles
@@ -645,28 +747,32 @@ Response: {
 ```
 
 #### Storage Structure
-
 ```
 s3://bucket-name/
 ├── RawVideos/
 │   └── YYYY-MM-DD/
-│       └── video_id/
-│           ├── original.mp4
-│           └── metadata.json
+│       └── video index/
+│           ├── video_id 1/
+│           │   ├── abc.mp4
+│           │   └── abc.jpg (thumbnail)
+│           └── video_id 2/
+│               ├── def.mp4
+│               └── def.jpg (thumbnail)
 ├── ProcessedVideos/
-│   └── video_id/
-│       ├── segments/
-│       │   ├── original_001.mp4
-│       │   ├── original_001.jpg (keyframe)
-│       │   ├── original_002.mp4
-│       │   └── original_002.jpg (keyframe)
-│       └── metadata/
-│           ├── visual_embeddings.json
-│           └── audio_embeddings.json
-└── Thumbnails/
-    └── video_id/
-        ├── thumb_001.jpg
-        └── thumb_002.jpg
+│   └── YYYY-MM-DD/
+│       └── video index/
+│           ├── video_id 1/
+|           |   └── segments/
+|           |        └── abc_001.mp4
+|           |        └── abc_001.jpg (thumbnail)
+|           |        └── abc_002.mp4
+|           |        └── abc_002.jpg (thumbnail)
+|           └── video_id 2/
+|               └── segments/
+|                   └── def_001.mp4
+|                   └── def_001.jpg (thumbnail)
+|                   └── def_002.mp4
+|                   └── def_002.jpg (thumbnail)
 ```
 
 ## Security & Performance
