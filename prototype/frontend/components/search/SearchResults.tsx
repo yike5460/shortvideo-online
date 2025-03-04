@@ -1,10 +1,11 @@
 'use client'
 
 import { useState, useCallback, useMemo } from 'react'
-import { Tab, Dialog } from '@headlessui/react'
-import { VideoCameraIcon, ClockIcon, XMarkIcon } from '@heroicons/react/24/outline'
+import { Tab } from '@headlessui/react'
+import { VideoCameraIcon, ClockIcon } from '@heroicons/react/24/outline'
 import { cn } from '@/lib/utils'
 import { VideoResult } from '@/types'
+import VideoModal from '@/components/VideoModal'
 
 interface SearchResultsProps {
   results: VideoResult[]
@@ -217,55 +218,11 @@ export default function SearchResults({
       {tabPanels[selectedView]}
 
       {/* Video Player Modal */}
-      <Dialog
-        open={isModalOpen}
+      <VideoModal
+        video={selectedVideo}
+        isOpen={isModalOpen}
         onClose={closeModal}
-        className="relative z-50"
-      >
-        <div className="fixed inset-0 bg-black/70" aria-hidden="true" />
-        
-        <div className="fixed inset-0 flex items-center justify-center p-4">
-          <Dialog.Panel className="mx-auto max-w-4xl w-full bg-white rounded-xl shadow-xl overflow-hidden">
-            <div className="relative">
-              <button
-                type="button"
-                onClick={closeModal}
-                className="absolute top-4 right-4 z-10 p-2 rounded-full bg-black/50 text-white hover:bg-black/70 focus:outline-none"
-              >
-                <XMarkIcon className="h-6 w-6" />
-              </button>
-              
-              {selectedVideo && (
-                <div>
-                  <div className="aspect-video w-full">
-                    <video
-                      src={selectedVideo.videoPreviewUrl}
-                      controls
-                      autoPlay
-                      className="w-full h-full object-contain"
-                    >
-                      Your browser does not support the video tag.
-                    </video>
-                  </div>
-                  
-                  <div className="p-6">
-                    <h2 className="text-xl font-semibold text-gray-900">
-                      {selectedVideo.title}
-                    </h2>
-                    <p className="mt-2 text-gray-600">
-                      {selectedVideo.description}
-                    </p>
-                    <div className="mt-4 flex items-center justify-between text-sm text-gray-500">
-                      <span>Uploaded: {new Date(selectedVideo.uploadDate).toLocaleDateString()}</span>
-                      <span>Duration: {selectedVideo.videoDuration}</span>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          </Dialog.Panel>
-        </div>
-      </Dialog>
+      />
     </div>
   )
 } 

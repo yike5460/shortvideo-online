@@ -4,9 +4,9 @@ import { useState, useEffect, useMemo } from 'react'
 import { VideoResult } from '@/types'
 import VideoGrid from '@/components/VideoGrid'
 import VideoSidebar from '@/components/VideoSidebar'
+import VideoModal from '@/components/VideoModal'
 import { useSearchParams } from 'next/navigation'
 import { useAuth } from '@/lib/auth/AuthContext'
-import { Dialog } from '@headlessui/react'
 
 // Add API configuration
 const API_ENDPOINT = process.env.NEXT_PUBLIC_API_URL
@@ -22,80 +22,6 @@ interface Index {
   name: string;
   status: 'ready' | 'indexing' | 'error';
   videoCount: number;
-}
-
-interface VideoModalProps {
-  video: VideoResult | null;
-  isOpen: boolean;
-  onClose: () => void;
-}
-
-function VideoModal({ video, isOpen, onClose }: VideoModalProps) {
-  if (!video) return null;
-
-  return (
-    <Dialog
-      open={isOpen}
-      onClose={onClose}
-      className="relative z-50"
-      as="div"
-    >
-      <div className="fixed inset-0 bg-black/30" aria-hidden="true" />
-      
-      <div className="fixed inset-0 flex items-center justify-center p-4">
-        <Dialog.Panel className="w-full max-w-4xl bg-white rounded-lg shadow-xl overflow-hidden">
-          <div className="p-6">
-            <div className="flex justify-between items-center mb-4">
-              <Dialog.Title className="text-xl font-medium">
-                {video.title || video.description || "Untitled Video"}
-              </Dialog.Title>
-              <button 
-                onClick={onClose}
-                className="text-gray-500 hover:text-gray-700"
-                type="button"
-              >
-                <span className="sr-only">Close</span>
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-            
-            <div className="flex gap-4 mb-4 text-sm text-gray-500">
-              <div className="flex items-center gap-1">
-                <span>video-id: {video.id?.substring(0, 8) || 'unknown'}...</span>
-                <button className="text-gray-400 hover:text-gray-600" type="button">
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                  </svg>
-                </button>
-              </div>
-              
-              <div className="flex items-center gap-1">
-                <span>index-id: {video.indexId?.substring(0, 8) || 'none'}...</span>
-                <button className="text-gray-400 hover:text-gray-600" type="button">
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                  </svg>
-                </button>
-              </div>
-            </div>
-            
-            <div className="relative w-full aspect-video bg-black rounded overflow-hidden">
-              <video 
-                src={video.videoPreviewUrl} 
-                className="w-full h-full object-cover"
-                controls
-                autoPlay
-              >
-                Your browser does not support the video tag.
-              </video>
-            </div>
-          </div>
-        </Dialog.Panel>
-      </div>
-    </Dialog>
-  );
 }
 
 export default function VideosPage() {
@@ -353,7 +279,7 @@ export default function VideosPage() {
         ))}
       </div>
       
-      {/* Simplified modal rendering */}
+      {/* Use the shared VideoModal component */}
       <VideoModal
         video={selectedVideo}
         isOpen={isModalOpen}
