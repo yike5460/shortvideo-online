@@ -1,12 +1,13 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { VideoResult } from '@/types'
 import VideoGrid from '@/components/VideoGrid'
 import VideoSidebar from '@/components/VideoSidebar'
 import VideoModal from '@/components/VideoModal'
 import { useSearchParams } from 'next/navigation'
 import { useAuth } from '@/lib/auth/AuthContext'
+import { EllipsisVerticalIcon } from '@heroicons/react/24/outline'
 
 // Add API configuration
 const API_ENDPOINT = process.env.NEXT_PUBLIC_API_URL
@@ -24,6 +25,75 @@ interface Index {
   videoCount: number;
 }
 
+// Add a VideoCardMenu component for the dropdown
+const VideoCardMenu = ({ 
+  video, 
+  onDelete, 
+  onReprocess,
+  onViewDetails,
+  isOpen, 
+  setIsOpen,
+  menuRef
+}: { 
+  video: VideoResult, 
+  onDelete: (video: VideoResult) => Promise<void>, 
+  onReprocess: (video: VideoResult) => Promise<void>,
+  onViewDetails: (video: VideoResult) => void,
+  isOpen: boolean, 
+  setIsOpen: (open: boolean) => void,
+  menuRef: React.RefObject<HTMLDivElement>
+}) => {
+  return (
+    <div ref={menuRef} className="relative z-10">
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          setIsOpen(!isOpen);
+        }}
+        className="p-2 rounded-full hover:bg-gray-200 transition-colors"
+        aria-label="More options"
+      >
+        <EllipsisVerticalIcon className="h-5 w-5 text-gray-600" />
+      </button>
+      
+      {isOpen && (
+        <div className="absolute right-0 mt-1 w-48 bg-white rounded-md shadow-lg py-1 ring-1 ring-black ring-opacity-5 z-50">
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onViewDetails(video);
+              setIsOpen(false);
+            }}
+            className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+          >
+            View Details
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete(video);
+              setIsOpen(false);
+            }}
+            className="block w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-gray-100"
+          >
+            Delete
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onReprocess(video);
+              setIsOpen(false);
+            }}
+            className="block w-full text-left px-4 py-2 text-sm text-blue-600 hover:bg-gray-100"
+          >
+            Reprocess
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
+
 export default function VideosPage() {
   const { state } = useAuth()
   const searchParams = useSearchParams()
@@ -35,6 +105,31 @@ export default function VideosPage() {
   const [selectedIndexId, setSelectedIndexId] = useState<string | null>(null)
   const [isLoadingIndexes, setIsLoadingIndexes] = useState(false)
   const [isModalOpen, setIsModalOpen] = useState(false)
+  // Add a state to track the actual video counts per index
+  const [indexVideoCounts, setIndexVideoCounts] = useState<Record<string, number>>({})
+  // Track total videos for "All Videos" option
+  const [totalVideos, setTotalVideos] = useState<number>(0)
+  // Add a state to track which video's menu is open
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null)
+  // Add a state for delete confirmation
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [videoToDelete, setVideoToDelete] = useState<VideoResult | null>(null)
+  // Add a ref to handle clicking outside the menu
+  const menuRef = useRef<HTMLDivElement>(null)
+  
+  // Add click outside handler
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setOpenMenuId(null);
+      }
+    }
+    
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [menuRef]);
 
   // Fetch videos on mount
   useEffect(() => {
@@ -59,6 +154,11 @@ export default function VideosPage() {
         
         // Even if we get a successful response, videos might be null or undefined
         setVideos(data.videos || []); 
+        
+        // Update the total videos count when loading all videos
+        if (!selectedIndexId && data.total) {
+          setTotalVideos(data.total);
+        }
       } catch (error) {
         console.error('Error fetching videos:', error);
         setError(error instanceof Error ? error.message : 'Failed to load videos');
@@ -91,23 +191,6 @@ export default function VideosPage() {
         
         const data = await response.json();
         
-        // [
-        //   {
-        //       "updated_at": "2025-02-27T13:10:49.561Z",
-        //       "indexId": "66778899",
-        //       "videoId": "536c20ca-a866-49a2-97d1-a1d91e68874f",
-        //       "video_status": "uploaded",
-        //       "videoCount": 9363
-        //   },
-        //   {
-        //       "updated_at": "2025-02-27T13:35:30.622Z",
-        //       "indexId": "1122334455",
-        //       "videoId": "5c4a6985-61d1-4a0a-afc0-1222cfafdef0",
-        //       "video_status": "uploaded",
-        //       "videoCount": 9363
-        //   }
-        // ]
-        
         const formattedIndexes = data.map((item: any) => ({
           id: item.indexId,
           name: item.indexId,
@@ -116,10 +199,8 @@ export default function VideosPage() {
         }));
         
         setIndexes(formattedIndexes);
-        // Set first index as default selected if available and none selected
-        if (formattedIndexes.length > 0 && !selectedIndexId) {
-          setSelectedIndexId(formattedIndexes[0].id);
-        }
+        // Don't automatically select first index anymore
+        // Instead, we'll default to "all" which is represented by null
       } catch (error) {
         console.error('Error fetching indexes:', error);
       } finally {
@@ -128,7 +209,7 @@ export default function VideosPage() {
     };
 
     fetchIndexes();
-  }, [state.session, selectedIndexId]);
+  }, [state.session]);
 
   // Group videos by status
   const videosByStatus = useMemo(() => {
@@ -155,6 +236,64 @@ export default function VideosPage() {
     setIsModalOpen(false);
     setSelectedVideo(null);
   };
+  
+  // Function to handle video deletion
+  const handleDeleteVideo = async (video: VideoResult) => {
+    setVideoToDelete(video);
+    setShowDeleteConfirm(true);
+  };
+  
+  // Function to confirm video deletion
+  const confirmDeleteVideo = async () => {
+    if (!videoToDelete) return;
+    
+    try {
+      setIsLoading(true);
+      
+      const { id, indexId } = videoToDelete;
+      // Update to use query parameters instead of path parameters
+      const response = await fetch(`${API_ENDPOINT}/videos?index=${indexId}&videoId=${id}`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(state.session ? { 'Authorization': `Bearer ${state.session.token}` } : {})
+        }
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Failed to delete video: ${response.statusText}`);
+      }
+      
+      // Remove the deleted video from the list
+      setVideos(prevVideos => prevVideos.filter(v => v.id !== id));
+      
+      // Update video counts
+      if (indexId) {
+        setIndexVideoCounts(prev => ({
+          ...prev,
+          [indexId]: (prev[indexId] || 1) - 1
+        }));
+      }
+      setTotalVideos(prev => prev - 1);
+      
+      // Close the confirmation dialog
+      setShowDeleteConfirm(false);
+      setVideoToDelete(null);
+      
+    } catch (error) {
+      console.error('Error deleting video:', error);
+      setError(error instanceof Error ? error.message : 'Failed to delete video');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+  
+  // Function to handle video reprocessing (placeholder for now)
+  const handleReprocessVideo = async (video: VideoResult) => {
+    console.log('Reprocessing video:', video);
+    // This would be implemented when a reprocess API is available
+    alert(`Reprocessing of video ${video.title || 'Untitled'} is not yet implemented.`);
+  };
 
   if (isLoading) {
     return (
@@ -173,6 +312,8 @@ export default function VideosPage() {
             onChange={(e) => setSelectedIndexId(e.target.value || null)}
             disabled={isLoadingIndexes || isLoading}
           >
+            {/* Add "All Indexes" option */}
+            <option value="">All Indexes ({totalVideos})</option>
             {indexes.map((index) => (
               <option key={index.id} value={index.id}>
                 {index.name} ({index.videoCount} videos)
@@ -213,6 +354,8 @@ export default function VideosPage() {
             onChange={(e) => setSelectedIndexId(e.target.value || null)}
             disabled={isLoadingIndexes}
           >
+            {/* Add "All Indexes" option */}
+            <option value="">All Indexes ({totalVideos})</option>
             {indexes.map((index) => (
               <option key={index.id} value={index.id}>
                 {index.name} ({index.videoCount} videos)
@@ -250,6 +393,8 @@ export default function VideosPage() {
             onChange={(e) => setSelectedIndexId(e.target.value || null)}
             disabled={isLoadingIndexes}
           >
+            {/* Add "All Indexes" option */}
+            <option value="">All Indexes ({totalVideos})</option>
             {indexes.map((index) => (
               <option key={index.id} value={index.id}>
                 {index.name} ({index.videoCount} videos)
@@ -267,7 +412,7 @@ export default function VideosPage() {
           <div className="text-gray-600">
             {selectedIndexId 
               ? `No videos found in index "${selectedIndexId}".` 
-              : "No videos found."} <a href="/create" className="text-blue-600 hover:underline">Upload your first video</a>
+              : "No videos found across all indexes."} <a href="/create" className="text-blue-600 hover:underline">Upload your first video</a>
           </div>
         </div>
       </div>
@@ -299,6 +444,8 @@ export default function VideosPage() {
             }}
             disabled={isLoadingIndexes}
           >
+            {/* Add "All Indexes" option */}
+            <option value="">All Indexes ({totalVideos})</option>
             {indexes.length > 0 ? (
               indexes.map((index) => (
                 <option key={index.id} value={index.id}>
@@ -331,59 +478,76 @@ export default function VideosPage() {
             </h2>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
               {statusVideos.map((video) => (
-                <button 
+                <div 
                   key={video.id} 
-                  className="bg-white rounded-lg shadow-md overflow-hidden cursor-pointer transition-all hover:shadow-lg hover:scale-[1.02] text-left block w-full"
-                  onClick={() => handleVideoClick(video)}
-                  type="button"
+                  className="relative bg-white rounded-lg shadow-md overflow-hidden group"
                 >
-                  <div className="relative aspect-video bg-gray-100">
-                    {/* Display static thumbnail instead of video */}
-                    {video.videoThumbnailUrl ? (
-                      <img
-                        src={video.videoThumbnailUrl}
-                        alt={video.title || video.description || "Video thumbnail"}
-                        className="w-full h-full object-cover"
-                        loading="lazy"
-                      />
-                    ) : (
-                      <div className="w-full h-full bg-gray-200 flex items-center justify-center">
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                        </svg>
+                  <button 
+                    className="block w-full text-left"
+                    onClick={() => handleVideoClick(video)}
+                    type="button"
+                  >
+                    <div className="relative aspect-video bg-gray-100">
+                      {/* Display static thumbnail instead of video */}
+                      {video.videoThumbnailUrl ? (
+                        <img
+                          src={video.videoThumbnailUrl}
+                          alt={video.title || video.description || "Video thumbnail"}
+                          className="w-full h-full object-cover"
+                          loading="lazy"
+                        />
+                      ) : (
+                        <div className="w-full h-full bg-gray-200 flex items-center justify-center">
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                          </svg>
+                        </div>
+                      )}
+                      
+                      {/* Play icon overlay */}
+                      <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                        <div className="w-16 h-16 bg-black bg-opacity-60 rounded-full flex items-center justify-center">
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                        </div>
                       </div>
-                    )}
-                    
-                    {/* Play icon overlay */}
-                    <div className="absolute inset-0 flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity">
-                      <div className="w-16 h-16 bg-black bg-opacity-60 rounded-full flex items-center justify-center">
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                        </svg>
+                      
+                      {/* Duration badge */}
+                      <div className="absolute bottom-2 right-2 bg-black bg-opacity-70 text-white text-xs px-2 py-1 rounded">
+                        {video.videoDuration || '00:00'}
                       </div>
+                      
+                      {/* Index badge - show the index if we're not already filtering by index */}
+                      {!selectedIndexId && video.indexId && (
+                        <div className="absolute top-2 left-2 bg-black bg-opacity-70 text-white text-xs px-2 py-1 rounded">
+                          {video.indexId}
+                        </div>
+                      )}
                     </div>
                     
-                    {/* Duration badge */}
-                    <div className="absolute bottom-2 right-2 bg-black bg-opacity-70 text-white text-xs px-2 py-1 rounded">
-                      {video.videoDuration || '00:00'}
+                    <div className="p-4">
+                      <h3 className="text-lg font-medium truncate pr-8">{video.title || video.description || "Untitled Video"}</h3>
+                      <p className="text-sm text-gray-500 mt-1">
+                        Uploaded {new Date(video.uploadDate || Date.now()).toLocaleDateString()}
+                      </p>
                     </div>
-                    
-                    {/* Index badge - show the index if we're not already filtering by index */}
-                    {!selectedIndexId && video.indexId && (
-                      <div className="absolute top-2 left-2 bg-black bg-opacity-70 text-white text-xs px-2 py-1 rounded">
-                        {video.indexId}
-                      </div>
-                    )}
-                  </div>
+                  </button>
                   
-                  <div className="p-4">
-                    <h3 className="text-lg font-medium truncate">{video.title || video.description || "Untitled Video"}</h3>
-                    <p className="text-sm text-gray-500 mt-1">
-                      Uploaded {new Date(video.uploadDate || Date.now()).toLocaleDateString()}
-                    </p>
+                  {/* Video card menu */}
+                  <div className="absolute top-4 right-2">
+                    <VideoCardMenu
+                      video={video}
+                      onDelete={handleDeleteVideo}
+                      onReprocess={handleReprocessVideo}
+                      onViewDetails={handleVideoClick}
+                      isOpen={openMenuId === video.id}
+                      setIsOpen={(open) => setOpenMenuId(open ? video.id : null)}
+                      menuRef={menuRef}
+                    />
                   </div>
-                </button>
+                </div>
               ))}
             </div>
           </div>
@@ -396,6 +560,37 @@ export default function VideosPage() {
         isOpen={isModalOpen}
         onClose={closeModal}
       />
+      
+      {/* Delete Confirmation Dialog */}
+      {showDeleteConfirm && videoToDelete && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg max-w-md w-full p-6 shadow-xl">
+            <h3 className="text-lg font-medium text-gray-900 mb-4">Confirm Delete</h3>
+            <p className="text-gray-600 mb-6">
+              Are you sure you want to delete "{videoToDelete.title || 'Untitled Video'}"? This action cannot be undone.
+            </p>
+            <div className="flex justify-end space-x-3">
+              <button
+                type="button"
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md"
+                onClick={() => {
+                  setShowDeleteConfirm(false);
+                  setVideoToDelete(null);
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-md"
+                onClick={confirmDeleteVideo}
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 } 

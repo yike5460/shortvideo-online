@@ -163,7 +163,6 @@ async function handleGetIndex(event: APIGatewayProxyEvent): Promise<APIGatewayPr
             });
             
             // Extract count from the total hits
-            console.log('List all videos from index: ', index.indexId, ' body: ', JSON.stringify(body, null, 2), ' total hits: ', body.hits.total.value);
             videoCount = body.hits.total.value || 0;
             success = true;
           } catch (countError) {

@@ -938,7 +938,8 @@ export class VideoSearchStack extends cdk.Stack {
     // /videos/upload/{videoId}/complete      POST - Complete upload
     // /videos/youtube                        POST - YouTube upload
     // /videos/?index={indexId} or /videos/   GET  - Get specific video details or all videos
-    // /videos/?index={indexId} or /videos/   DELETE - Delete specific video or all videos
+    // /videos/?index={indexId}?videoId={videoId} or /videos/?index={indexId}   DELETE - Delete specific video or all videos under index
+    
     // /videos/status/?index={indexId}        GET  - Check status, uploading, slicing, indexing, completed, failed
     // /videos/search                         POST - Search videos
 
@@ -1043,7 +1044,7 @@ export class VideoSearchStack extends cdk.Stack {
 
     // Add endpoints
     addMethodWithCors(videos, 'GET', lambdaFunctions.videoUploadFunction.videoUploadHandler);
-
+    addMethodWithCors(videos, 'DELETE', lambdaFunctions.videoUploadFunction.videoUploadHandler);
     addMethodWithCors(upload, 'POST', lambdaFunctions.videoUploadFunction.videoUploadHandler);
     addMethodWithCors(uploadComplete, 'POST', lambdaFunctions.videoUploadFunction.videoUploadHandler);
     addMethodWithCors(youtube, 'POST', lambdaFunctions.videoUploadFunction.youtubeUploadHandler);

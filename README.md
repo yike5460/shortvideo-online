@@ -804,3 +804,13 @@ s3://bucket-name/
     - Interface endpoints for AWS services
     - Private DNS enabled
     - Security group controls
+
+## TODO
+Backend:
+- [ ] Add video deletion using /videos/{videoId} DELETE
+- [ ] Add index deletion using /indexes/{indexId} DELETE
+- [ ] Add video update using /videos/{videoId} PUT
+
+Frontend:
+- [ ] Add vertical symbol ... in video card to indicate more details with a dropdown menu to show video details, delete, reprocess
+- [ ] Integrate actual query data to display the search result in the video bar under "View by Video" mode, refer to the README.md in the frontend folder

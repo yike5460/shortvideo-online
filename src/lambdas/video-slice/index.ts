@@ -158,7 +158,7 @@ async function handleS3Event(event: S3Event): Promise<LambdaResponse> {
 
   // The s3Key format is `RawVideos/${timestamp}/${videoIndex}/${videoId}/${sanitizedFileNameWithExtension}`
   const videoIndex = key.split('/')[2];
-  const videoId = key.split('/').pop()?.split('.')[0];
+  const videoId = key.split('/')[3];
 
   if (!videoId) throw new Error('Invalid video key format');
 

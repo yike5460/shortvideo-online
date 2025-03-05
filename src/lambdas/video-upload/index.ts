@@ -1,7 +1,7 @@
 import { APIGatewayProxyEvent } from 'aws-lambda';
 import { LambdaContext, LambdaResponse } from '../../types/aws-lambda';
 import { VideoMetadata, VideoStatus, VideoResult, WebVideoStatus } from '../../types/common';
-import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, GetObjectCommand, PutObjectCommand, DeleteObjectCommand, HeadObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { Client } from '@opensearch-project/opensearch';
@@ -9,7 +9,7 @@ import { defaultProvider } from '@aws-sdk/credential-provider-node';
 import { AwsSigv4Signer } from '@opensearch-project/opensearch/aws';
 import { v4 as uuidv4 } from 'uuid';
 import * as path from 'path';
-import { DynamoDBDocumentClient, PutCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, PutCommand, DeleteCommand } from '@aws-sdk/lib-dynamodb';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import * as fs from 'fs';
 import { Readable } from 'stream';
@@ -138,8 +138,8 @@ async function withRetry<T>(
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<LambdaResponse> => {
   try {
-    // For GET requests, we don't need to check for body
-    if (event.httpMethod !== 'GET' && !event.body) {
+    // For GET & DELETE requests, we don't need to check for body
+    if (event.httpMethod !== 'GET' && event.httpMethod !== 'DELETE' && !event.body) {
       return {
         statusCode: STATUS_CODES.BAD_REQUEST,
         headers: corsHeaders,  // Add CORS headers even for errors
@@ -154,11 +154,11 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<LambdaRespon
     // Overall API Path:
     // ```http
     //   GET    /videos                         - List all videos
-    //   GET    /videos/{videoId}               - Get video details
+    //   GET    /videos/{indexId}               - Get video details
     //   GET    /videos/status?index={indexId}  - Get index status
     //   POST   /videos/upload                  - Start upload
     //   POST   /videos/upload/{videoId}/complete - Complete upload
-    //   DELETE /videos/{videoId}               - Delete video
+    //   DELETE /videos/?index={indexId}?videoId={videoId}     - Delete specific video or all videos under index
     // ```
 
     if (method === 'GET') {
@@ -176,11 +176,9 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<LambdaRespon
       } else if (path.endsWith('/complete')) {
         return handleCompleteUpload(event);
       }
-    } else if (method === 'DELETE' && path.startsWith('/videos/')) {
-      const videoId = path.split('/').pop();
-      if (videoId) {
-        return handleDeleteVideo(videoId);
-      }
+    } else if (method === 'DELETE' && (path === '/videos' || path.endsWith('/videos/'))) {
+      // Handle video deletion using query parameters: /videos/?index={indexId}?videoId={videoId}
+      return handleDeleteVideo(event);
     }
 
     return {
@@ -205,8 +203,6 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<LambdaRespon
 async function handleListVideos(event: APIGatewayProxyEvent): Promise<LambdaResponse> {
   // If the indexId is provided in the query string e.g. /videos?index=videos, use that index, otherwise it's wildcard search across all indexes
   try {
-    console.log('Listing videos with query event: ', event);
-
     const queryParams = event.queryStringParameters || {};
     // extra the index from the query string e.g. /videos/?index=videos
     const indexId = event.queryStringParameters?.index;
@@ -568,51 +564,252 @@ async function handleGetVideo(videoId: string, indexId?: string): Promise<Lambda
   }
 }
 
-async function handleDeleteVideo(videoId: string): Promise<LambdaResponse> {
+async function handleDeleteVideo(event: APIGatewayProxyEvent): Promise<LambdaResponse> {
   try {
-    // First get the video to check if it exists and get S3 path
-    const { body } = await openSearch.get({
-      index: 'videos',
-      id: videoId
-    });
+    const queryParams = event.queryStringParameters || {};
+    const indexId = queryParams.index;
+    const videoId = queryParams.videoId;
 
-    if (!body.found) {
+    // Validate required parameters
+    if (!indexId) {
       return {
-        statusCode: STATUS_CODES.NOT_FOUND,
+        statusCode: STATUS_CODES.BAD_REQUEST,
         headers: corsHeaders,
-        body: JSON.stringify({ error: 'Video not found' })
+        body: JSON.stringify({ error: 'Missing required query parameter: index' })
       };
     }
 
-    // Update video status to deleted
-    await openSearch.update({
-      index: 'videos',
-      id: videoId,
-      body: {
-        doc: {
-          video_status: 'deleted' as VideoStatus,
-          updated_at: new Date().toISOString()
-        }
+    // If videoId is provided, delete a specific video
+    if (videoId) {
+      const { body: searchResult } = await openSearch.get({
+        index: indexId,
+        id: videoId,
+        // Only fetch required fields
+        _source: [
+          'video_s3_path',
+        ]
+      });
+
+      if (!searchResult.found) {
+        return {
+          statusCode: STATUS_CODES.NOT_FOUND,
+          headers: corsHeaders,
+          body: JSON.stringify({ error: `Video ${videoId} not found in index ${indexId}` })
+        };
       }
-    });
 
-    // Optional: Delete from S3 (you might want to keep files for a while)
-    // await s3.send(new DeleteObjectCommand({
-    //   Bucket: process.env.VIDEO_BUCKET,
-    //   Key: body._source.video_s3_path
-    // }));
+      // Extract the S3 key of the uploaded raw video, in format RawVideos/2025-03-02/indexId/videoId/videoFileNameWithExtension
+      const videoS3Path = searchResult._source.video_s3_path;
+      if (!videoS3Path) {
+        throw new Error('Video S3 path not found in metadata');
+      }
 
-    return {
-      statusCode: STATUS_CODES.OK,
-      headers: corsHeaders,
-      body: JSON.stringify({ message: 'Video deleted successfully' })
-    };
+      // Get the folder level of the videoS3Path (without the filename)
+      const pathParts = videoS3Path.split('/');
+      const rawVideoS3PathPrefix = pathParts.slice(0, -1).join('/');
+      
+      // Get the folder level of the processed video, in format ProcessedVideos/2025-03-02/indexId/videoId/
+      const processedVideoS3PathPrefix = rawVideoS3PathPrefix.replace('RawVideos', 'ProcessedVideos');
+
+      console.log(`Deleting video ${videoId} from S3 at raw prefix: ${rawVideoS3PathPrefix} and processed prefix: ${processedVideoS3PathPrefix}`);
+
+      // Function to delete all objects with a given prefix
+      const deleteObjectsWithPrefix = async (prefix: string) => {
+        try {
+          // List all objects with the prefix
+          const { Contents } = await s3.send(new ListObjectsV2Command({
+            Bucket: process.env.VIDEO_BUCKET,
+            Prefix: prefix
+          }));
+
+          if (!Contents || Contents.length === 0) {
+            console.log(`No objects found with prefix: ${prefix}`);
+            return;
+          }
+
+          console.log(`Found ${Contents.length} objects to delete with prefix: ${prefix}`);
+
+          // Delete each object
+          for (const object of Contents) {
+            if (object.Key) {
+              console.log(`Deleting object: ${object.Key}`);
+              await s3.send(new DeleteObjectCommand({
+                Bucket: process.env.VIDEO_BUCKET,
+                Key: object.Key
+              }));
+            }
+          }
+          
+          console.log(`Successfully deleted all objects with prefix: ${prefix}`);
+        } catch (err) {
+          console.warn(`Error deleting objects with prefix ${prefix}:`, err);
+        }
+      };
+
+      // Delete all raw video objects
+      await deleteObjectsWithPrefix(rawVideoS3PathPrefix);
+      
+      // Delete all processed video objects including segments
+      await deleteObjectsWithPrefix(processedVideoS3PathPrefix);
+      
+      // Also check and delete segments folder if it exists
+      const segmentsPrefix = `${processedVideoS3PathPrefix}/segments`;
+      await deleteObjectsWithPrefix(segmentsPrefix);
+
+      // Remove the videoId from the index
+      await openSearch.delete({
+        index: indexId,
+        id: videoId
+      });
+
+      // Remove the entry from the DynamoDB indexes table
+      try {
+        console.log(`Deleting DynamoDB entry for indexId=${indexId}, videoId=${videoId}`);
+        await docClient.send(new DeleteCommand({
+          TableName: process.env.INDEXES_TABLE,
+          Key: {
+            "indexId": indexId,
+            "videoId": videoId
+          }
+        }));
+        console.log('Successfully deleted DynamoDB entry');
+      } catch (dynamoError) {
+        console.error('Error deleting from DynamoDB:', dynamoError);
+        // Continue with the process even if DynamoDB deletion fails
+      }
+
+      return {
+        statusCode: STATUS_CODES.OK,
+        headers: corsHeaders,
+        body: JSON.stringify({ 
+          message: 'Video deleted successfully',
+          videoId,
+          indexId
+        })
+      };
+    } else {
+      // If only indexId is provided, delete all videos under the index
+      const { body: searchResult } = await openSearch.search({
+        index: indexId,
+        body: {
+          query: {
+            match_all: {}
+          },
+          size: 1000, // Limit to 1000 videos per batch
+          _source: ['video_s3_path']
+        }
+      });
+
+      if (!searchResult.hits || !searchResult.hits.hits || searchResult.hits.hits.length === 0) {
+        return {
+          statusCode: STATUS_CODES.NOT_FOUND,
+          headers: corsHeaders,
+          body: JSON.stringify({ 
+            message: 'No videos found in index',
+            indexId
+          })
+        };
+      }
+
+      const videos = searchResult.hits.hits;
+      console.log(`Found ${videos.length} videos to delete in index ${indexId}`);
+
+      // Delete each video from OpenSearch and DynamoDB
+      const deletePromises = videos.map(async (video: any) => {
+        const videoId = video._id;
+        const videoS3Path = video._source.video_s3_path;
+        
+        try {
+          // Delete from OpenSearch
+          await openSearch.delete({
+            index: indexId,
+            id: videoId
+          });
+          
+          // Delete from DynamoDB
+          try {
+            await docClient.send(new DeleteCommand({
+              TableName: process.env.INDEXES_TABLE,
+              Key: {
+                "indexId": indexId,
+                "videoId": videoId
+              }
+            }));
+          } catch (dynamoError) {
+            console.error(`Failed to delete DynamoDB entry for video ${videoId}:`, dynamoError);
+          }
+
+          // Function to delete all objects with a given prefix
+          const deleteObjectsWithPrefix = async (prefix: string) => {
+            try {
+              // List all objects with the prefix
+              const { Contents } = await s3.send(new ListObjectsV2Command({
+                Bucket: process.env.VIDEO_BUCKET,
+                Prefix: prefix
+              }));
+
+              if (!Contents || Contents.length === 0) {
+                return;
+              }
+
+              // Delete each object
+              for (const object of Contents) {
+                if (object.Key) {
+                  await s3.send(new DeleteObjectCommand({
+                    Bucket: process.env.VIDEO_BUCKET,
+                    Key: object.Key
+                  }));
+                }
+              }
+            } catch (err) {
+              console.warn(`Error deleting objects with prefix ${prefix}:`, err);
+            }
+          };
+
+          // Get folder paths and delete objects
+          if (videoS3Path) {
+            const pathParts = videoS3Path.split('/');
+            const rawVideoS3PathPrefix = pathParts.slice(0, -1).join('/');
+            const processedVideoS3PathPrefix = rawVideoS3PathPrefix.replace('RawVideos', 'ProcessedVideos');
+            
+            // Delete from S3
+            await deleteObjectsWithPrefix(rawVideoS3PathPrefix);
+            await deleteObjectsWithPrefix(processedVideoS3PathPrefix);
+            await deleteObjectsWithPrefix(`${processedVideoS3PathPrefix}/segments`);
+          }
+          
+          return { videoId, success: true };
+        } catch (err) {
+          console.error(`Failed to delete video ${videoId}:`, err);
+          return { videoId, success: false, error: err };
+        }
+      });
+
+      const results = await Promise.allSettled(deletePromises);
+      const successful = results.filter(r => r.status === 'fulfilled' && (r.value as any).success).length;
+      const failed = results.length - successful;
+
+      return {
+        statusCode: STATUS_CODES.OK,
+        headers: corsHeaders,
+        body: JSON.stringify({ 
+          message: `Bulk deletion completed. ${successful} videos deleted, ${failed} failed.`,
+          indexId,
+          totalProcessed: results.length,
+          successful,
+          failed
+        })
+      };
+    }
   } catch (error) {
     console.error('Error deleting video:', error);
     return {
       statusCode: STATUS_CODES.INTERNAL_SERVER_ERROR,
       headers: corsHeaders,
-      body: JSON.stringify({ error: 'Failed to delete video' })
+      body: JSON.stringify({ 
+        error: 'Failed to delete video',
+        details: error instanceof Error ? error.message : 'Unknown error'
+      })
     };
   }
 }
