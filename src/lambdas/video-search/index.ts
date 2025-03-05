@@ -68,29 +68,12 @@ const corsHeaders = {
   'Access-Control-Allow-Credentials': 'true'
 };
 
-// Add this function to get the OpenSearch index name from the index ID
-const getOpenSearchIndexName = async (indexId: string): Promise<string> => {
-  // If no index ID is provided, use the default 'videos' index
-  if (!indexId) {
-    return 'videos';
-  }
-  
-  try {
-    const result = await docClient.send(new GetCommand({
-      TableName: process.env.INDEXES_TABLE,
-      Key: { indexId }
-    }));
-    
-    if (!result.Item) {
-      console.warn(`Index ${indexId} not found, falling back to default index`);
-      return 'videos';
-    }
-    
-    return result.Item.indexId;
-  } catch (error) {
-    console.error('Error getting index details:', error);
-    return 'videos'; // Fallback to default index
-  }
+const STATUS_CODES = {
+  OK: 200,
+  CREATED: 201,
+  BAD_REQUEST: 400,
+  NOT_FOUND: 404,
+  INTERNAL_SERVER_ERROR: 500
 };
 
 // Update the search query builder
@@ -291,13 +274,11 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
     //   };
     // }
 
-    const openSearchIndexName = await getOpenSearchIndexName(searchQuery.selectedIndex || '')
-
     // Build and execute the search with limited results
     const searchBody = buildSearchQuery(searchQuery);
 
     const { body } = await openSearch.search({
-      index: openSearchIndexName,
+      index: searchQuery.selectedIndex,
       body: searchBody
     });
 
@@ -314,7 +295,7 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
     // });
 
     return {
-      statusCode: 200,
+      statusCode: STATUS_CODES.OK,
       headers: corsHeaders,
       body: JSON.stringify(results)
     };
@@ -322,7 +303,7 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
   } catch (error) {
     console.error('Search error:', error);
     return {
-      statusCode: 500,
+      statusCode: STATUS_CODES.INTERNAL_SERVER_ERROR,
       headers: corsHeaders,
       body: JSON.stringify({ 
         error: 'Internal server error',

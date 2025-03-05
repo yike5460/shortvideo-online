@@ -168,30 +168,29 @@ export default function HomePage() {
         
         const data = await response.json();
         
-        // [
-        //   {
-        //       "updated_at": "2025-02-27T13:10:49.561Z",
-        //       "indexId": "66778899",
-        //       "videoId": "536c20ca-a866-49a2-97d1-a1d91e68874f",
-        //       "video_status": "uploaded",
-        //       "videoCount": 9363
-        //   },
-        //   {
-        //       "updated_at": "2025-02-27T13:35:30.622Z",
-        //       "indexId": "1122334455",
-        //       "videoId": "5c4a6985-61d1-4a0a-afc0-1222cfafdef0",
-        //       "video_status": "uploaded",
-        //       "videoCount": 9363
-        //   }
-        // ]
-
-        // Transform the API response to match our Index interface
-        const transformedIndexes = data.map((item: any, i: number) => ({
-          id: item.indexId || `index-${i}`,
-          name: `Index: ${item.indexId || 'Unknown'}`,
-          status: item.video_status === 'uploaded' ? 'ready' : 'indexing',
-          videoCount: item.videoCount || 0
-        }));
+        // Create a map to deduplicate indexes by indexId
+        const indexMap = new Map();
+        
+        // First pass: collect all unique indexIds with their data
+        data.forEach((item: any, i: number) => {
+          if (!indexMap.has(item.indexId)) {
+            indexMap.set(item.indexId, {
+              id: item.indexId || `index-${i}`,
+              name: `Index: ${item.indexId || 'Unknown'}`,
+              status: item.video_status === 'error' ? 'error' : 'ready',
+              videoCount: item.videoCount || 0
+            });
+          } else if (item.videoCount) {
+            // If this entry has a videoCount and the indexId is already in our map,
+            // update the videoCount
+            const existing = indexMap.get(item.indexId);
+            existing.videoCount = item.videoCount;
+            indexMap.set(item.indexId, existing);
+          }
+        });
+        
+        // Convert the map back to an array of unique indexes
+        const transformedIndexes = Array.from(indexMap.values());
         
         setIndexes(transformedIndexes);
       } catch (err) {
