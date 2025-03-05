@@ -96,24 +96,30 @@ async function handleGetIndex(event: APIGatewayProxyEvent): Promise<APIGatewayPr
   // If indexId is provided, get specific index
   if (indexId) {
     try {
-      const result = await docClient.send(new GetCommand({
+      // First let's get a dummy videoId entry to get the index information
+      // In a production environment, you'd want to use a Query with a condition on just the partition key
+      const result = await docClient.send(new ScanCommand({
         TableName: process.env.INDEXES_TABLE,
-        Key: { indexId }
+        FilterExpression: 'indexId = :indexId',
+        ExpressionAttributeValues: {
+          ':indexId': indexId
+        },
+        Limit: 1
       }));
       
-      if (!result.Item) {
+      if (!result.Items || result.Items.length === 0) {
         return {
           statusCode: STATUS_CODES.NOT_FOUND,
           headers: corsHeaders,
           body: JSON.stringify({ error: 'Index not found' })
         };
       }
-      console.log('Index found:', result.Item);
+      console.log('Index found:', result.Items[0]);
 
       return {
         statusCode: STATUS_CODES.OK,
         headers: corsHeaders,
-        body: JSON.stringify(result.Item)
+        body: JSON.stringify(result.Items[0])
       };
     } catch (error) {
       console.error('Error getting index:', error);
@@ -127,7 +133,7 @@ async function handleGetIndex(event: APIGatewayProxyEvent): Promise<APIGatewayPr
       };
     }
   } 
-  // Otherwise, list all indexes
+  // Otherwise, list all indexes, the same indexId should be considered as a single index
   else {
     try {
       const result = await docClient.send(new ScanCommand({
@@ -135,9 +141,13 @@ async function handleGetIndex(event: APIGatewayProxyEvent): Promise<APIGatewayPr
       }));
       
       const indexes = result.Items || [];
-      
+      // Only return the unique indexId since we are using indexId as the primary key and videoId as the sort key, so different videoId can have the same indexId
+      const uniqueIndexes = indexes.filter((item, idx, self) =>
+        self.findIndex((t) => t.indexId === item.indexId) === idx
+      );
+
       // Get video counts for each index (in parallel) with retry logic
-      await Promise.all(indexes.map(async (index) => {
+      await Promise.all(uniqueIndexes.map(async (index) => {
         let videoCount = 0;
         let retries = 3;
         let success = false;
@@ -225,6 +235,8 @@ async function handleCreateIndex(event: APIGatewayProxyEvent): Promise<APIGatewa
 
   // Generate a unique index ID
   const indexId = `idx-${uuidv4()}`;
+  // Generate a metadata record ID to satisfy the composite key
+  const metadataId = `metadata-${uuidv4()}`;  
   const indexName = name.toLowerCase().replace(/[^a-z0-9]/g, '_');
   
   // Create the index in OpenSearch
@@ -293,19 +305,21 @@ async function handleCreateIndex(event: APIGatewayProxyEvent): Promise<APIGatewa
       body: mapping
     });
 
-    // Store index metadata in DynamoDB
+    // Store index metadata in DynamoDB with both required keys
     const timestamp = new Date().toISOString();
     await docClient.send(new PutCommand({
       TableName: process.env.INDEXES_TABLE,
       Item: {
         indexId,
+        videoId: metadataId,  // Required for the composite key
         name,
         openSearchIndexName,
         status: 'ready', // Initial status
         models: models || [],
         videoCount: 0,
         createdAt: timestamp,
-        updatedAt: timestamp
+        updatedAt: timestamp,
+        recordType: 'metadata'  // Flag to identify this as a metadata record
       }
     }));
 
@@ -348,13 +362,17 @@ async function handleDeleteIndex(event: APIGatewayProxyEvent): Promise<APIGatewa
   }
   
   try {
-    // First, get the index to retrieve the OpenSearch index name
-    const getResult = await docClient.send(new GetCommand({
+    // First, get all items with the indexId to retrieve the OpenSearch index name
+    // and to know what items we need to delete
+    const scanResult = await docClient.send(new ScanCommand({
       TableName: process.env.INDEXES_TABLE,
-      Key: { indexId }
+      FilterExpression: 'indexId = :indexId',
+      ExpressionAttributeValues: {
+        ':indexId': indexId
+      }
     }));
 
-    if (!getResult.Item) {
+    if (!scanResult.Items || scanResult.Items.length === 0) {
       return {
         statusCode: STATUS_CODES.NOT_FOUND,
         headers: corsHeaders,
@@ -362,29 +380,48 @@ async function handleDeleteIndex(event: APIGatewayProxyEvent): Promise<APIGatewa
       };
     }
 
-    const openSearchIndexName = getResult.Item.indexId;
+    // Get the first item to find the OpenSearch index name
+    const firstItem = scanResult.Items[0];
+    const openSearchIndexName = firstItem.indexId || indexId;
     
     // Delete the index from OpenSearch
     try {
       await openSearch.indices.delete({
-        index: indexId
+        index: openSearchIndexName
       });
+      console.log(`Deleted OpenSearch index: ${openSearchIndexName}`);
     } catch (deleteError) {
-      console.warn(`Error deleting OpenSearch index ${indexId}:`, deleteError);
+      console.warn(`Error deleting OpenSearch index ${openSearchIndexName}:`, deleteError);
       // Continue even if OpenSearch delete fails
     }
     
-    // Delete the index from DynamoDB
-    await docClient.send(new DeleteCommand({
-      TableName: process.env.INDEXES_TABLE,
-      Key: { indexId }
-    }));
+    // Delete all entries for this indexId from DynamoDB
+    console.log(`Deleting ${scanResult.Items.length} items from DynamoDB for indexId ${indexId}`);
+    
+    const deletePromises = scanResult.Items.map(async (item) => {
+      try {
+        await docClient.send(new DeleteCommand({
+          TableName: process.env.INDEXES_TABLE,
+          Key: { 
+            indexId: indexId,
+            videoId: item.videoId
+          }
+        }));
+        return { success: true, videoId: item.videoId };
+      } catch (err) {
+        console.error(`Failed to delete item with videoId ${item.videoId}:`, err);
+        return { success: false, videoId: item.videoId, error: err };
+      }
+    });
+    
+    const results = await Promise.all(deletePromises);
+    const successful = results.filter(r => r.success).length;
     
     return {
-      statusCode: STATUS_CODES.OK ,
+      statusCode: STATUS_CODES.OK,
       headers: corsHeaders,
       body: JSON.stringify({
-        message: 'Index deleted successfully',
+        message: `Index deleted successfully. Removed ${successful} of ${scanResult.Items.length} items.`,
         indexId
       })
     };

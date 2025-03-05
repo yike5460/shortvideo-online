@@ -151,13 +151,13 @@ export default function VideosPage() {
         }
         
         const data: VideoResponse = await response.json();
-        
+        console.log('Videos data:', data);
         // Even if we get a successful response, videos might be null or undefined
         setVideos(data.videos || []); 
         
         // Update the total videos count when loading all videos
-        if (!selectedIndexId && data.total) {
-          setTotalVideos(data.total);
+        if (!selectedIndexId && data.videos.length > 0) {
+          setTotalVideos(data.videos.length);
         }
       } catch (error) {
         console.error('Error fetching videos:', error);
@@ -191,12 +191,29 @@ export default function VideosPage() {
         
         const data = await response.json();
         
-        const formattedIndexes = data.map((item: any) => ({
-          id: item.indexId,
-          name: item.indexId,
-          status: item.video_status === 'error' ? 'error' : 'ready',
-          videoCount: item.videoCount || 0
-        }));
+        // Create a map to deduplicate indexes and preserve video counts
+        const indexMap = new Map();
+        
+        // First pass: collect all unique indexIds
+        data.forEach((item: any) => {
+          if (!indexMap.has(item.indexId)) {
+            indexMap.set(item.indexId, {
+              id: item.indexId,
+              name: item.indexId,
+              status: item.video_status === 'error' ? 'error' : 'ready',
+              videoCount: item.videoCount || 0
+            });
+          } else if (item.videoCount) {
+            // If this entry has a videoCount and we've already seen this indexId,
+            // update the videoCount in our map
+            const existing = indexMap.get(item.indexId);
+            existing.videoCount = item.videoCount;
+            indexMap.set(item.indexId, existing);
+          }
+        });
+        
+        // Convert the map back to an array
+        const formattedIndexes = Array.from(indexMap.values());
         
         setIndexes(formattedIndexes);
         // Don't automatically select first index anymore

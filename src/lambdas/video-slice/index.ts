@@ -147,8 +147,10 @@ async function handleS3Event(event: S3Event): Promise<LambdaResponse> {
   const key = decodeURIComponent(record.object.key.replace(/\+/g, ' '));
   
   console.log('Processing video slice for key:', key, 'bucket:', bucket);
-  if (!key.startsWith('RawVideos/')) {
-    process.stdout.write('Skipping non-raw video file: ' + key + '\n');
+
+  // Skip non-raw video files and non video suffix files
+  if (!key.startsWith('RawVideos/') || (!key.endsWith('.mp4') && !key.endsWith('.mov'))) {
+    console.log('Skipping non-raw video file: ' + key + '\n');
     return {
       statusCode: STATUS_CODES.OK,
       headers: corsHeaders,

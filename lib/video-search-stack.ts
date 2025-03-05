@@ -50,6 +50,7 @@ export class VideoSearchStack extends cdk.Stack {
     this.videoBucket = this.createStorageInfrastructure(deploymentEnv);
     this.indexesTable = new dynamodb.Table(this, 'IndexesTable', {
       partitionKey: { name: 'indexId', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'videoId', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });

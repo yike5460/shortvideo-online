@@ -86,7 +86,7 @@ const getOpenSearchIndexName = async (indexId: string): Promise<string> => {
       return 'videos';
     }
     
-    return result.Item.openSearchIndexName;
+    return result.Item.indexId;
   } catch (error) {
     console.error('Error getting index details:', error);
     return 'videos'; // Fallback to default index

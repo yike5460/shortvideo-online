@@ -8,7 +8,7 @@ import { v4 as uuidv4 } from 'uuid';
 // Initialize clients
 const dynamoClient = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(dynamoClient);
-const s3Client = new S3Client({});
+const s3 = new S3Client({});
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -91,7 +91,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         ContentType: file.type
       });
       
-      const signedUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
+      const signedUrl = await getSignedUrl(s3 as any, command as any, { expiresIn: 3600 });
       
       uploadUrls.push({
         videoId,

@@ -696,7 +696,7 @@ async function handleDeleteVideo(event: APIGatewayProxyEvent): Promise<LambdaRes
             match_all: {}
           },
           size: 1000, // Limit to 1000 videos per batch
-          _source: ['video_s3_path']
+          _source: ['video_s3_path', 'video_id']
         }
       });
 
@@ -716,7 +716,7 @@ async function handleDeleteVideo(event: APIGatewayProxyEvent): Promise<LambdaRes
 
       // Delete each video from OpenSearch and DynamoDB
       const deletePromises = videos.map(async (video: any) => {
-        const videoId = video._id;
+        const videoId = video._source.video_id;
         const videoS3Path = video._source.video_s3_path;
         
         try {
