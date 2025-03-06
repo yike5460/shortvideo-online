@@ -24,6 +24,7 @@ export default function SearchBar({
   const [imageName, setImageName] = useState('')
   const [audioName, setAudioName] = useState('')
   const [videoName, setVideoName] = useState('')
+  const [isAnimating, setIsAnimating] = useState(false)
   const imageInputRef = useRef<HTMLInputElement>(null)
   const audioInputRef = useRef<HTMLInputElement>(null)
   const videoInputRef = useRef<HTMLInputElement>(null)
@@ -72,6 +73,9 @@ export default function SearchBar({
   
   const toggleAdvancedSearch = () => {
     if (onToggleAdvancedSearch) {
+      setIsAnimating(true);
+      // Reset animation after it completes
+      setTimeout(() => setIsAnimating(false), 1000);
       onToggleAdvancedSearch(!advancedSearch);
     }
   };
@@ -93,14 +97,33 @@ export default function SearchBar({
           />
           
           <div className="absolute inset-y-0 right-0 flex items-center pr-3 space-x-1">
-            {/* Advanced search toggle button */}
+            {/* Advanced search toggle button with enhanced styling */}
             <button
               type="button"
-              className={`p-1 rounded-full ${advancedSearch ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-gray-100 text-gray-400'}`}
+              className={cn(
+                "p-1.5 rounded-full transition-all duration-300 relative",
+                advancedSearch 
+                  ? "bg-indigo-600 text-white shadow-md" 
+                  : "hover:bg-gray-100 text-gray-500",
+                isAnimating && advancedSearch && "animate-pulse"
+              )}
               onClick={toggleAdvancedSearch}
-              title="Toggle advanced search"
+              title={advancedSearch ? "Disable advanced search" : "Enable advanced search"}
             >
-              <BoltIcon className="h-5 w-5" />
+              <BoltIcon className={cn(
+                "h-5 w-5 transition-transform",
+                isAnimating && "animate-bounce"
+              )} />
+              
+              {/* Highlight ring animation */}
+              {isAnimating && (
+                <span className="absolute inset-0 rounded-full animate-ping-slow bg-indigo-400 opacity-75"></span>
+              )}
+              
+              {/* Active indicator dot */}
+              {advancedSearch && (
+                <span className="absolute top-0 right-0 block h-2 w-2 rounded-full bg-green-400 ring-1 ring-white"></span>
+              )}
             </button>
             
             {/* Image upload button (always visible) */}
