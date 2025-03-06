@@ -139,6 +139,8 @@ export default function HomePage() {
   const [isErrorVisible, setIsErrorVisible] = useState(false)
   const [indexes, setIndexes] = useState<Index[]>([])
   const [isLoadingIndexes, setIsLoadingIndexes] = useState(false)
+  // Add state for advanced search toggle
+  const [advancedSearch, setAdvancedSearch] = useState(false)
 
   // Authentication check effect
   useEffect(() => {
@@ -254,7 +256,12 @@ export default function HomePage() {
     return () => clearTimeout(searchTimer)
   }, [searchQuery])
 
-  const handleSearch = useCallback(async (query: string, imageFile?: File) => {
+  const handleSearch = useCallback(async (
+    query: string, 
+    imageFile?: File, 
+    audioFile?: File, 
+    videoFile?: File
+  ) => {
     setError('')
     setSearchQuery(query)
 
@@ -264,7 +271,7 @@ export default function HomePage() {
       return
     }
 
-    if (!query && !imageFile) {
+    if (!query && !imageFile && !audioFile && !videoFile) {
       setSearchResults([])
       return
     }
@@ -273,17 +280,39 @@ export default function HomePage() {
       setIsLoading(true)
       
       let searchResponse
-      if (imageFile) {
-        // Handle image search
+      // Handle different types of media search
+      if (imageFile || audioFile || videoFile) {
+        // Create form data for any file uploads
         const formData = new FormData()
-        formData.append('image', imageFile)
+        
+        if (imageFile) {
+          formData.append('image', imageFile)
+        }
+        
+        if (audioFile) {
+          formData.append('audio', audioFile)
+        }
+        
+        if (videoFile) {
+          formData.append('video', videoFile)
+        }
+        
+        // Determine search type based on which file is provided
+        let searchType = 'text'
+        if (imageFile) searchType = 'image'
+        if (audioFile) searchType = 'audio'
+        if (videoFile) searchType = 'video'
+        
         formData.append('searchOptions', JSON.stringify({
           ...searchOptions,
-          searchType: 'image',
-          searchQuery: query
+          searchType,
+          searchQuery: query,
+          advancedSearch // Add the advanced search flag
         }))
         
-        searchResponse = await fetch(`${API_ENDPOINT}/search/image`, {
+        // Use appropriate endpoint based on file type
+        const endpoint = imageFile ? 'image' : audioFile ? 'audio' : 'video'
+        searchResponse = await fetch(`${API_ENDPOINT}/search/${endpoint}`, {
           method: 'POST',
           body: formData
         })
@@ -298,7 +327,8 @@ export default function HomePage() {
             ...searchOptions,
             searchType: 'text',
             searchQuery: query,
-            selectedIndex: searchOptions.selectedIndex
+            selectedIndex: searchOptions.selectedIndex,
+            advancedSearch // Add the advanced search flag
           })
         })
       }
@@ -316,7 +346,7 @@ export default function HomePage() {
     } finally {
       setIsLoading(false)
     }
-  }, [searchOptions, API_ENDPOINT])
+  }, [searchOptions, API_ENDPOINT, advancedSearch]) // Add advancedSearch to dependencies
 
   const handleFeedback = useCallback(async (isHelpful: boolean) => {
     try {
@@ -334,6 +364,11 @@ export default function HomePage() {
   const handleOptionsChange = useCallback((newOptions: SearchOptions) => {
     setSearchOptions(newOptions)
   }, [])
+  
+  // Handler for toggling advanced search
+  const handleToggleAdvancedSearch = useCallback((enabled: boolean) => {
+    setAdvancedSearch(enabled)
+  }, [])
 
   // Loading or not authenticated
   if (state.isLoading || !state.session) {
@@ -346,7 +381,12 @@ export default function HomePage() {
     <div className="flex min-h-screen bg-gray-50">
       <div className="flex-1 flex flex-col">
         <div className="p-8">
-          <SearchBar onSearch={handleSearch} onClear={handleClear} />
+          <SearchBar 
+            onSearch={handleSearch} 
+            onClear={handleClear}
+            advancedSearch={advancedSearch}
+            onToggleAdvancedSearch={handleToggleAdvancedSearch}
+          />
         </div>
 
         <div className={cn(
@@ -374,7 +414,9 @@ export default function HomePage() {
             <div className="flex items-center justify-center h-full">
               <div className="text-gray-600">
                 {searchOptions.selectedIndex 
-                  ? 'Enter a search query or upload an image to start searching'
+                  ? (advancedSearch 
+                     ? 'Enter a search query or upload media (image, audio, or video) to start an advanced search'
+                     : 'Enter a search query or upload an image to start searching')
                   : 'Please select an index from the sidebar to start searching'}
               </div>
             </div>

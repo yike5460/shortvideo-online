@@ -1,88 +1,237 @@
 'use client'
 
-import { useState, useRef } from 'react'
-import { MagnifyingGlassIcon, PhotoIcon, XMarkIcon } from '@heroicons/react/24/outline'
+import { useState, useRef, ChangeEvent, FormEvent } from 'react'
+import { MagnifyingGlassIcon, XMarkIcon, PhotoIcon, MusicalNoteIcon, FilmIcon, BoltIcon } from '@heroicons/react/24/outline'
 import { cn } from '@/lib/utils'
 
 interface SearchBarProps {
-  onSearch: (query: string, imageFile?: File) => void
+  onSearch: (query: string, imageFile?: File, audioFile?: File, videoFile?: File) => void
   onClear: () => void
+  advancedSearch?: boolean
+  onToggleAdvancedSearch?: (enabled: boolean) => void
 }
 
-export default function SearchBar({ onSearch, onClear }: SearchBarProps) {
+export default function SearchBar({ 
+  onSearch, 
+  onClear,
+  advancedSearch = false,
+  onToggleAdvancedSearch
+}: SearchBarProps) {
   const [query, setQuery] = useState('')
   const [imageFile, setImageFile] = useState<File | null>(null)
-  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [audioFile, setAudioFile] = useState<File | null>(null)
+  const [videoFile, setVideoFile] = useState<File | null>(null)
+  const [imageName, setImageName] = useState('')
+  const [audioName, setAudioName] = useState('')
+  const [videoName, setVideoName] = useState('')
+  const imageInputRef = useRef<HTMLInputElement>(null)
+  const audioInputRef = useRef<HTMLInputElement>(null)
+  const videoInputRef = useRef<HTMLInputElement>(null)
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
-    if (query.trim() || imageFile) {
-      onSearch(query.trim(), imageFile || undefined)
+    if (query.trim() || imageFile || audioFile || videoFile) {
+      onSearch(query, imageFile || undefined, audioFile || undefined, videoFile || undefined)
     }
   }
 
   const handleClear = () => {
     setQuery('')
     setImageFile(null)
+    setImageName('')
+    setAudioFile(null)
+    setAudioName('')
+    setVideoFile(null)
+    setVideoName('')
     onClear()
   }
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (file) {
+  const handleImageChange = (e: ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0]
       setImageFile(file)
-      onSearch('', file)
+      setImageName(file.name)
     }
   }
 
+  const handleAudioChange = (e: ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0]
+      setAudioFile(file)
+      setAudioName(file.name)
+    }
+  }
+
+  const handleVideoChange = (e: ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0]
+      setVideoFile(file)
+      setVideoName(file.name)
+    }
+  }
+  
+  const toggleAdvancedSearch = () => {
+    if (onToggleAdvancedSearch) {
+      onToggleAdvancedSearch(!advancedSearch);
+    }
+  };
+
   return (
-    <form onSubmit={handleSubmit} className="relative">
-      <div className="flex items-center gap-2">
-        <div className="relative flex-1">
+    <div className="w-full">
+      <form onSubmit={handleSubmit} className="relative">
+        <div className="flex items-center relative border border-gray-300 rounded-lg shadow-sm focus-within:ring-1 focus-within:ring-indigo-500 focus-within:border-indigo-500 bg-white">
+          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+            <MagnifyingGlassIcon className="h-5 w-5 text-gray-400" aria-hidden="true" />
+          </div>
+          
           <input
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="What are you looking for?"
-            className="w-full pl-10 pr-10 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+            className="block w-full pl-10 pr-10 py-3 border-0 rounded-lg focus:outline-none focus:ring-0 sm:text-sm"
+            placeholder="Search videos..."
           />
-          <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
-          {(query || imageFile) && (
+          
+          <div className="absolute inset-y-0 right-0 flex items-center pr-3 space-x-1">
+            {/* Advanced search toggle button */}
             <button
               type="button"
-              onClick={handleClear}
-              className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-gray-400 hover:text-gray-600"
+              className={`p-1 rounded-full ${advancedSearch ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-gray-100 text-gray-400'}`}
+              onClick={toggleAdvancedSearch}
+              title="Toggle advanced search"
             >
-              <XMarkIcon className="h-4 w-4" />
+              <BoltIcon className="h-5 w-5" />
             </button>
-          )}
+            
+            {/* Image upload button (always visible) */}
+            <button
+              type="button"
+              onClick={() => imageInputRef.current?.click()}
+              className={`p-1 rounded-full ${imageFile ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-gray-100 text-gray-400'}`}
+              title="Upload image for search"
+            >
+              <PhotoIcon className="h-5 w-5" />
+            </button>
+            
+            {/* Advanced search media options */}
+            {advancedSearch && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => audioInputRef.current?.click()}
+                  className={`p-1 rounded-full ${audioFile ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-gray-100 text-gray-400'}`}
+                  title="Upload audio for search"
+                >
+                  <MusicalNoteIcon className="h-5 w-5" />
+                </button>
+                
+                <button
+                  type="button"
+                  onClick={() => videoInputRef.current?.click()}
+                  className={`p-1 rounded-full ${videoFile ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-gray-100 text-gray-400'}`}
+                  title="Upload video for search"
+                >
+                  <FilmIcon className="h-5 w-5" />
+                </button>
+              </>
+            )}
+            
+            {/* Clear button - only shows when there's content to clear */}
+            {(query || imageFile || audioFile || videoFile) && (
+              <button
+                type="button"
+                onClick={handleClear}
+                className="p-1 rounded-full hover:bg-gray-100 text-gray-400"
+                title="Clear search"
+              >
+                <XMarkIcon className="h-5 w-5" />
+              </button>
+            )}
+          </div>
         </div>
+        
+        {/* Hidden file inputs */}
         <input
-          ref={fileInputRef}
+          ref={imageInputRef}
           type="file"
           accept="image/*"
-          onChange={handleImageUpload}
+          onChange={handleImageChange}
           className="hidden"
         />
-        <button
-          type="button"
-          onClick={() => fileInputRef.current?.click()}
-          className={cn(
-            "p-3 rounded-lg border",
-            imageFile
-              ? "border-primary-500 bg-primary-50 text-primary-600"
-              : "border-gray-300 text-gray-600 hover:bg-gray-50"
+        <input
+          ref={audioInputRef}
+          type="file"
+          accept="audio/*"
+          onChange={handleAudioChange}
+          className="hidden"
+        />
+        <input
+          ref={videoInputRef}
+          type="file"
+          accept="video/*"
+          onChange={handleVideoChange}
+          className="hidden"
+        />
+        
+        {/* File preview chips */}
+        <div className="flex flex-wrap mt-2 gap-2">
+          {imageFile && (
+            <div className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+              <PhotoIcon className="h-3 w-3 mr-1" />
+              {imageName}
+              <button
+                type="button"
+                onClick={() => {
+                  setImageFile(null)
+                  setImageName('')
+                }}
+                className="ml-1 rounded-full hover:bg-blue-200"
+              >
+                <XMarkIcon className="h-3 w-3" />
+              </button>
+            </div>
           )}
-        >
-          <PhotoIcon className="h-5 w-5" />
-        </button>
-      </div>
-      {imageFile && (
-        <div className="mt-2 flex items-center gap-2 text-sm text-gray-600">
-          <PhotoIcon className="h-4 w-4" />
-          <span>{imageFile.name}</span>
+          
+          {audioFile && (
+            <div className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+              <MusicalNoteIcon className="h-3 w-3 mr-1" />
+              {audioName}
+              <button
+                type="button"
+                onClick={() => {
+                  setAudioFile(null)
+                  setAudioName('')
+                }}
+                className="ml-1 rounded-full hover:bg-green-200"
+              >
+                <XMarkIcon className="h-3 w-3" />
+              </button>
+            </div>
+          )}
+          
+          {videoFile && (
+            <div className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
+              <FilmIcon className="h-3 w-3 mr-1" />
+              {videoName}
+              <button
+                type="button"
+                onClick={() => {
+                  setVideoFile(null)
+                  setVideoName('')
+                }}
+                className="ml-1 rounded-full hover:bg-purple-200"
+              >
+                <XMarkIcon className="h-3 w-3" />
+              </button>
+            </div>
+          )}
         </div>
-      )}
-    </form>
+        
+        {/* Visually hidden submit button for form submission */}
+        <button type="submit" className="sr-only">
+          Search
+        </button>
+      </form>
+    </div>
   )
 } 
