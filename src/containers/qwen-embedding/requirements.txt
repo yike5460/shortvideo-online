@@ -1,0 +1,13 @@
+fastapi>=0.68.0
+uvicorn>=0.15.0
+pydantic>=1.8.0
+boto3>=1.26.0
+Pillow>=8.0.0
+peft>=0.5.0
+service-streamer>=0.1.0
+accelerate
+qwen-vl-utils[decord]==0.0.8
+https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1+cu12torch2.6cxx11abiFALSE-cp311-cp311-linux_x86_64.whl
+transformers>=4.36.0
+torch>=2.6.0
+numpy>=1.21.0 
