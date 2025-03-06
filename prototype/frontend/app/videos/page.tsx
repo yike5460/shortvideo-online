@@ -29,7 +29,6 @@ interface Index {
 const VideoCardMenu = ({ 
   video, 
   onDelete, 
-  onReprocess,
   onViewDetails,
   isOpen, 
   setIsOpen,
@@ -37,7 +36,6 @@ const VideoCardMenu = ({
 }: { 
   video: VideoResult, 
   onDelete: (video: VideoResult) => Promise<void>, 
-  onReprocess: (video: VideoResult) => Promise<void>,
   onViewDetails: (video: VideoResult) => void,
   isOpen: boolean, 
   setIsOpen: (open: boolean) => void,
@@ -78,16 +76,6 @@ const VideoCardMenu = ({
           >
             Delete
           </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onReprocess(video);
-              setIsOpen(false);
-            }}
-            className="block w-full text-left px-4 py-2 text-sm text-blue-600 hover:bg-gray-100"
-          >
-            Reprocess
-          </button>
         </div>
       )}
     </div>
@@ -105,6 +93,7 @@ export default function VideosPage() {
   const [selectedIndexId, setSelectedIndexId] = useState<string | null>(null)
   const [isLoadingIndexes, setIsLoadingIndexes] = useState(false)
   const [isModalOpen, setIsModalOpen] = useState(false)
+  const [modalViewMode, setModalViewMode] = useState<"play" | "details">("play")
   // Add a state to track the actual video counts per index
   const [indexVideoCounts, setIndexVideoCounts] = useState<Record<string, number>>({})
   // Track total videos for "All Videos" option
@@ -242,10 +231,19 @@ export default function VideosPage() {
     }, {})
   }, [videos])
 
-  // Function to handle video card click - add console log for debugging
+  // Function to handle video card click - opens modal in play mode
   const handleVideoClick = (video: VideoResult) => {
     console.log("Video clicked:", video);
     setSelectedVideo(video);
+    setModalViewMode("play");
+    setIsModalOpen(true);
+  };
+  
+  // Function to handle "View Details" click - opens modal in details mode
+  const handleViewDetails = (video: VideoResult) => {
+    console.log("View details clicked:", video);
+    setSelectedVideo(video);
+    setModalViewMode("details");
     setIsModalOpen(true);
   };
 
@@ -305,12 +303,6 @@ export default function VideosPage() {
     }
   };
   
-  // Function to handle video reprocessing (placeholder for now)
-  const handleReprocessVideo = async (video: VideoResult) => {
-    console.log('Reprocessing video:', video);
-    // This would be implemented when a reprocess API is available
-    alert(`Reprocessing of video ${video.title || 'Untitled'} is not yet implemented.`);
-  };
 
   if (isLoading) {
     return (
@@ -557,8 +549,7 @@ export default function VideosPage() {
                     <VideoCardMenu
                       video={video}
                       onDelete={handleDeleteVideo}
-                      onReprocess={handleReprocessVideo}
-                      onViewDetails={handleVideoClick}
+                      onViewDetails={handleViewDetails}
                       isOpen={openMenuId === video.id}
                       setIsOpen={(open) => setOpenMenuId(open ? video.id : null)}
                       menuRef={menuRef}
@@ -576,6 +567,7 @@ export default function VideosPage() {
         video={selectedVideo}
         isOpen={isModalOpen}
         onClose={closeModal}
+        viewMode={modalViewMode}
       />
       
       {/* Delete Confirmation Dialog */}
@@ -610,4 +602,4 @@ export default function VideosPage() {
       )}
     </div>
   )
-} 
+}
