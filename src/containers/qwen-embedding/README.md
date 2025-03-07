@@ -103,3 +103,28 @@ The API returns appropriate HTTP status codes and error messages:
 - Python with FastAPI
 - Qwen2.5-VL model
 - Required Python packages (see requirements.txt) 
+
+## Building and Deployment
+
+### Building the Docker Image
+
+The service can be built using Docker. You'll need a Hugging Face access token to download the model during the build process.
+
+```bash
+# Build the Docker image
+docker build --build-arg HF_TOKEN=your_hf_token_here -t qwen-embedding-service .
+```
+
+### Running the Container
+
+```bash
+# Run the container
+docker run -d --gpus all -p 8001:8001 -e AWS_ACCESS_KEY_ID=AWS_ACCESS_KEY_ID   -e AWS_SECRET_ACCESS_KEY=AWS_ACCESS_KEY_ID -e AWS_DEFAULT_REGION=AWS_DEFAULT_REGION   qwen-embedding-service:latest
+```
+
+The service will be available at `http://localhost:8001`.
+
+Note: Make sure you have:
+1. A valid Hugging Face access token with read permissions for the model
+2. Sufficient disk space for the model download (approximately 6GB)
+3. Docker installed with CUDA support if running on GPU 
