@@ -51,8 +51,25 @@ const VideoCardMenu = ({
   setIsOpen: (open: boolean) => void,
   menuRef: React.RefObject<HTMLDivElement>
 }) => {
+  // Create a local ref for this specific menu instance
+  const localMenuRef = useRef<HTMLDivElement>(null);
+  
+  // Use useEffect to handle clicks outside this specific menu
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (localMenuRef.current && !localMenuRef.current.contains(event.target as Node) && isOpen) {
+        setIsOpen(false);
+      }
+    }
+    
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isOpen, setIsOpen]);
+  
   return (
-    <div ref={menuRef} className="relative z-10">
+    <div ref={localMenuRef} className="relative z-20">
       <button
         onClick={(e) => {
           e.stopPropagation();
@@ -763,8 +780,8 @@ export default function VideosPage() {
                   key={video.id} 
                   className="relative bg-white rounded-lg shadow-md overflow-hidden group"
                 >
-                  <button 
-                    className="block w-full text-left"
+                  {/* Make only the thumbnail area clickable */}
+                  <div className="relative aspect-video bg-gray-100 cursor-pointer"
                     onClick={(e) => {
                       if (multiselectActive) {
                         e.preventDefault();
@@ -773,79 +790,77 @@ export default function VideosPage() {
                         handleVideoClick(video);
                       }
                     }}
-                    type="button"
                   >
-                    <div className="relative aspect-video bg-gray-100">
-                      {/* Selection indicator - only visible in multiselect mode */}
-                      {multiselectActive && (
-                        <div className={`absolute top-3 right-3 z-10 w-6 h-6 flex items-center justify-center rounded-full border-2 ${
-                          selectedVideos.has(video.id) 
-                            ? 'bg-indigo-600 border-indigo-600' 
-                            : 'bg-white border-gray-300'
-                        }`}>
-                          {selectedVideos.has(video.id) && (
-                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-white" viewBox="0 0 20 20" fill="currentColor">
-                              <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                            </svg>
-                          )}
-                        </div>
-                      )}
-                      {/* Display static thumbnail instead of video */}
-                      {video.videoThumbnailUrl ? (
-                        <img
-                          src={video.videoThumbnailUrl}
-                          alt={video.title || video.description || "Video thumbnail"}
-                          className="w-full h-full object-cover"
-                          loading="lazy"
-                        />
-                      ) : (
-                        <div className="w-full h-full bg-gray-200 flex items-center justify-center">
-                          <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    {/* Selection indicator - only visible in multiselect mode */}
+                    {multiselectActive && (
+                      <div className={`absolute top-3 right-3 z-10 w-6 h-6 flex items-center justify-center rounded-full border-2 ${
+                        selectedVideos.has(video.id) 
+                          ? 'bg-indigo-600 border-indigo-600' 
+                          : 'bg-white border-gray-300'
+                      }`}>
+                        {selectedVideos.has(video.id) && (
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-white" viewBox="0 0 20 20" fill="currentColor">
+                            <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
                           </svg>
-                        </div>
-                      )}
-                      
-                      {/* Play icon overlay */}
-                      <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                        <div className="w-16 h-16 bg-black bg-opacity-60 rounded-full flex items-center justify-center">
-                          <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                          </svg>
-                        </div>
+                        )}
                       </div>
-                      
-                      {/* Duration badge */}
-                      <div className="absolute bottom-2 right-2 bg-black bg-opacity-70 text-white text-xs px-2 py-1 rounded">
-                        {video.videoDuration || '00:00'}
+                    )}
+                    {/* Display static thumbnail instead of video */}
+                    {video.videoThumbnailUrl ? (
+                      <img
+                        src={video.videoThumbnailUrl}
+                        alt={video.title || video.description || "Video thumbnail"}
+                        className="w-full h-full object-cover"
+                        loading="lazy"
+                      />
+                    ) : (
+                      <div className="w-full h-full bg-gray-200 flex items-center justify-center">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                        </svg>
                       </div>
-                      
-                      {/* Index badge - show the index if we're not already filtering by index */}
-                      {!selectedIndexId && video.indexId && (
-                        <div className="absolute top-2 left-2 bg-black bg-opacity-70 text-white text-xs px-2 py-1 rounded">
-                          {video.indexId}
-                        </div>
-                      )}
+                    )}
+                    
+                    {/* Play icon overlay */}
+                    <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                      <div className="w-16 h-16 bg-black bg-opacity-60 rounded-full flex items-center justify-center">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                      </div>
                     </div>
                     
-                    <div className="p-4">
-                      <h3 className="text-lg font-medium truncate pr-8">{video.title || video.description || "Untitled Video"}</h3>
-                      <p className="text-sm text-gray-500 mt-1">
-                        Uploaded {new Date(video.uploadDate || Date.now()).toLocaleDateString()}
-                      </p>
+                    {/* Duration badge */}
+                    <div className="absolute bottom-2 right-2 bg-black bg-opacity-70 text-white text-xs px-2 py-1 rounded">
+                      {video.videoDuration || '00:00'}
                     </div>
-                  </button>
+                    
+                    {/* Index badge - show the index if we're not already filtering by index */}
+                    {!selectedIndexId && video.indexId && (
+                      <div className="absolute top-2 left-2 bg-black bg-opacity-70 text-white text-xs px-2 py-1 rounded">
+                        {video.indexId}
+                      </div>
+                    )}
+                  </div>
                   
-                  {/* Video card menu - moved to bottom right */}
-                  <div className="absolute bottom-4 right-2">
+                  {/* Non-clickable text area */}
+                  <div className="p-4">
+                    <h3 className="text-lg font-medium truncate pr-8">{video.title || video.description || "Untitled Video"}</h3>
+                    <p className="text-sm text-gray-500 mt-1">
+                      Uploaded {new Date(video.uploadDate || Date.now()).toLocaleDateString()}
+                    </p>
+                  </div>
+                  
+                  {/* Video card menu in absolute position */}
+                  <div className="absolute bottom-4 right-2 z-20">
                     <VideoCardMenu
                       video={video}
                       onDelete={handleDeleteVideo}
                       onViewDetails={handleViewDetails}
                       isOpen={openMenuId === video.id}
                       setIsOpen={(open) => setOpenMenuId(open ? video.id : null)}
-                      menuRef={menuRef}
+                      menuRef={{} as React.RefObject<HTMLDivElement>}
                     />
                   </div>
                 </div>
