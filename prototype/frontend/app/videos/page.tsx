@@ -837,8 +837,8 @@ export default function VideosPage() {
                     </div>
                   </button>
                   
-                  {/* Video card menu */}
-                  <div className="absolute top-4 right-2">
+                  {/* Video card menu - moved to bottom right */}
+                  <div className="absolute bottom-4 right-2">
                     <VideoCardMenu
                       video={video}
                       onDelete={handleDeleteVideo}
