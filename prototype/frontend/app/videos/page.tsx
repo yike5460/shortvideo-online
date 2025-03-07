@@ -42,22 +42,20 @@ const VideoCardMenu = ({
   onViewDetails,
   isOpen, 
   setIsOpen,
-  menuRef
 }: { 
   video: VideoResult, 
   onDelete: (video: VideoResult) => Promise<void>, 
   onViewDetails: (video: VideoResult) => void,
   isOpen: boolean, 
   setIsOpen: (open: boolean) => void,
-  menuRef: React.RefObject<HTMLDivElement>
 }) => {
   // Create a local ref for this specific menu instance
-  const localMenuRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   
   // Use useEffect to handle clicks outside this specific menu
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
-      if (localMenuRef.current && !localMenuRef.current.contains(event.target as Node) && isOpen) {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node) && isOpen) {
         setIsOpen(false);
       }
     }
@@ -69,7 +67,7 @@ const VideoCardMenu = ({
   }, [isOpen, setIsOpen]);
   
   return (
-    <div ref={localMenuRef} className="relative z-20">
+    <div ref={menuRef} className="relative z-20">
       <button
         onClick={(e) => {
           e.stopPropagation();
@@ -82,7 +80,7 @@ const VideoCardMenu = ({
       </button>
       
       {isOpen && (
-        <div className="absolute right-0 mt-1 w-48 bg-white rounded-md shadow-lg py-1 ring-1 ring-black ring-opacity-5 z-50">
+        <div className="absolute right-0 top-full mt-1 w-48 bg-white rounded-md shadow-lg py-1 ring-1 ring-black ring-opacity-5 z-50">
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -852,17 +850,18 @@ export default function VideosPage() {
                     </p>
                   </div>
                   
-                  {/* Video card menu in absolute position */}
-                  <div className="absolute bottom-4 right-2 z-20">
-                    <VideoCardMenu
-                      video={video}
-                      onDelete={handleDeleteVideo}
-                      onViewDetails={handleViewDetails}
-                      isOpen={openMenuId === video.id}
-                      setIsOpen={(open) => setOpenMenuId(open ? video.id : null)}
-                      menuRef={{} as React.RefObject<HTMLDivElement>}
-                    />
-                  </div>
+                  {/* Video card menu in absolute position - hide during multiselect */}
+                  {!multiselectActive && (
+                    <div className="absolute top-2 right-2 z-20">
+                      <VideoCardMenu
+                        video={video}
+                        onDelete={handleDeleteVideo}
+                        onViewDetails={handleViewDetails}
+                        isOpen={openMenuId === video.id}
+                        setIsOpen={(open) => setOpenMenuId(open ? video.id : null)}
+                      />
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
