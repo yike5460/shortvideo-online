@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useEffect, useMemo, useRef } from 'react'
+import { useState, useEffect, useMemo, useRef, Fragment } from 'react'
+import { ChevronDownIcon, ChevronUpIcon } from '@heroicons/react/24/outline'
 import { VideoResult } from '@/types'
 import VideoGrid from '@/components/VideoGrid'
 import VideoSidebar from '@/components/VideoSidebar'
@@ -105,12 +106,42 @@ export default function VideosPage() {
   const [videoToDelete, setVideoToDelete] = useState<VideoResult | null>(null)
   // Add a ref to handle clicking outside the menu
   const menuRef = useRef<HTMLDivElement>(null)
+  // Add state for sorting
+  const [sortBy, setSortBy] = useState<string>("recent_upload")
+  const [isSortDropdownOpen, setIsSortDropdownOpen] = useState<boolean>(false)
+  const sortRef = useRef<HTMLDivElement>(null)
   
-  // Add click outside handler
+  // Define sort options
+  const sortOptions = [
+    { value: "recent_upload", label: "Recent upload" },
+    { value: "video_duration", label: "Video duration" },
+    { value: "video_name", label: "Video name" },
+    { value: "video_resolution", label: "Video resolution" }
+  ]
+  
+  // Parse duration string (HH:MM:SS) to seconds for sorting
+  const parseDurationToSeconds = (duration: string): number => {
+    if (!duration) return 0;
+    const parts = duration.split(':').map(Number);
+    if (parts.length === 3) {
+      return parts[0] * 3600 + parts[1] * 60 + parts[2];
+    } else if (parts.length === 2) {
+      return parts[0] * 60 + parts[1];
+    }
+    return 0;
+  };
+
+  // Add click outside handlers for menus and dropdowns
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
+      // Handle menu clicks outside
       if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
         setOpenMenuId(null);
+      }
+      
+      // Handle sort dropdown clicks outside
+      if (sortRef.current && !sortRef.current.contains(event.target as Node)) {
+        setIsSortDropdownOpen(false);
       }
     }
     
@@ -118,7 +149,7 @@ export default function VideosPage() {
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
-  }, [menuRef]);
+  }, [menuRef, sortRef]);
 
   // Fetch videos on mount
   useEffect(() => {
@@ -217,11 +248,32 @@ export default function VideosPage() {
     fetchIndexes();
   }, [state.session]);
 
+  // Sort videos based on selection
+  const sortedVideos = useMemo(() => {
+    if (!videos || !Array.isArray(videos)) return [];
+    
+    return [...videos].sort((a, b) => {
+      switch (sortBy) {
+        case "recent_upload":
+          return new Date(b.uploadDate || 0).getTime() - new Date(a.uploadDate || 0).getTime();
+        case "video_duration":
+          return parseDurationToSeconds(b.videoDuration || "0") - parseDurationToSeconds(a.videoDuration || "0");
+        case "video_name":
+          return (a.title || "").localeCompare(b.title || "");
+        case "video_resolution":
+          // Would need video resolution data, default to title if not available
+          return (a.title || "").localeCompare(b.title || "");
+        default:
+          return 0;
+      }
+    });
+  }, [videos, sortBy]);
+
   // Group videos by status
   const videosByStatus = useMemo(() => {
-    if (!videos || !Array.isArray(videos)) return {}
+    if (!sortedVideos || !sortedVideos.length) return {}
     
-    return videos.reduce((acc: { [key: string]: VideoResult[] }, video) => {
+    return sortedVideos.reduce((acc: { [key: string]: VideoResult[] }, video) => {
       const status = video.status || 'unknown'
       if (!acc[status]) {
         acc[status] = []
@@ -229,7 +281,7 @@ export default function VideosPage() {
       acc[status].push(video)
       return acc
     }, {})
-  }, [videos])
+  }, [sortedVideos])
 
   // Function to handle video card click - opens modal in play mode
   const handleVideoClick = (video: VideoResult) => {
@@ -434,44 +486,93 @@ export default function VideosPage() {
         {selectedIndexId ? `Videos in "${selectedIndexId}"` : "All Videos"}
       </h1>
       
-      {/* Index Selection Dropdown */}
+      {/* Index Selection and Sorting */}
       <div className="mb-6">
-        <label htmlFor="index-select" className="block text-sm font-medium text-gray-700 mb-1">
-          Select Index
-        </label>
-        <div className="relative">
-          <select
-            id="index-select"
-            className="w-full md:w-64 px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
-            value={selectedIndexId || ''}
-            onChange={(e) => {
-              const newIndex = e.target.value || null;
-              setSelectedIndexId(newIndex);
-              // Reset videos array to show loading state when changing indexes
-              setVideos([]);
-              setIsLoading(true);
-            }}
-            disabled={isLoadingIndexes}
-          >
-            {/* Add "All Indexes" option */}
-            <option value="">All Indexes ({totalVideos})</option>
-            {indexes.length > 0 ? (
-              indexes.map((index) => (
-                <option key={index.id} value={index.id}>
-                  {index.name} ({index.videoCount} videos)
+        {/* Index Selection Dropdown */}
+        <div className="mb-3">
+          <label htmlFor="index-select" className="block text-sm font-medium text-gray-700 mb-1">
+            Select Index
+          </label>
+          <div className="relative">
+            <select
+              id="index-select"
+              className="w-full md:w-64 px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+              value={selectedIndexId || ''}
+              onChange={(e) => {
+                const newIndex = e.target.value || null;
+                setSelectedIndexId(newIndex);
+                // Reset videos array to show loading state when changing indexes
+                setVideos([]);
+                setIsLoading(true);
+              }}
+              disabled={isLoadingIndexes}
+            >
+              {/* Add "All Indexes" option */}
+              <option value="">All Indexes ({totalVideos})</option>
+              {indexes.length > 0 ? (
+                indexes.map((index) => (
+                  <option key={index.id} value={index.id}>
+                    {index.name} ({index.videoCount} videos)
+                  </option>
+                ))
+              ) : (
+                <option value="" disabled>
+                  {isLoadingIndexes ? 'Loading indexes...' : 'No indexes available'}
                 </option>
-              ))
-            ) : (
-              <option value="" disabled>
-                {isLoadingIndexes ? 'Loading indexes...' : 'No indexes available'}
-              </option>
+              )}
+            </select>
+            {isLoading && (
+              <div className="absolute right-10 top-3">
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-indigo-500"></div>
+              </div>
             )}
-          </select>
-          {isLoading && (
-            <div className="absolute right-10 top-3">
-              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-indigo-500"></div>
+          </div>
+        </div>
+
+        {/* Sort By Dropdown */}
+        <div className="flex justify-end items-center">
+          <div className="relative" ref={sortRef}>
+            <div className="flex items-center">
+              <span className="text-gray-700 mr-2">Sort by :</span>
+              <button
+                type="button"
+                className="flex items-center px-3 py-1 bg-gray-200 rounded-md text-gray-800 hover:bg-gray-300 focus:outline-none"
+                onClick={() => setIsSortDropdownOpen(!isSortDropdownOpen)}
+              >
+                <span>{sortOptions.find(opt => opt.value === sortBy)?.label || "Recent upload"}</span>
+                <span className="ml-2">
+                  {isSortDropdownOpen ? (
+                    <ChevronUpIcon className="h-4 w-4" />
+                  ) : (
+                    <ChevronDownIcon className="h-4 w-4" />
+                  )}
+                </span>
+              </button>
             </div>
-          )}
+
+            {/* Dropdown menu */}
+            {isSortDropdownOpen && (
+              <div className="absolute right-0 mt-1 w-48 bg-white rounded-md shadow-lg py-1 z-50">
+                {sortOptions.map((option) => (
+                  <button
+                    key={option.value}
+                    className={`block w-full text-left px-4 py-2 text-sm ${
+                      sortBy === option.value ? 'bg-gray-200' : 'hover:bg-gray-100'
+                    }`}
+                    onClick={() => {
+                      setSortBy(option.value);
+                      setIsSortDropdownOpen(false);
+                    }}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="ml-4">
+            <button className="text-gray-700" disabled>Multiselect</button>
+          </div>
         </div>
       </div>
       
