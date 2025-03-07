@@ -512,7 +512,7 @@ export class VideoSearchStack extends cdk.Stack {
         REKOGNITION_ROLE_ARN: this.rekognitionRole.roleArn,
         OPENSEARCH_ENDPOINT: `https://${this.openSearchCollection.attrId}.${this.region}.aoss.amazonaws.com`,
         REDIS_ENDPOINT: this.redisCluster.attrRedisEndpointAddress,
-        VIDEO_EMBEDDING_SERVICE_NAME: this.videoEmbeddingService.serviceName,
+        EMBEDDING_SERVICE_URL: this.videoEmbeddingService.serviceName,
       },
       bundling: {
         minify: true,
@@ -843,7 +843,7 @@ export class VideoSearchStack extends cdk.Stack {
 
     // Add container to task definition
     const container = taskDefinition.addContainer('VideoEmbeddingContainer', {
-      image: ecs.ContainerImage.fromAsset('src/containers/videoclip-embedding'),
+      image: ecs.ContainerImage.fromAsset('src/containers/qwen-embedding'),
       logging: new ecs.AwsLogDriver({
         streamPrefix: 'video-embedding-service',
         logRetention: logs.RetentionDays.ONE_WEEK,

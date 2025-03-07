@@ -45,7 +45,6 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
   'Access-Control-Allow-Credentials': 'true'
 };
-
 const STATUS_CODES = {
   OK: 200,
   CREATED: 201,
@@ -53,6 +52,7 @@ const STATUS_CODES = {
   NOT_FOUND: 404,
   INTERNAL_SERVER_ERROR: 500
 };
+const EMBEDDING_SERVICE_URL = process.env.EMBEDDING_SERVICE_URL;
 
 export const handler = async (event: S3Event | SNSEvent | SQSEvent, _context: LambdaContext): Promise<LambdaResponse> => {
   try {
@@ -790,6 +790,22 @@ async function processSegmentDetection(
         segment_visual_keyframe_path: segmentVideoS3Path[1],
       };
 
+      // Check if the embedding service is running
+      try {
+        await ensureEmbeddingServiceRunning();
+        console.log('Embedding service is running, and generating embedding for the segment ', segmentVideoS3Path[0], ' in bucket ', bucketName);
+        // Generate embedding for the segment
+        const embedding = await generateEmbedding(bucketName, segmentVideoS3Path[0]);
+        if (embedding) {
+          console.log('Successfully generated embedding for the segment ', segmentVideoS3Path[0], ' in bucket ', bucketName);
+          slicedSegment.segment_visual.segment_visual_embedding = embedding;
+        } else {
+          console.error('Failed to generate embedding for the segment ', segmentVideoS3Path[0], ' in bucket ', bucketName);
+        }
+      } catch (error) {
+        console.error('Error ensuring embedding service is running:', error);
+      }
+
       return slicedSegment;
     } catch (error) {
       console.error(`Error processing video segment ${segmentNumber}:`, error);
@@ -799,6 +815,61 @@ async function processSegmentDetection(
   } catch (error) {
     console.error('Error processing video segments:', error);
     throw error;
+  }
+}
+
+// Function to check if the embedding service is running and start it if not
+async function ensureEmbeddingServiceRunning(): Promise<void> {
+  try {
+    // Try to ping the embedding service
+    const response = await fetch(`${EMBEDDING_SERVICE_URL}/health`, {
+      method: 'GET',
+    });
+    
+    if (response.ok) {
+      console.log('Embedding service is already running');
+      return;
+    }
+  } catch (error) {
+    console.log('Embedding service not responding, starting new task');
+  }
+}
+
+// Function to generate embedding using the embedding service
+async function generateEmbedding(bucket: string, key: string): Promise<number[] | undefined> {
+  try {
+    // Align with the embedding service request body in container/qwen-embedding/app.py
+    //     **Request Body**
+    // ```json
+    // {
+    //     "bucket": "your-s3-bucket",
+    //     "key": "path/to/video.mp4"
+    // }
+    // ```
+
+    // **Response**
+    // ```json
+    // {
+    //     "embedding": [...]
+    // }
+    // ```
+    const response = await fetch(`${EMBEDDING_SERVICE_URL}/embed-video`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ bucket: bucket, key: key }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Error from embedding service: ${response.statusText}`);
+    }
+    
+    const data = await response.json() as { embedding: number[] };
+    return data.embedding;
+  } catch (error) {
+    console.error('Error calling embedding service:', error);
+    return undefined;
   }
 }
 
