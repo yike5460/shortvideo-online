@@ -27,8 +27,10 @@ class GmeQwen2VL:
         **kwargs,
     ) -> None:
         model_name = model_path or model_name
+        # Only use flash_attention_2 when running on GPU
+        attn_impl = "flash_attention_2" if device == "cuda" else "eager"
         self.base = AutoModelForVision2Seq.from_pretrained(
-            model_name, attn_implementation="flash_attention_2", torch_dtype=torch.bfloat16, **kwargs
+            model_name, attn_implementation=attn_impl, torch_dtype=torch.bfloat16, **kwargs
         )
         if lora_path:
             self.base = PeftModel.from_pretrained(self.base, lora_path, torch_dtype=torch.bfloat16)

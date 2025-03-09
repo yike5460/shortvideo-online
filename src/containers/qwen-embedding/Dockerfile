@@ -19,9 +19,7 @@ RUN mkdir -p /app/model
 RUN pip install --no-cache-dir huggingface_hub
 
 # Download model from Hugging Face
-RUN --mount=type=secret,id=hf_token \
-    export HF_TOKEN=${HF_TOKEN} && \
-    python -c "from huggingface_hub import snapshot_download; snapshot_download('xiaotinghe/Qwen2.5-VL-3B-video-embedding-0306', local_dir='/app/model', token='${HF_TOKEN}')"
+RUN python -c "from huggingface_hub import snapshot_download; snapshot_download('xiaotinghe/Qwen2.5-VL-3B-video-embedding-0306', local_dir='/app/model', token='${HF_TOKEN}')"
 
 # Install Python dependencies
 COPY requirements.txt .
