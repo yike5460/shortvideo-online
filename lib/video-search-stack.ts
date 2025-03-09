@@ -424,7 +424,7 @@ export class VideoSearchStack extends cdk.Stack {
     const commonLambdaProps = {
       runtime: lambda.Runtime.NODEJS_20_X,
       vpc: this.vpc,
-      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
       securityGroups: [lambdaSG],
       timeout: cdk.Duration.minutes(15),
       environment: {
@@ -502,7 +502,7 @@ export class VideoSearchStack extends cdk.Stack {
     const commonLambdaProps = {
       runtime: lambda.Runtime.NODEJS_20_X,
       vpc: this.vpc,
-      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
       securityGroups: [lambdaSG],
       timeout: cdk.Duration.minutes(15),
       environment: {
@@ -591,7 +591,7 @@ export class VideoSearchStack extends cdk.Stack {
     const commonLambdaProps = {
       runtime: lambda.Runtime.NODEJS_20_X,
       vpc: this.vpc,
-      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
       securityGroups: [lambdaSG],
       timeout: cdk.Duration.minutes(15),
       environment: {
@@ -663,7 +663,7 @@ export class VideoSearchStack extends cdk.Stack {
     const commonLambdaProps = {
       runtime: lambda.Runtime.NODEJS_20_X,
       vpc: this.vpc,
-      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
       securityGroups: [lambdaSG],
       timeout: cdk.Duration.minutes(15),
       environment: {
