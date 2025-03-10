@@ -54,6 +54,9 @@ const STATUS_CODES = {
 };
 const EMBEDDING_SERVICE_URL = process.env.EMBEDDING_SERVICE_URL;
 
+// Add a constant for the external embedding endpoint
+const EXTERNAL_EMBEDDING_ENDPOINT = process.env.EXTERNAL_EMBEDDING_ENDPOINT || '';
+
 export const handler = async (event: S3Event | SNSEvent | SQSEvent, _context: LambdaContext): Promise<LambdaResponse> => {
   try {
     console.log('Received event:', event);
@@ -826,50 +829,84 @@ async function ensureEmbeddingServiceRunning(): Promise<void> {
       method: 'GET',
     });
     
-    if (response.ok) {
+    // The response is a json object with the status field:
+    // ```json
+    // {
+    //   "status": "healthy"
+    // }
+    // ```
+    const data = await response.json() as { status: string };
+    if (data.status === 'healthy') {
       console.log('Embedding service is already running');
       return;
     }
+    console.error('Embedding service is not running, please start it');
   } catch (error) {
-    console.log('Embedding service not responding, starting new task');
+    console.error('Error checking embedding service status:', error);
   }
 }
 
 // Function to generate embedding using the embedding service
-async function generateEmbedding(bucket: string, key: string): Promise<number[] | undefined> {
-  try {
-    // Align with the embedding service request body in container/qwen-embedding/app.py
-    //     **Request Body**
-    // ```json
-    // {
-    //     "bucket": "your-s3-bucket",
-    //     "key": "path/to/video.mp4"
-    // }
-    // ```
+async function generateEmbedding(bucket: string, key: string): Promise<number[]> {
+  console.log('Generating embedding for video in bucket ', bucket, ' and key ', key);
+  // First try the external embedding endpoint if available
+  if (EXTERNAL_EMBEDDING_ENDPOINT) {
+    try {
+      console.log(`Using external embedding endpoint: ${EXTERNAL_EMBEDDING_ENDPOINT}`);
+      const response = await fetch(`${EXTERNAL_EMBEDDING_ENDPOINT}/embed-video`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        // Follow the format of the internal embedding service, using schema below:
+        // ```json
+        // {
+        //   "bucket": "your-s3-bucket",
+        //   "key": "path/to/video.mp4"
+        // }
+        // ```
+        body: JSON.stringify({ bucket, key }),
+      });
 
-    // **Response**
-    // ```json
-    // {
-    //     "embedding": [...]
-    // }
-    // ```
+      // The response is a json object with the embedding field:
+      // ```json
+      // {
+      //   "embedding": [...]
+      // }
+      // ```
+      const data = await response.json() as { embedding: number[] };
+      console.log(`Successfully generated embedding using external service for ${key}`);
+      return data.embedding;
+    } catch (error) {
+      console.error('Error calling external embedding service:', error);
+      // Fall back to internal service
+      return [];
+    }
+  }
+  
+  console.log('No external embedding service available, falling back to internal embedding service');
+  // Fall back to internal embedding service
+  try {
     const response = await fetch(`${EMBEDDING_SERVICE_URL}/embed-video`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ bucket: bucket, key: key }),
+      body: JSON.stringify({ bucket, key }),
     });
 
-    if (!response.ok) {
-      throw new Error(`Error from embedding service: ${response.statusText}`);
-    }
-    
+    // The response is a json object with the embedding field:
+    // ```json
+    // {
+    //   "embedding": [...]
+    // }
+    // ```
     const data = await response.json() as { embedding: number[] };
+    console.log(`Successfully generated embedding using internal service for ${key}`);
     return data.embedding;
   } catch (error) {
-    console.error('Error calling embedding service:', error);
-    return undefined;
+    console.error('Error calling internal embedding service:', error);
+    return [];
   }
 }
 
@@ -901,7 +938,7 @@ async function updateVideoSegments(videoIndex: string, videoId: string, segments
   });
 
   console.log('Existing video metadata before updating segments from Rekognition: ', existingVideo);
-
+  console.log('Segments to update: ', segments, ' with embedding: ', segments.map(s => s.segment_visual?.segment_visual_embedding));
   // Update video metadata with new segments and status
   await openSearch.update({
     index: videoIndex,
@@ -915,7 +952,12 @@ async function updateVideoSegments(videoIndex: string, videoId: string, segments
         // Update the each segment within the segments array with segment_id
         video_segments: segments.map(s => ({
           ...s,
-          segment_id: s.segment_id || `unassigned_segment_id`
+          segment_id: s.segment_id || `unassigned_segment_id`,
+          // Update the embedding field if it exists
+          segment_visual: {
+            ...s.segment_visual,
+            segment_visual_embedding: s.segment_visual?.segment_visual_embedding || []
+          }
         }))
       }
     }

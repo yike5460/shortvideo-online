@@ -25,6 +25,7 @@ interface SearchQuery {
   };
   minConfidence: number;
   selectedIndex?: string;
+  advancedSearch?: boolean; // Add the advanced search option
 }
 
 // OpenSearch query types
@@ -61,6 +62,9 @@ let redisClient: RedisClientType | null = null;
 const dynamoClient = new DynamoDBClient({endpoint: process.env.INDEXES_TABLE_DYNAMODB_DNS_NAME});
 const docClient = DynamoDBDocumentClient.from(dynamoClient);
 
+// Add a constant for the external embedding endpoint
+const EXTERNAL_EMBEDDING_ENDPOINT = process.env.EXTERNAL_EMBEDDING_ENDPOINT || '';
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token',
@@ -76,7 +80,61 @@ const STATUS_CODES = {
   INTERNAL_SERVER_ERROR: 500
 };
 
-// Update the search query builder
+// Add a function to generate embeddings using the external endpoint
+async function generateEmbedding(text: string): Promise<number[] | undefined> {
+  if (!EXTERNAL_EMBEDDING_ENDPOINT) {
+    console.warn('External embedding endpoint not configured');
+    return undefined;
+  }
+
+  try {
+    console.log(`Calling external embedding service at ${EXTERNAL_EMBEDDING_ENDPOINT}/embed-text`);
+    // **Request Body**
+    // ```json
+    // {
+    //     "texts": "single text string"
+    // }
+    // ```
+    // or
+    // ```json
+    // {
+    //     "texts": ["text1", "text2", "text3"]
+    // }
+    // ```
+    
+    // **Response**
+    // ```json
+    // {
+    //     "embedding": [...]  // For single text input
+    // }
+    // ```
+    // or
+    // ```json
+    // {
+    //     "embedding": [[...], [...], [...]]  // For multiple text inputs
+    // }
+    // ```
+    const response = await fetch(`${EXTERNAL_EMBEDDING_ENDPOINT}/embed-text`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ texts: text }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Error from embedding service: ${response.statusText}`);
+    }
+    
+    const data = await response.json() as { embedding: number[] };
+    return data.embedding;
+  } catch (error) {
+    console.error('Error calling external embedding service:', error);
+    return undefined;
+  }
+}
+
+// Update the buildSearchQuery function to support semantic search with embeddings
 const buildSearchQuery = (searchQuery: SearchQuery): OpenSearchQuery => {
   console.log('Building search query:', JSON.stringify(searchQuery, null, 2));
 
@@ -103,7 +161,8 @@ const buildSearchQuery = (searchQuery: SearchQuery): OpenSearchQuery => {
       'video_segments.segment_id',
       'video_segments.start_time',
       'video_segments.end_time',
-      'video_segments.duration'
+      'video_segments.duration',
+      'video_segments.segment_visual.segment_visual_embedding'
     ],
     query: {
       bool: {
@@ -274,6 +333,104 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
     //   };
     // }
 
+    // Check if we should use advanced search with embeddings
+    if (searchQuery.advancedSearch && EXTERNAL_EMBEDDING_ENDPOINT) {
+      console.log('Using advanced search with external embedding endpoint:', EXTERNAL_EMBEDDING_ENDPOINT);
+      
+      // Generate an embedding for the search query
+      const embedding = await generateEmbedding(searchQuery.searchQuery);
+      
+      if (embedding) {
+        // Build an advanced search query using the embedding for vector search
+        const searchBody = {
+          size: searchQuery.topK || 3,
+          _source: [
+            'video_id',
+            'video_title',
+            'video_description',
+            'video_preview_url',
+            'video_s3_path',
+            'video_duration',
+            'video_source',
+            'video_thumbnail_s3_path',
+            'video_thumbnail_url',
+            'created_at',
+            'video_type',
+            'video_status',
+            'video_size',
+            'video_segments.segment_id',
+            'video_segments.start_time',
+            'video_segments.end_time',
+            'video_segments.duration'
+          ],
+          query: {
+            nested: {
+              path: "video_segments",
+              query: {
+                bool: {
+                  filter: [
+                    {
+                      bool: {
+                        should: [
+                          { term: { "video_status": "ready" } },
+                          { term: { "video_status": "ready_for_face" } },
+                          { term: { "video_status": "ready_for_object" } },
+                          { term: { "video_status": "ready_for_shots" } },
+                          { term: { "video_status": "ready_for_video_embed" } },
+                          { term: { "video_status": "ready_for_audio_embed" } }
+                        ],
+                        must_not: [
+                          { term: { "video_status": "deleted" } }
+                        ],
+                        minimum_should_match: 1
+                      }
+                    }
+                  ],
+                  must: [
+                    {
+                      script_score: {
+                        query: { match_all: {} },
+                        script: {
+                          source: "cosineSimilarity(params.query_vector, 'video_segments.segment_visual.segment_visual_embedding') + 1.0",
+                          params: { query_vector: embedding }
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              inner_hits: {
+                _source: ["segment_id", "start_time", "end_time", "duration"],
+                size: 1
+              }
+            }
+          }
+        };
+        
+        console.log('Generated advanced search body:', JSON.stringify(searchBody, null, 2));
+        
+        // Execute the search with the semantic embedding query
+        const { body } = await openSearch.search({
+          index: searchQuery.selectedIndex,
+          body: searchBody
+        });
+        
+        // Transform results
+        const results: VideoResult[] = await transformSearchResults(body.hits.hits);
+        
+        return {
+          statusCode: STATUS_CODES.OK,
+          headers: corsHeaders,
+          body: JSON.stringify(results)
+        };
+      } else {
+        console.warn('Failed to generate embedding for advanced search, falling back to basic search');
+      }
+    }
+    
+    // If we reach here, either advanced search is not enabled or embedding generation failed
+    // Proceed with basic search
+    
     // Build and execute the search with limited results
     const searchBody = buildSearchQuery(searchQuery);
 

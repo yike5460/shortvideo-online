@@ -24,6 +24,7 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 interface VideoSearchStackProps extends cdk.StackProps {
   maxAzs: number;
   deploymentEnvironment?: string;
+  externalVideoEmbeddingEndpoint?: string;
 }
 
 export class VideoSearchStack extends cdk.Stack {
@@ -38,9 +39,11 @@ export class VideoSearchStack extends cdk.Stack {
   private readonly indexesTable: dynamodb.Table;
   private readonly dynamodbEndpoint: ec2.InterfaceVpcEndpoint;
   private readonly videoEmbeddingService: ecs.FargateService;
+  private readonly externalVideoEmbeddingEndpoint: string;
   constructor(scope: Construct, id: string, props: VideoSearchStackProps) {
     super(scope, id, props);
 
+    this.externalVideoEmbeddingEndpoint = props.externalVideoEmbeddingEndpoint || '';
     const deploymentEnv = props.deploymentEnvironment || 'dev';
 
     // Initialize core infrastructure in correct order
@@ -432,9 +435,10 @@ export class VideoSearchStack extends cdk.Stack {
         // QUEUE_URL: this.videoProcessingQueue.queueUrl,
         OPENSEARCH_ENDPOINT: `https://${this.openSearchCollection.attrId}.${this.region}.aoss.amazonaws.com`,
         REDIS_ENDPOINT: this.redisCluster.attrRedisEndpointAddress,
+        INDEXES_TABLE: this.indexesTable.tableName,
         // Explicitly specify the DynamoDB endpoint since Private DNS can't be enabled because the service com.amazonaws.<region>.dynamodb does not provide a privateDNS name. Use Fn.select to properly extract the first DNS entry from the list
         INDEXES_TABLE_DYNAMODB_DNS_NAME: dynamoDbEndpointDnsHttp,
-        INDEXES_TABLE: this.indexesTable.tableName
+        EXTERNAL_EMBEDDING_ENDPOINT: this.externalVideoEmbeddingEndpoint || '',
       },
       bundling: {
         minify: true,
@@ -513,6 +517,7 @@ export class VideoSearchStack extends cdk.Stack {
         OPENSEARCH_ENDPOINT: `https://${this.openSearchCollection.attrId}.${this.region}.aoss.amazonaws.com`,
         REDIS_ENDPOINT: this.redisCluster.attrRedisEndpointAddress,
         EMBEDDING_SERVICE_URL: this.videoEmbeddingService.serviceName,
+        EXTERNAL_EMBEDDING_ENDPOINT: this.externalVideoEmbeddingEndpoint || '',
       },
       bundling: {
         minify: true,
@@ -602,6 +607,7 @@ export class VideoSearchStack extends cdk.Stack {
         INDEXES_TABLE: this.indexesTable.tableName,
         // Explicitly specify the DynamoDB endpoint since Private DNS can't be enabled because the service com.amazonaws.<region>.dynamodb does not provide a privateDNS name. Use Fn.select to properly extract the first DNS entry from the list
         INDEXES_TABLE_DYNAMODB_DNS_NAME: dynamoDbEndpointDnsHttp,
+        EXTERNAL_EMBEDDING_ENDPOINT: this.externalVideoEmbeddingEndpoint || '',
       },
       bundling: {
         // Minify the code to reduce bundle size
