@@ -134,8 +134,8 @@ export default function UploadStep({
         }
       })
 
-      // Notify backend that upload is complete
-      await axios.post(`${API_ENDPOINT}/videos/upload/${videoId}/complete`, {
+      // Start the completion request but don't wait for it to finish
+      axios.post(`${API_ENDPOINT}/videos/upload/${videoId}/complete`, {
         fileName: file.name,
         fileSize: file.size,
         fileType: file.type,
@@ -146,9 +146,12 @@ export default function UploadStep({
         headers: {
           'Content-Type': 'application/json'
         }
-      })
-
-      // Update progress
+      }).catch(error => {
+        // Log the error but don't block the UI
+        console.error('Background upload completion error:', error);
+      });
+      
+      // Immediately proceed to the progress page without waiting for the completion request
       setUploadProgress(prev => ({
         ...prev,
         [file.name]: { 

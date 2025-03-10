@@ -88,7 +88,7 @@ async function generateEmbedding(text: string): Promise<number[] | undefined> {
   }
 
   try {
-    console.log(`Calling external embedding service at ${EXTERNAL_EMBEDDING_ENDPOINT}/embed-text`);
+    console.log(`Calling external embedding service at ${EXTERNAL_EMBEDDING_ENDPOINT}/embed-text, with query: ${text}`);
     // **Request Body**
     // ```json
     // {
@@ -302,8 +302,6 @@ const transformSearchResults = async (hits: any[]): Promise<VideoResult[]> => {
 
 // Update the handler to use the dynamic index
 export const handler = async (event: APIGatewayProxyEvent, _context: LambdaContext): Promise<LambdaResponse> => {
-  console.log('Received event for video search:', JSON.stringify(event, null, 2));
-  console.log('INDEXES_TABLE_DYNAMODB_DNS_NAME:', process.env.INDEXES_TABLE_DYNAMODB_DNS_NAME);
   try {
     if (!event.body) {
       return {
@@ -336,12 +334,12 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
     // Check if we should use advanced search with embeddings
     if (searchQuery.advancedSearch && EXTERNAL_EMBEDDING_ENDPOINT) {
       console.log('Using advanced search with external embedding endpoint:', EXTERNAL_EMBEDDING_ENDPOINT);
-      
+
       // Generate an embedding for the search query
       const embedding = await generateEmbedding(searchQuery.searchQuery);
       
       if (embedding) {
-        // Build an advanced search query using the embedding for vector search
+        // Build a k-NN search query for OpenSearch based on documentation
         const searchBody = {
           size: searchQuery.topK || 3,
           _source: [
@@ -367,64 +365,73 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
             nested: {
               path: "video_segments",
               query: {
-                bool: {
-                  filter: [
-                    {
-                      bool: {
-                        should: [
-                          { term: { "video_status": "ready" } },
-                          { term: { "video_status": "ready_for_face" } },
-                          { term: { "video_status": "ready_for_object" } },
-                          { term: { "video_status": "ready_for_shots" } },
-                          { term: { "video_status": "ready_for_video_embed" } },
-                          { term: { "video_status": "ready_for_audio_embed" } }
-                        ],
-                        must_not: [
-                          { term: { "video_status": "deleted" } }
-                        ],
-                        minimum_should_match: 1
-                      }
-                    }
-                  ],
-                  must: [
-                    {
-                      script_score: {
-                        query: { match_all: {} },
-                        script: {
-                          source: "cosineSimilarity(params.query_vector, 'video_segments.segment_visual.segment_visual_embedding') + 1.0",
-                          params: { query_vector: embedding }
-                        }
-                      }
-                    }
-                  ]
+                knn: {
+                  "video_segments.segment_visual.segment_visual_embedding": {
+                    vector: embedding,
+                    k: 50  // Number of nearest neighbors to find
+                  }
                 }
               },
               inner_hits: {
-                _source: ["segment_id", "start_time", "end_time", "duration"],
-                size: 1
+                _source: [
+                  "segment_id", 
+                  "start_time", 
+                  "end_time", 
+                  "duration"
+                ],
+                size: 5,
+                name: "matched_segments"
               }
+            }
+          },
+          // Apply post-filter to exclude deleted videos
+          post_filter: {
+            bool: {
+              should: [
+                { term: { "video_status": "ready" } },
+                { term: { "video_status": "ready_for_face" } },
+                { term: { "video_status": "ready_for_object" } },
+                { term: { "video_status": "ready_for_shots" } },
+                { term: { "video_status": "ready_for_video_embed" } },
+                { term: { "video_status": "ready_for_audio_embed" } }
+              ],
+              must_not: [
+                { term: { "video_status": "deleted" } }
+              ],
+              minimum_should_match: 1
             }
           }
         };
+
+        console.log("Generated k-NN search body: ", JSON.stringify(searchBody, null, 4));
         
-        console.log('Generated advanced search body:', JSON.stringify(searchBody, null, 2));
-        
-        // Execute the search with the semantic embedding query
-        const { body } = await openSearch.search({
-          index: searchQuery.selectedIndex,
-          body: searchBody
-        });
-        
-        // Transform results
-        const results: VideoResult[] = await transformSearchResults(body.hits.hits);
-        
-        return {
-          statusCode: STATUS_CODES.OK,
-          headers: corsHeaders,
-          body: JSON.stringify(results)
-        };
+        try {
+          const { body } = await openSearch.search({
+            index: searchQuery.selectedIndex,
+            body: searchBody
+          });
+
+          // Process results
+          console.log(`k-NN search returned ${body.hits.total?.value || 0} results`);
+          
+          // Transform results to match VideoResult interface
+          const results = await transformSearchResults(body.hits.hits);
+          
+          return {
+            statusCode: STATUS_CODES.OK,
+            headers: corsHeaders,
+            body: JSON.stringify(results)
+          };
+        } catch (searchError) {
+          console.error("k-NN search error:", searchError);
+        }
       } else {
-        console.warn('Failed to generate embedding for advanced search, falling back to basic search');
+        console.error('Failed to generate embedding for advanced search, falling back to basic search');
+        return {
+          statusCode: STATUS_CODES.INTERNAL_SERVER_ERROR,
+          headers: corsHeaders,
+          body: JSON.stringify({ error: 'Failed to generate embedding for advanced search, consider to fallback to basic search' })
+        };
       }
     }
     

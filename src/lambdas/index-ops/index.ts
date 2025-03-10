@@ -243,51 +243,70 @@ async function handleCreateIndex(event: APIGatewayProxyEvent): Promise<APIGatewa
   const openSearchIndexName = `${indexName}_${indexId}`;
   
   // Define index mapping based on selected models
-  const mapping = {
+  const indexSettings = {
+    settings: {
+      number_of_shards: 1,
+      number_of_replicas: 0,
+      "index.knn": true  // Enable k-NN for this index
+    },
     mappings: {
       properties: {
-        video_id: { type: 'keyword' },
         video_index: { type: 'keyword' },
-        video_title: { 
-          type: 'text',
-          fields: {
-            keyword: { type: 'keyword', ignore_above: 256 }
-          }
-        },
         video_description: { type: 'text' },
-        video_preview_url: { type: 'keyword' },
-        video_s3_path: { type: 'keyword' },
         video_duration: { type: 'text' },
+        video_id: { type: 'keyword' },
+        video_name: { type: 'keyword' },
         video_source: { type: 'keyword' },
-        created_at: { type: 'date' },
-        video_type: { type: 'keyword' },
+        video_s3_path: { type: 'keyword' },
+        video_size: { type: 'integer' },
         video_status: { type: 'keyword' },
-        video_size: { type: 'long' },
-        video_segments: {
+        video_summary: { type: 'text' },
+        video_tags: { type: 'keyword' },
+        video_title: { type: 'text' },
+        video_thumbnail_s3_path: { type: 'keyword' },
+        video_thumbnail_url: { type: 'keyword' },
+        video_preview_url: { type: 'keyword' },
+        video_type: { type: 'keyword' },
+
+        created_at: { type: 'date' },
+        updated_at: { type: 'date' },
+        error: { type: 'text' },
+        segment_count: { type: 'integer' },
+        job_id: { type: 'keyword' },
+
+        video_metadata: { type: 'object' },
+        video_segments: { 
           type: 'nested',
           properties: {
             segment_id: { type: 'keyword' },
-            start_time: { type: 'long' },
-            end_time: { type: 'long' },
-            duration: { type: 'long' },
+            start_time: { type: 'float' },
+            end_time: { type: 'float' },
+            duration: { type: 'float' },
+            segment_s3_path: { type: 'keyword' },
             segment_visual: {
               type: 'object',
               properties: {
                 segment_visual_description: { type: 'text' },
-                segment_visual_objects: {
-                  type: 'nested',
-                  properties: {
-                    label: { type: 'keyword' },
-                    confidence: { type: 'float' },
-                    bounding_box: {
-                      type: 'object',
-                      properties: {
-                        left: { type: 'float' },
-                        top: { type: 'float' },
-                        width: { type: 'float' },
-                        height: { type: 'float' }
-                      }
-                    }
+                segment_visual_embedding: { 
+                  type: 'knn_vector',
+                  dimension: 2048,
+                  method: {
+                    name: "hnsw",
+                    space_type: "cosinesimil"
+                  }
+                }
+              }
+            },
+            segment_audio: {
+              type: 'object',
+              properties: {
+                segment_audio_description: { type: 'text' },
+                segment_audio_embedding: { 
+                  type: 'knn_vector',
+                  dimension: 2048,
+                  method: {
+                    name: "hnsw",
+                    space_type: "cosinesimil"
                   }
                 }
               }
@@ -302,7 +321,7 @@ async function handleCreateIndex(event: APIGatewayProxyEvent): Promise<APIGatewa
     // Create the index in OpenSearch
     await openSearch.indices.create({
       index: openSearchIndexName,
-      body: mapping
+      body: indexSettings
     });
 
     // Store index metadata in DynamoDB with both required keys

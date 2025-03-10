@@ -271,7 +271,7 @@ export class VideoSearchStack extends cdk.Stack {
       policy: JSON.stringify({
         Rules: [{
           ResourceType: 'collection',
-          Resource: [`collection/video-search-${stage}`]
+          Resource: [`collection/video-search-${stage}-knn`]
         }],
         AWSOwnedKey: true
       })
@@ -284,7 +284,7 @@ export class VideoSearchStack extends cdk.Stack {
       policy: JSON.stringify([{
         Rules: [{
           ResourceType: 'collection',
-          Resource: [`collection/video-search-${stage}`]
+          Resource: [`collection/video-search-${stage}-knn`]
         }],
         AllowFromPublic: false,
         SourceVPCEs: [openSearchVpcEndpoint.attrId]
@@ -293,9 +293,9 @@ export class VideoSearchStack extends cdk.Stack {
 
     // Create collection
     const collection = new opensearchserverless.CfnCollection(this, 'VideoSearchCollection', {
-      name: `video-search-${stage}`,
+      name: `video-search-${stage}-knn`,
       description: 'Collection for video search and analytics',
-      type: 'SEARCH'
+      type: 'VECTORSEARCH'
     });
 
     // Add dependencies
@@ -311,7 +311,7 @@ export class VideoSearchStack extends cdk.Stack {
         Rules: [{
           ResourceType: 'index',
           Resource: [
-            `index/video-search-${stage}/*`
+            `index/video-search-${stage}-knn/*`
           ],
           Permission: [
             'aoss:ReadDocument',
@@ -1251,7 +1251,7 @@ export class VideoSearchStack extends cdk.Stack {
         Rules: [{
           ResourceType: 'index',
           Resource: [
-            `index/video-search-${stage}/*`
+            `index/video-search-${stage}-knn/*`
           ],
           Permission: [
             'aoss:ReadDocument',

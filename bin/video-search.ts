@@ -11,6 +11,7 @@ new VideoSearchStack(app, 'VideoSearchStack', {
   },
   deploymentEnvironment: process.env.DEPLOYMENT_ENV || 'dev',
   maxAzs: 2,
+  externalVideoEmbeddingEndpoint: process.env.EXTERNAL_EMBEDDING_ENDPOINT || ''
 });
 
 app.synth(); 

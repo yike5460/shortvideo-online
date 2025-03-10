@@ -55,7 +55,7 @@ export interface VideoSegment {
   video_s3_path?: string;     // S3 storage location for each segment (shots)
   segment_audio?: {
     segment_audio_transcript?: string;     // Raw transcript text
-    segment_audio_semantic_embedding?: number[];  // Audio embedding
+    segment_audio_embedding?: number[];  // Audio embedding
     segment_audio_description?: string;    // Audio description
   };
   segment_visual?: {

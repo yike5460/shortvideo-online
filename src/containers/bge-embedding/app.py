@@ -156,7 +156,7 @@ async def process_video(request: VideoEmbeddingRequest):
                         def segment = ctx._source.video_segments.find(s -> s.segment_id == params.segment_id);
                         if (segment != null) {
                             if (params.text_embedding != null) {
-                                segment.segment_audio.segment_audio_semantic_embedding = params.text_embedding;
+                                segment.segment_audio.segment_audio_embedding = params.text_embedding;
                             }
                             if (params.visual_embedding != null) {
                                 segment.segment_visual.segment_visual_embedding = params.visual_embedding;

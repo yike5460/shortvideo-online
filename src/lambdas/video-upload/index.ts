@@ -51,7 +51,8 @@ const STATUS_CODES = {
 const indexSettings = {
   settings: {
     number_of_shards: 1,
-    number_of_replicas: 0
+    number_of_replicas: 0,
+    "index.knn": true  // Enable k-NN for this index
   },
 
   mappings: {
@@ -80,7 +81,44 @@ const indexSettings = {
       job_id: { type: 'keyword' },
 
       video_metadata: { type: 'object' },
-      video_segments: { type: 'object' }
+      video_segments: { 
+        type: 'nested',
+        properties: {
+          segment_id: { type: 'keyword' },
+          start_time: { type: 'float' },
+          end_time: { type: 'float' },
+          duration: { type: 'float' },
+          segment_s3_path: { type: 'keyword' },
+          segment_visual: {
+            type: 'object',
+            properties: {
+              segment_visual_description: { type: 'text' },
+              segment_visual_embedding: { 
+                type: 'knn_vector',
+                dimension: 2048,
+                method: {
+                  name: "hnsw",
+                  space_type: "cosinesimil"
+                }
+              }
+            }
+          },
+          segment_audio: {
+            type: 'object',
+            properties: {
+              segment_audio_description: { type: 'text' },
+              segment_audio_embedding: { 
+                type: 'knn_vector',
+                dimension: 2048,
+                method: {
+                  name: "hnsw",
+                  space_type: "cosinesimil"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   }
 };
@@ -110,8 +148,9 @@ interface CompleteUploadRequest {
  * @returns Result of the operation
  */
 async function withRetry<T>(
-  operation: () => Promise<T>, 
-  maxRetries: number = 3, 
+  operation: () => Promise<T>,
+  // increase maxRetries to 5 since we're using OpenSearch Serverless which the refresh: true is not supported, refer to https://repost.aws/community/users/USiotOGJ78So2L1_DskJDcgQ
+  maxRetries: number = 5, 
   operationName: string = 'OpenSearch operation'
 ): Promise<T> {
   let retries = 0;
@@ -129,7 +168,7 @@ async function withRetry<T>(
       
       console.warn(`${operationName} failed (retry ${retries}/${maxRetries}):`, error);
       
-      // Exponential backoff: 4s, 16s, 64s
+      // Exponential backoff: 4s, 16s, 64s, 256s, 1024s
       const delay = Math.pow(4, retries) * 1000;
       await new Promise(resolve => setTimeout(resolve, delay));
     }
@@ -438,9 +477,7 @@ async function handleGetIndexStatus(event: APIGatewayProxyEvent): Promise<Lambda
     
     // Aggregate statuses in consideration of our support for multiple video statuses handling
     let status: WebVideoStatus = 'processing';
-    if (videoCount === 0) {
-      status = 'completed'; // No videos is technically "complete"
-    } else if (failedCount > 0) {
+    if (failedCount > 0) {
       status = 'failed';
     } else if (processingCount === 0) {
       status = 'completed';
@@ -861,16 +898,19 @@ async function handlePresignRequest(event: APIGatewayProxyEvent): Promise<Lambda
     }
 
     // Create initial OpenSearch document with error handling
+    // For VECTORSEARCH OpenSearch Serverless collections, don't specify ID directly
     const indexResult = await withRetry(
       async () => openSearch.index({
         index: videoIndex,
-        id: videoId,
+        // Remove 'id' parameter - OpenSearch Serverless will auto-generate one
+        // id: videoId, 
         body: aossInitialBody
+        // Remove refresh: true as it's not supported in OpenSearch Serverless
       }),
       3,
       `Index initial document for video ${videoId} in index ${videoIndex}`
     );
-    console.log(`Successfully indexed initial document for video ${videoId} in index ${videoIndex}`);
+    console.log(`Successfully indexed initial document for video ${videoId} in index ${videoIndex}, index result: ${JSON.stringify(indexResult)}`);
 
     // Generate pre-signed URL for S3 upload
     const command = new PutObjectCommand({
@@ -914,27 +954,53 @@ async function handleCompleteUpload(event: APIGatewayProxyEvent): Promise<Lambda
   const indexId = (request.indexId || 'videos').toLowerCase();
   const { videoId } = request;
 
+  console.log(`Handling complete upload for video ${videoId} in index ${indexId}`);
+
+  // Display all the items in the index
+  const { body: searchResult } = await withRetry(
+    async () => openSearch.search({
+      index: indexId,
+      body: { query: { match_all: {} } }
+    }),
+    3,
+    `Display all the items in the index ${indexId}`
+  );
+  console.log(`All items in the index ${indexId}:`, searchResult);
+  
   try {
-    // Verify the video exists in OpenSearch
+    // For OpenSearch Serverless VECTORSEARCH, we can't directly get by ID
+    // Instead, search for the document using the video_id field
     const { body: searchResult } = await withRetry(
-      async () => openSearch.get({
+      async () => openSearch.search({
         index: indexId,
-        id: videoId
+        body: {
+          query: {
+            term: {
+              video_id: videoId
+            }
+          }
+        }
       }),
       3,
-      `Get video ${videoId} from index ${indexId}`
+      `Search for video ${videoId} in index ${indexId}`
     );
 
-    if (!searchResult.found) {
-      return {
-        statusCode: STATUS_CODES.NOT_FOUND,
-        headers: corsHeaders,
-        body: JSON.stringify({ error: 'Video not found for video index ' + videoId })
-      };
+    if (!searchResult.hits || !searchResult.hits.hits || searchResult.hits.hits.length === 0) {
+      // Waiting the index to be updated then retry the search
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      console.log(`Waiting for the index to be updated then retry the search for video ${videoId} in index ${indexId}`);
+      return handleCompleteUpload(event);
     }
+
+    console.log(`Updated search result for video ${videoId} in index ${indexId}:`, searchResult.hits.hits[0]);
+    
+    // Extract the S3 key of the uploaded video from the first hit
+    const videoDocument = searchResult.hits.hits[0]._source;
+    // Get the OpenSearch document ID (the auto-generated one)
+    const documentId = searchResult.hits.hits[0]._id;
     
     // Extract the S3 key of the uploaded video, in format RawVideos/2025-03-02/indexId/videoId/videoFileNameWithExtension
-    const videoS3Path = searchResult._source.video_s3_path;
+    const videoS3Path = videoDocument.video_s3_path;
     if (!videoS3Path) {
       throw new Error('Video S3 path not found in metadata');
     }
@@ -981,14 +1047,15 @@ async function handleCompleteUpload(event: APIGatewayProxyEvent): Promise<Lambda
       return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
     };
 
-    // Update the video metadata in OpenSearch with the thumbnail URL and duration
+    // Use update operation with document ID instead of updateByQuery
+    // This is better supported in OpenSearch Serverless
     await withRetry(
       async () => openSearch.update({
         index: indexId,
-        id: videoId,
+        id: documentId, // Use the document ID from search results
         body: {
-          doc: {  // Wrap update fields in 'doc'
-            video_status: 'uploaded' as VideoStatus,
+          doc: {
+            video_status: 'uploaded',
             video_preview_url: videoPreviewUrl,
             video_thumbnail_s3_path: thumbnailS3Path,
             video_thumbnail_url: thumbnailUrl,
