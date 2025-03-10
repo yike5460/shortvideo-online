@@ -146,6 +146,12 @@ async function handleGetIndex(event: APIGatewayProxyEvent): Promise<APIGatewayPr
         self.findIndex((t) => t.indexId === item.indexId) === idx
       );
 
+      // TODO: Remove the video_status in the indexes array for now, since the latest video_status is recorded in the aoss, will decouple the video_status to the DynamoDB table in the future
+      const indexesWithoutVideoStatus = uniqueIndexes.map((index) => {
+        const { video_status, ...rest } = index;
+        return rest;
+      });
+
       // Get video counts for each index (in parallel) with retry logic
       await Promise.all(uniqueIndexes.map(async (index) => {
         let videoCount = 0;
@@ -154,11 +160,8 @@ async function handleGetIndex(event: APIGatewayProxyEvent): Promise<APIGatewayPr
         
         while (retries > 0 && !success) {
           try {
-            // Use the same filtering logic as in video-upload/index.ts
-            // to exclude deleted videos and get an accurate count
-            const { body } = await openSearch.search({
-              // Use the indexId directly as the index name, which is what
-              // video-upload/index.ts does when querying videos
+            // Create the search query, use the same filtering logic as in video-upload/index.ts
+            const searchQuery = {
               index: index.indexId,
               body: {
                 query: {
@@ -170,7 +173,8 @@ async function handleGetIndex(event: APIGatewayProxyEvent): Promise<APIGatewayPr
                 },
                 size: 0, // We only need the count, not the actual documents
               }
-            });
+            };
+            const { body } = await openSearch.search(searchQuery);
             
             // Extract count from the total hits
             videoCount = body.hits.total.value || 0;
@@ -186,14 +190,14 @@ async function handleGetIndex(event: APIGatewayProxyEvent): Promise<APIGatewayPr
             }
           }
         }
-        
+
         index.videoCount = videoCount;
       }));
       
       return {
         statusCode: STATUS_CODES.OK,
         headers: corsHeaders,
-        body: JSON.stringify(indexes)
+        body: JSON.stringify(indexesWithoutVideoStatus)
       };
     } catch (error) {
       console.error('Error listing indexes:', error);

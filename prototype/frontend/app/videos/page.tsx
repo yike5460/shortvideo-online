@@ -363,11 +363,6 @@ export default function VideosPage() {
         const formattedIndexes = Array.from(indexMap.values());
         
         setIndexes(formattedIndexes);
-        
-        // Set the first index as selected by default
-        if (formattedIndexes.length > 0 && !selectedIndexId) {
-          setSelectedIndexId(formattedIndexes[0].id);
-        }
       } catch (error) {
         console.error('Error fetching indexes:', error);
       } finally {
