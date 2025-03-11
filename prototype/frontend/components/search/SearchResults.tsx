@@ -135,10 +135,17 @@ export default function SearchResults({
                       const startPercent = (segment.start_time / formatDuration(result.videoDuration)) * 100;
                       const widthPercent = ((segment.end_time - segment.start_time) / formatDuration(result.videoDuration)) * 100;
                       const confidence = segment.confidence || 0;
+                      
+                      const getSegmentColor = (conf: number) => {
+                        if (conf >= 0.9) return "bg-green-600";
+                        if (conf >= 0.7) return "bg-blue-600";
+                        return "bg-gray-600";
+                      };
+                      
                       return (
                         <div
                           key={index}
-                          className="absolute h-full bg-primary-600 transition-opacity hover:opacity-80"
+                          className={`absolute h-full transition-opacity hover:opacity-80 ${getSegmentColor(confidence)}`}
                           style={{
                             left: `${startPercent}%`,
                             width: `${widthPercent}%`,
