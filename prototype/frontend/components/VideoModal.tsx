@@ -41,6 +41,13 @@ export default function VideoModal({ video, isOpen, onClose, viewMode = 'play' }
     setCurrentViewMode('play');
   };
 
+  // Helper function to format time in MM:SS format
+  const formatTime = (seconds: number): string => {
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
   return (
     <Transition appear show={isOpen} as={Fragment}>
       <Dialog as="div" className="relative z-50" onClose={onClose}>
@@ -190,6 +197,32 @@ export default function VideoModal({ video, isOpen, onClose, viewMode = 'play' }
                             Watch Video
                           </button>
                         </div>
+
+                        {/* Add to the VideoModal component where segments are displayed */}
+                        {video?.segments && viewMode === "details" && (
+                          <div className="mt-6">
+                            <h3 className="text-lg font-semibold mb-2">Video Segments</h3>
+                            <div className="space-y-2">
+                              {video.segments.map((segment, index) => {
+                                const startTime = formatTime(segment.start_time / 1000); // Convert ms to seconds
+                                const endTime = formatTime(segment.end_time / 1000);
+                                return (
+                                  <div key={segment.segment_id} className="flex items-center justify-between bg-gray-50 p-3 rounded-md">
+                                    <div>
+                                      <span className="font-medium">{startTime}</span> - <span className="font-medium">{endTime}</span>
+                                      <span className="ml-4 text-gray-500">Duration: {formatTime(segment.duration / 1000)}</span>
+                                    </div>
+                                    {segment.confidence !== undefined && (
+                                      <div className="bg-primary-100 text-primary-800 px-2 py-1 rounded-md text-sm font-medium">
+                                        {Math.round(segment.confidence * 100)}% Confidence
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>

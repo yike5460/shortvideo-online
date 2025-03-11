@@ -117,32 +117,9 @@ export default function SearchResults({
               </p>
               <div className="mt-4">
                 <div className="relative">
-                  {/* TODO, use the inner_hits to get the average confidence of the segments
-                  "inner_hits": {
-                    "matched_segments": {
-                        "hits": {
-                            "total": {
-                                "value": 1,
-                                "relation": "eq"
-                            },
-                            "max_score": 0.58547914,
-                            "hits": [
-                                {
-                                    "_id": "43cPg5UB-gQb2EX_u-TK",
-                                    "_nested": {
-                                        "field": "video_segments",
-                                        "offset": 60
-                                    },
-                                    "_score": 0.58547914,
-                                    "_source": {}
-                                }
-                            ]
-                        }
-                    }
-                  }*/}
                   {showConfidenceScores && result.segments?.map((segment, index) => {
                     const centerPercent = ((segment.start_time + (segment.end_time - segment.start_time) / 2) / formatDuration(result.videoDuration)) * 100;
-                    const confidence = 100; // TODO, use the inner_hits to get the average confidence of the segments
+                    const confidence = segment.confidence || 0;
                     return (
                       <div
                         key={`confidence-${index}`}
@@ -157,7 +134,7 @@ export default function SearchResults({
                     {result.segments?.map((segment, index) => {
                       const startPercent = (segment.start_time / formatDuration(result.videoDuration)) * 100;
                       const widthPercent = ((segment.end_time - segment.start_time) / formatDuration(result.videoDuration)) * 100;
-                      const confidence = 100; // TODO, use the inner_hits to get the average confidence of the segments
+                      const confidence = segment.confidence || 0;
                       return (
                         <div
                           key={index}
@@ -165,7 +142,7 @@ export default function SearchResults({
                           style={{
                             left: `${startPercent}%`,
                             width: `${widthPercent}%`,
-                            opacity: confidence
+                            opacity: Math.max(0.3, confidence)
                           }}
                         />
                       );

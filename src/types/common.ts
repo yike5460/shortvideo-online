@@ -137,7 +137,6 @@ export interface OpenSearchHit {
 // Align with the web frontend in frontend/types/index.ts
 export interface VideoResult {
   id: string;
-  indexId: string;  
   title: string;
   description: string;
   videoPreviewUrl: string;
@@ -152,4 +151,5 @@ export interface VideoResult {
   size: number;
   segments: VideoSegment[];
   searchConfidence?: number; // Add OpenSearch confidence score
+  indexId: string;
 }

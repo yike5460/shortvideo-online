@@ -461,7 +461,7 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
           console.log(`k-NN search returned ${body.hits.total?.value || 0} results`);
           
           // Transform results to match VideoResult interface
-          const results = await transformSearchResults(body.hits.hits);
+          const results: VideoResult[] = await transformSearchResults(body.hits.hits);
           
           return {
             statusCode: STATUS_CODES.OK,

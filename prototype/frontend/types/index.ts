@@ -25,6 +25,7 @@ export interface VideoSegment {
   end_time: number;          // Milliseconds from start, align with EndTimestampMillis in Rekognition response
   duration: number;          // Segment duration in milliseconds, align with DurationMillis in Rekognition response
   video_s3_path?: string;     // S3 storage location for each segment (shots)
+  confidence?: number;        // Confidence score for the segment
   segment_audio?: {
     segment_audio_transcript?: string;     // Raw transcript text
     segment_audio_embedding?: number[];  // Audio embedding

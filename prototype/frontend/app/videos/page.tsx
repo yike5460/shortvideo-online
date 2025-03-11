@@ -4,7 +4,6 @@ import { useState, useEffect, useMemo, useRef, Fragment } from 'react'
 import { ChevronDownIcon, ChevronUpIcon } from '@heroicons/react/24/outline'
 import { VideoResult } from '@/types'
 import VideoGrid from '@/components/VideoGrid'
-import VideoSidebar from '@/components/VideoSidebar'
 import VideoModal from '@/components/VideoModal'
 import { useSearchParams } from 'next/navigation'
 import { useAuth } from '@/lib/auth/AuthContext'
@@ -139,6 +138,7 @@ export default function VideosPage() {
   const [selectedVideos, setSelectedVideos] = useState<Set<string>>(new Set())
   // Track total duration of selected videos
   const [totalSelectedDuration, setTotalSelectedDuration] = useState<string>("0m 0s")
+  const [showConfidenceScores, setShowConfidenceScores] = useState(false)
   
   // Define sort options
   const sortOptions = [
