@@ -151,6 +151,9 @@ export interface VideoMetadata {
   
   video_metadata?: SearchMetadata;  // Quick search metadata
   video_segments?: VideoSegment[];  // Video segments
+  video_objects?: VisualObject[];
+  video_faces?: FaceDetection[];
+  segment_visual_ocr_text?: string[];    // Extracted text
 }
 
 export type VideoStatus = 
@@ -175,9 +178,9 @@ export type WebVideoStatus =
 export interface VideoSegment {
   segment_id?: string;        // Segment ID, will be updated once in segment detection, in format of `${videoId}_segment_${segmentNumber}`,
   video_id: string;
-  start_time: number;        // Milliseconds from start
-  end_time: number;          // Milliseconds from start
-  duration: number;          // Segment duration in milliseconds
+  start_time: number;        // Milliseconds from start, align with StartTimestampMillis in Rekognition response
+  end_time: number;          // Milliseconds from start, align with EndTimestampMillis in Rekognition response
+  duration: number;          // Segment duration in milliseconds, align with DurationMillis in Rekognition response
   video_s3_path?: string;     // S3 storage location for each segment (shots)
   segment_audio?: {
     segment_audio_transcript?: string;     // Raw transcript text
@@ -187,10 +190,7 @@ export interface VideoSegment {
   segment_visual?: {
     segment_visual_keyframe_path?: string;  // S3 path to keyframe, will obsolete to use video_s3_path instead
     segment_visual_description?: string;    // Visual description
-    segment_visual_objects?: VisualObject[];
-    segment_visual_faces?: FaceDetection[];
     segment_visual_embedding?: number[];    // Visual embedding
-    segment_visual_ocr_text?: string[];    // Extracted text
   };
 }
 
@@ -283,8 +283,8 @@ export interface VideoResult {
 #### Video Search
 The OpenSearch schema supports:
 1. **Exact Keyword Search**:
-   - Visual objects through `segment_visual_objects.label`
-   - Face recognition through `segment_visual_faces.person_name`
+   - Visual objects through `video_objects.label`
+   - Face recognition through `video_faces.person_name`
    - Audio content through `segment_audio.segment_audio_transcript`
    - Text content through `segment_visual.segment_visual_ocr_text`
    - Pre-extracted keywords through `video_metadata.exact_match_keywords`
@@ -306,7 +306,7 @@ Best practice for the selection between `segment_visual.segment_visual_embedding
 This two-step approach provides both efficiency and precision. For example, if searching for "a scene with a sunset over the ocean":
 1. First use the global embedding to find videos that likely contain sunset scenes
 2. Then use segment embeddings to pinpoint the exact moments where sunsets appear
-3. Finally, use `segment_visual_objects.label` and confidence scores to verify the presence of specific objects
+3. Finally, use `video_objects.label` and confidence scores to verify the presence of specific objects
 
 Same approach applies for audio and text search, using their respective global and segment-level embeddings.
 

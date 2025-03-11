@@ -19,11 +19,11 @@ export type VideoStatus =
   | 'deleted';          // Video was deleted
 
 export interface VideoSegment {
-  segment_id: string;
+  segment_id?: string;        // Segment ID, will be updated once in segment detection, in format of `${videoId}_segment_${segmentNumber}`,
   video_id: string;
-  start_time: number;        // Milliseconds from start
-  end_time: number;          // Milliseconds from start
-  duration: number;          // Segment duration in milliseconds
+  start_time: number;        // Milliseconds from start, align with StartTimestampMillis in Rekognition response
+  end_time: number;          // Milliseconds from start, align with EndTimestampMillis in Rekognition response
+  duration: number;          // Segment duration in milliseconds, align with DurationMillis in Rekognition response
   video_s3_path?: string;     // S3 storage location for each segment (shots)
   segment_audio?: {
     segment_audio_transcript?: string;     // Raw transcript text
@@ -33,10 +33,7 @@ export interface VideoSegment {
   segment_visual?: {
     segment_visual_keyframe_path?: string;  // S3 path to keyframe, will obsolete to use video_s3_path instead
     segment_visual_description?: string;    // Visual description
-    segment_visual_objects?: VisualObject[];
-    segment_visual_faces?: FaceDetection[];
     segment_visual_embedding?: number[];    // Visual embedding
-    segment_visual_ocr_text?: string[];    // Extracted text
   };
 }
 

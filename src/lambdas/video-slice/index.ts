@@ -396,8 +396,6 @@ async function handleSNSEvent(event: SNSEvent): Promise<LambdaResponse> {
       if (message.API === 'StartSegmentDetection') {
         const segments = await getSegmentDetectionResults(jobId);
         await sendSegmentSlicingRequest(videoIndex, videoId, segments);
-        // const slicedSegments = await processSegmentDetection(videoIndex, videoId, segments);
-        // await updateVideoSegments(videoIndex, videoId, slicedSegments);
       } else if (message.API === 'StartLabelDetection') {
         const labels = await getLabelDetectionResults(jobId);
         await updateVideoLabels(videoIndex, videoId, labels);
@@ -490,7 +488,7 @@ async function updateVideoStatus(videoIndex: string, videoId: string, status: Vi
       return updateVideoStatus(videoIndex, videoId, status, additionalFields);
     }
 
-    console.log(`Updated search result for video ${videoId} in index ${videoIndex}:`, searchResult.hits.hits[0]);
+    console.log(`video status updated search result for video ${videoId} in index ${videoIndex}:`, searchResult.hits.hits[0]);
 
     // Get the OpenSearch document ID
     const documentId = searchResult.hits.hits[0]._id;
@@ -554,6 +552,7 @@ async function sendSegmentSlicingRequest(videoIndex: string, videoId: string, se
     (a.StartTimestampMillis || 0) - (b.StartTimestampMillis || 0)
   );
 
+  console.log('Sorted segments: ', sortedSegments, '\nlength: ', sortedSegments.length);
   // Send a message to the video slicing queue per segment with sequential segment numbers
   for (let i = 0; i < sortedSegments.length; i++) {
     const segment = sortedSegments[i];
@@ -604,6 +603,7 @@ async function processSegmentDetection(
   segmentNumber: number
 ): Promise<VideoSegment | null> {
   try {
+    console.log(`Processing segment detection for video ${videoId} in index ${videoIndex}, segment number: ${segmentNumber}, segment: ${JSON.stringify(segment)}, originalVideoKey: ${originalVideoKey} and bucketName: ${bucketName}`);
     // Check if the segments are already processed
     if (!segment) {
       console.warn('No segments detected for video:', videoId);
@@ -971,8 +971,43 @@ async function getSegmentDetectionResults(jobId: string): Promise<SegmentDetecti
   return segments;
 }
 
+/**
+ * Utility function to perform OpenSearch operations with retry logic
+ * @param operation Function that performs the OpenSearch operation
+ * @param maxRetries Maximum number of retry attempts
+ * @param operationName Name of the operation for logging
+ * @returns Result of the operation
+ */
+async function withRetry<T>(
+  operation: () => Promise<T>,
+  // increase maxRetries to 5 since we're using OpenSearch Serverless which the refresh: true is not supported, refer to https://repost.aws/community/users/USiotOGJ78So2L1_DskJDcgQ
+  maxRetries: number = 5, 
+  operationName: string = 'OpenSearch operation'
+): Promise<T> {
+  let retries = 0;
+  
+  while (true) {
+    try {
+      return await operation();
+    } catch (error) {
+      retries++;
+      
+      if (retries >= maxRetries) {
+        console.error(`Failed ${operationName} after ${maxRetries} retries:`, error);
+        throw error;
+      }
+      
+      console.warn(`${operationName} failed (retry ${retries}/${maxRetries}):`, error);
+      
+      // Exponential backoff: 4s, 16s, 64s, 256s, 1024s
+      const delay = Math.pow(4, retries) * 1000;
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+}
+
 async function updateVideoSegments(videoIndex: string, videoId: string, segments: VideoSegment[]): Promise<void> {
-  console.log('Segments to update: ', segments, ' with embedding: ', segments.map(s => s.segment_visual?.segment_visual_embedding), 'type: ', typeof segments[0].segment_visual?.segment_visual_embedding);
+  console.log('Segments to update: ', segments, '\nwith embedding: ', segments.map(s => s.segment_visual?.segment_visual_embedding), '\ntype: ', typeof segments[0].segment_visual?.segment_visual_embedding, '\nlength: ', segments.map(s => s.segment_visual?.segment_visual_embedding?.length));
   
   try {
     // First search for the document to get the OpenSearch document ID and existing segments
@@ -994,7 +1029,7 @@ async function updateVideoSegments(videoIndex: string, videoId: string, segments
       return updateVideoSegments(videoIndex, videoId, segments);
     }
 
-    console.log(`Updated search result for video ${videoId} in index ${videoIndex}:`, searchResult.hits.hits[0]);
+    console.log(`video segments updated search result for video ${videoId} in index ${videoIndex}:`, searchResult.hits.hits[0]);
 
     // Get the OpenSearch document ID and existing document
     const documentId = searchResult.hits.hits[0]._id;
@@ -1004,7 +1039,7 @@ async function updateVideoSegments(videoIndex: string, videoId: string, segments
     const existingSegments = existingDoc.video_segments || [];
     const updatedSegments = [...existingSegments];
     
-    // Add new segments
+    // Add new segments, there is only one segment in the segments array
     for (const segment of segments) {
       updatedSegments.push({
         ...segment,
@@ -1017,19 +1052,48 @@ async function updateVideoSegments(videoIndex: string, videoId: string, segments
       });
     }
 
-    // Use standard update operation with document ID
-    await openSearch.update({
-      index: videoIndex,
-      id: documentId,
-      body: {
-        doc: {
-          video_status: 'ready_for_shots',
-          video_segments: updatedSegments,
-          segment_count: updatedSegments.length,
-          updated_at: new Date().toISOString()
+    // Use standard update operation with document ID, TODO: insert the segments into existing segments instead of update since the refresh: true is not supported in the aoss and the video_segement can be stale and new updates will be overwritten, and the segment_count should be accumulated instead of updated
+    try {
+      await openSearch.update({
+        index: videoIndex,
+        id: documentId,
+        body: {
+          script: {
+            source: `
+              // Initialize video_segments array if null
+              if (ctx._source.video_segments == null) {
+                ctx._source.video_segments = [];
+              }
+              
+              // Add each new segment to the array
+              for (int i = 0; i < params.newSegments.length; i++) {
+                ctx._source.video_segments.add(params.newSegments[i]);
+              }
+              
+              // Update the segment count and status
+              ctx._source.segment_count = ctx._source.video_segments.length;
+              ctx._source.video_status = params.video_status;
+              ctx._source.updated_at = params.updated_at;
+            `,
+            params: {
+              newSegments: segments.map(segment => ({
+                ...segment,
+                segment_id: segment.segment_id || `unassigned_segment_id`,
+                segment_visual: {
+                  ...segment.segment_visual,
+                  segment_visual_embedding: segment.segment_visual?.segment_visual_embedding || []
+                }
+              })),
+              video_status: 'ready_for_shots',
+              updated_at: new Date().toISOString(),
+            }
+          }
         }
-      }
-    });
+      });
+      console.log(`Successfully updated segments for video ${videoId} in index ${videoIndex}`);
+    } catch (updateError) {
+      console.error(`Error during script update for video ${videoId}:`, updateError);
+    }
   } catch (error) {
     console.error(`Error updating video segments for video ${videoId} in index ${videoIndex}:`, error);
     throw error;
@@ -1078,40 +1142,27 @@ async function updateVideoLabels(videoIndex: string, videoId: string, labels: an
       return updateVideoLabels(videoIndex, videoId, labels);
     }
 
-    console.log(`Updated search result for video ${videoId} in index ${videoIndex}:`, searchResult.hits.hits[0]);
+    console.log(`video labels updated search result for video ${videoId} in index ${videoIndex}:`, searchResult.hits.hits[0]);
     const documentId = searchResult.hits.hits[0]._id;
     const existingVideo = searchResult.hits.hits[0]._source;
     
-    const processedSegments: VideoSegment[] = labels.map((label, index) => ({
-      video_id: videoId,
-      start_time: label.Timestamp,
-      end_time: label.Timestamp + 1000, // Assume 1 second duration
-      duration: 1000,
-      segment_visual: {
-        segment_visual_objects: [{
-          label: label.Label.Name,
-          confidence: label.Label.Confidence,
-          bounding_box: label.Label.BoundingBox || { left: 0, top: 0, width: 0, height: 0 }
-        }],
-        segment_visual_description: `Detected ${label.Label.Name}`
-      }
+    // Update the video_objects field
+    existingVideo.video_objects = labels.map(label => ({
+      label: label.Label.Name,
+      confidence: label.Label.Confidence,
+      bounding_box: label.Label.BoundingBox || { left: 0, top: 0, width: 0, height: 0 }
     }));
-
-    // Merge with existing segments
-    const allSegments = [...(existingVideo.video_segments || []), ...processedSegments];
 
     // Use standard update with document ID instead of updateByQuery
     await openSearch.update({
       index: videoIndex,
       id: documentId,
       body: {
-        doc: {
-          video_status: 'ready_for_object',
-          video_segments: allSegments,
-          updated_at: new Date().toISOString()
-        }
+        doc: existingVideo
       }
     });
+    console.log(`Successfully updated video labels for video ${videoId} in index ${videoIndex}`);
+
   } catch (error) {
     console.error(`Error updating video labels for video ${videoId}:`, error);
     throw error;
@@ -1159,41 +1210,26 @@ async function updateVideoFaces(videoIndex: string, videoId: string, faces: any[
       return updateVideoFaces(videoIndex, videoId, faces);
     }
 
-    console.log(`Updated search result for video ${videoId} in index ${videoIndex}:`, searchResult.hits.hits[0]);
-
+    console.log(`video faces updated search result for video ${videoId} in index ${videoIndex}:`, searchResult.hits.hits[0]);
     const documentId = searchResult.hits.hits[0]._id;
     const existingVideo = searchResult.hits.hits[0]._source;
 
-    const processedSegments: VideoSegment[] = faces.map((face, index) => ({
-      video_id: videoId,
-      start_time: face.Timestamp,
-      end_time: face.Timestamp + 1000, // Assume 1 second duration
-      duration: 1000,
-      segment_visual: {
-        segment_visual_faces: [{
-          confidence: face.Face.Confidence,
-          bounding_box: face.Face.BoundingBox,
-          person_name: undefined // Can be updated later with face recognition
-        }],
-        segment_visual_description: 'Face detected'
-      }
+    // Update the video_faces field
+    existingVideo.video_faces = faces.map(face => ({
+      confidence: face.Face.Confidence,
+      bounding_box: face.Face.BoundingBox || { left: 0, top: 0, width: 0, height: 0 }
     }));
-
-    // Merge with existing segments
-    const allSegments = [...(existingVideo.video_segments || []), ...processedSegments];
 
     // Use standard update with document ID instead of updateByQuery
     await openSearch.update({
       index: videoIndex,
       id: documentId,
       body: {
-        doc: {
-          video_status: 'ready_for_face',
-          video_segments: allSegments,
-          updated_at: new Date().toISOString()
-        }
+        doc: existingVideo
       }
     });
+    console.log(`Successfully updated video faces for video ${videoId} in index ${videoIndex}`);
+
   } catch (error) {
     console.error(`Error updating video faces for video ${videoId}:`, error);
     throw error;

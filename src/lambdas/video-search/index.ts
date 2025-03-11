@@ -239,41 +239,88 @@ const getTestQuery = (indexName: string) => ({
 
 // Update the transform function to normalize OpenSearch confidence scores, such score is relative and per index and per query, calculated using TF-IDF by default
 const transformSearchResults = async (hits: any[]): Promise<VideoResult[]> => {
-  // Find the max score for normalization
-  const maxScore = Math.max(...hits.map(hit => hit._score || 0));
+  console.log('Transforming search results:', JSON.stringify(hits, null, 2));
   
-  // Helper function to generate signed URLs
-  const generateSignedUrl = async (s3Path: string): Promise<string> => {
-    if (!s3Path) return '';
-    
-    try {
-      const getCommand = new GetObjectCommand({
-        Bucket: process.env.VIDEO_BUCKET,
-        Key: s3Path,
-      });
-      return await getSignedUrl(s3 as any, getCommand as any, { expiresIn: 3600 });
-    } catch (error) {
-      console.warn(`Failed to generate signed URL for ${s3Path}:`, error);
-      return '';
-    }
-  };
+  // Find the max video score for normalization across all videos
+  const maxVideoScore = Math.max(...hits.map(hit => hit._score || 0));
   
   // Process all results in parallel
   return await Promise.all(hits.map(async hit => {
-    // Extract only the essential segments data
-    const segments = hit._source.video_segments?.map((segment: any): VideoSegment => ({
-      segment_id: segment.segment_id,
-      video_id: hit._id,
-      start_time: segment.start_time,
-      end_time: segment.end_time,
-      duration: segment.duration
-    })) || [];
-
-    // Limit segments to 5 per video to reduce payload size
-    const limitedSegments = segments.slice(0, 5);
+    // Get the video's score and normalize it
+    const videoScore = hit._score || 0;
+    const normalizedVideoScore = maxVideoScore > 0 ? videoScore / maxVideoScore : 0;
     
-    // Normalize the score to be between 0 and 1
-    const normalizedScore = maxScore > 0 ? (hit._score || 0) / maxScore : 0;
+    // Extract segment scores from inner_hits if available
+    const segmentScores = new Map<string, number>();
+    const segmentOffsetMap = new Map<number, any>();
+    
+    // First, create a mapping between offsets and segment objects
+    if (hit._source.video_segments) {
+      hit._source.video_segments.forEach((segment: any, index: number) => {
+        segmentOffsetMap.set(index, segment);
+      });
+    }
+    
+    // Process inner_hits if available to extract segment confidence scores
+    if (hit.inner_hits?.matched_segments?.hits?.hits) {
+      const innerHits = hit.inner_hits.matched_segments.hits.hits;
+      // Find max score for normalization
+      const maxInnerScore = Math.max(...innerHits.map((segHit: any) => segHit._score || 0));
+      
+      console.log(`Max inner score: ${maxInnerScore}`);
+      console.log('Inner hits:', JSON.stringify(innerHits, null, 2));
+      
+      // Map scores to segments using the offset
+      innerHits.forEach((segHit: any) => {
+        const offset = segHit._nested?.offset;
+        const score = segHit._score || 0;
+        
+        if (offset !== undefined) {
+          const segment = segmentOffsetMap.get(offset);
+          if (segment) {
+            // Normalize the score relative to the highest score within this video
+            const normalizedScore = maxInnerScore > 0 ? score / maxInnerScore : 0;
+            segmentScores.set(segment.segment_id, normalizedScore);
+            console.log(`Mapped offset ${offset} to segment ${segment.segment_id} with score ${score} -> normalized ${normalizedScore}`);
+          }
+        }
+      });
+    }
+    
+    // Helper function to generate signed URLs
+    const generateSignedUrl = async (s3Path: string): Promise<string> => {
+      if (!s3Path) return '';
+      
+      try {
+        const getCommand = new GetObjectCommand({
+          Bucket: process.env.VIDEO_BUCKET,
+          Key: s3Path,
+        });
+        return await getSignedUrl(s3 as any, getCommand as any, { expiresIn: 3600 });
+      } catch (error) {
+        console.warn(`Failed to generate signed URL for ${s3Path}:`, error);
+        return '';
+      }
+    };
+    
+    // Extract segments and add confidence scores
+    const segments = hit._source.video_segments?.map((segment: any): VideoSegment => {
+      return {
+        segment_id: segment.segment_id,
+        video_id: hit._id,
+        start_time: segment.start_time,
+        end_time: segment.end_time,
+        duration: segment.duration,
+        video_s3_path: segment.video_s3_path,
+        confidence: segmentScores.get(segment.segment_id) || 0 // Add segment-level confidence score
+      };
+    }) || [];
+    
+    // Sort segments by confidence and limit to top 5
+    const sortedSegments = segments.sort((a: VideoSegment, b: VideoSegment) => 
+      (b.confidence || 0) - (a.confidence || 0)
+    );
+    const limitedSegments = sortedSegments.slice(0, 5);
     
     // Generate fresh signed URLs for video preview and thumbnail
     const videoPreviewUrl = await generateSignedUrl(hit._source.video_s3_path);
@@ -294,7 +341,7 @@ const transformSearchResults = async (hits: any[]): Promise<VideoResult[]> => {
       status: hit._source.video_status,
       size: hit._source.video_size || 0,
       segments: limitedSegments,
-      searchConfidence: normalizedScore, // Use normalized score
+      searchConfidence: normalizedVideoScore,
       indexId: hit._source.video_index || 'videos'
     };
   }));
@@ -403,8 +450,7 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
           }
         };
 
-        console.log("Generated k-NN search body: ", JSON.stringify(searchBody, null, 4));
-        
+        // console.log("Generated k-NN search body: ", JSON.stringify(searchBody, null, 4));
         try {
           const { body } = await openSearch.search({
             index: searchQuery.selectedIndex,
