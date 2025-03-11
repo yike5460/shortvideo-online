@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback, useMemo } from 'react'
+import { useState, useCallback, useMemo, useRef } from 'react'
 import { Tab } from '@headlessui/react'
 import { VideoCameraIcon, ClockIcon } from '@heroicons/react/24/outline'
 import { cn } from '@/lib/utils'
@@ -19,6 +19,11 @@ export default function SearchResults({
   const [selectedView, setSelectedView] = useState<'clip' | 'video'>('clip')
   const [selectedVideo, setSelectedVideo] = useState<VideoResult | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
+  const [hoveredSegment, setHoveredSegment] = useState<{
+    videoId: string,
+    segmentIndex: number,
+    rect: DOMRect | null
+  } | null>(null)
 
   const getAverageConfidence = useCallback((searchConfidence: number): number => {
     return searchConfidence;
@@ -35,6 +40,24 @@ export default function SearchResults({
       console.warn('Error parsing video duration:', videoDuration);
       return 0;
     }
+  }, [])
+  
+  const formatTimeDisplay = useCallback((timeMs: number): string => {
+    const totalSeconds = Math.floor(timeMs / 1000);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    
+    if (hours > 0) {
+      return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+    }
+    return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+  }, [])
+  
+  const getConfidenceLevel = useCallback((confidence: number): 'High' | 'Medium' | 'Low' => {
+    if (confidence >= 0.9) return 'High';
+    if (confidence >= 0.7) return 'Medium';
+    return 'Low';
   }, [])
 
   const handleVideoClick = useCallback((video: VideoResult) => {
@@ -117,6 +140,55 @@ export default function SearchResults({
               </p>
               <div className="mt-4">
                 <div className="relative">
+                  {hoveredSegment && hoveredSegment.videoId === result.id && result.segments && 
+                   ((): JSX.Element | null => {
+                     // Extract the segment to avoid TypeScript errors
+                     const segment = hoveredSegment.segmentIndex >= 0 && 
+                                     hoveredSegment.segmentIndex < result.segments.length
+                                     ? result.segments[hoveredSegment.segmentIndex] 
+                                     : null;
+                     
+                     if (!segment) return null;
+                     
+                     const startTime = segment.start_time || 0;
+                     const endTime = segment.end_time || 0;
+                     const segmentConfidence = segment.confidence || 0;
+                     const centerPosition = (startTime + (endTime - startTime) / 2) / formatDuration(result.videoDuration) * 100;
+                     const confidenceLevel = getConfidenceLevel(segmentConfidence);
+                     
+                     return (
+                      <div 
+                        className="absolute bottom-8 transform -translate-x-1/2 z-10"
+                        style={{ left: `${centerPosition}%` }}
+                      >
+                        <div className="bg-gray-900 rounded-lg shadow-lg overflow-hidden max-w-xs">
+                          <div className="relative aspect-video bg-black">
+                            <img 
+                              src={result.videoThumbnailUrl} 
+                              alt={`Segment at ${formatTimeDisplay(startTime)}`}
+                              className="w-full h-full object-cover"
+                            />
+                            <div className="absolute top-0 left-0 right-0 bg-black/50 text-white text-center text-sm py-1">
+                              {formatTimeDisplay(startTime)} - {formatTimeDisplay(endTime)}
+                            </div>
+                            {showConfidenceScores && (
+                              <div className={`absolute bottom-2 left-2 px-2 py-1 rounded text-white text-sm ${
+                                segmentConfidence >= 0.9 
+                                  ? 'bg-green-600' 
+                                  : segmentConfidence >= 0.7 
+                                    ? 'bg-blue-600' 
+                                    : 'bg-gray-600'
+                              }`}>
+                                {`${confidenceLevel} - ${Math.round(segmentConfidence * 100)}%`}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        <div className="w-3 h-3 bg-gray-900 rotate-45 absolute -bottom-1 left-1/2 transform -translate-x-1/2"></div>
+                      </div>
+                     );
+                   })()
+                  }
                   {showConfidenceScores && result.segments?.map((segment, index) => {
                     const centerPercent = ((segment.start_time + (segment.end_time - segment.start_time) / 2) / formatDuration(result.videoDuration)) * 100;
                     const confidence = segment.confidence || 0;
@@ -145,11 +217,21 @@ export default function SearchResults({
                       return (
                         <div
                           key={index}
-                          className={`absolute h-full transition-opacity hover:opacity-80 ${getSegmentColor(confidence)}`}
+                          className={`absolute h-full transition-opacity hover:opacity-80 cursor-pointer ${getSegmentColor(confidence)}`}
                           style={{
                             left: `${startPercent}%`,
                             width: `${widthPercent}%`,
                             opacity: Math.max(0.3, confidence)
+                          }}
+                          onMouseEnter={(e) => {
+                            setHoveredSegment({
+                              videoId: result.id,
+                              segmentIndex: index,
+                              rect: e.currentTarget.getBoundingClientRect()
+                            });
+                          }}
+                          onMouseLeave={() => {
+                            setHoveredSegment(null);
                           }}
                         />
                       );
@@ -166,7 +248,7 @@ export default function SearchResults({
         </button>
       ))}
     </div>
-  ), [results, showConfidenceScores, getAverageConfidence, formatDuration, handleVideoClick])
+  ), [results, showConfidenceScores, formatDuration, handleVideoClick, hoveredSegment, formatTimeDisplay, getConfidenceLevel])
 
   const handleViewChange = useCallback((view: 'clip' | 'video') => {
     setSelectedView(view)
@@ -224,4 +306,4 @@ export default function SearchResults({
       />
     </div>
   )
-} 
+}

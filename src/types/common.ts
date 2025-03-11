@@ -56,6 +56,9 @@ export interface VideoSegment {
   end_time: number;          // Milliseconds from start, align with EndTimestampMillis in Rekognition response
   duration: number;          // Segment duration in milliseconds, align with DurationMillis in Rekognition response
   video_s3_path?: string;     // S3 storage location for each segment (shots)
+  video_preview_url?: string; // Pre-signed URL for thumbnail (video thumbnail)
+  video_thumbnail_s3_path?: string; // S3 path to thumbnail (image)
+  video_thumbnail_url?: string;     // Pre-signed URL for thumbnail (image thumbnail)
   confidence?: number;        // Confidence score for the segment
   segment_audio?: {
     segment_audio_transcript?: string;     // Raw transcript text

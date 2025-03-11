@@ -645,17 +645,6 @@ async function processSegmentDetection(
     const localOutputPath = `/tmp/${videoId}_segment_${segmentNumber}.mp4`;
     const localKeyframePath = `/tmp/${videoId}_keyframe_${segmentNumber}.jpg`;
 
-    // Download the video segment from S3
-    const command = new GetObjectCommand({
-      Bucket: bucketName,
-      Key: originalVideoKey
-    });
-
-    // Get a signed URL for the original video
-    const signedUrl = await getSignedUrl(s3 as any, command as any, { expiresIn: 3600 });
-    
-    // console.log(`Generated signed URL for video: ${signedUrl.substring(0, 100)}...`);
-
     // Define ffmpeg path explicitly - it's in the Lambda layer
     const ffmpegPath = process.env.LAMBDA_TASK_ROOT ? '/opt/bin/ffmpeg' : 'ffmpeg';
     
@@ -814,6 +803,20 @@ async function processSegmentDetection(
           ContentType: 'image/jpeg'
         }))
       ]);
+      
+      // Get a signed URL for the keyframe
+      const keyframeCommand = new GetObjectCommand({
+        Bucket: bucketName,
+        Key: segmentVideoS3Path[1]
+      });
+      const keyframeSignedUrl = await getSignedUrl(s3 as any, keyframeCommand as any, { expiresIn: 3600 });
+
+      // Get a signed URL for the segment
+      const segmentCommand = new GetObjectCommand({
+        Bucket: bucketName,
+        Key: segmentVideoS3Path[0]
+      });
+      const segmentSignedUrl = await getSignedUrl(s3 as any, segmentCommand as any, { expiresIn: 3600 });
 
       console.log(`Successfully uploaded segment ${segmentNumber} and keyframe to S3`);
 
@@ -829,9 +832,11 @@ async function processSegmentDetection(
 
       // Add the segment to our results
       slicedSegment.video_s3_path = segmentVideoS3Path[0];
+      slicedSegment.video_thumbnail_s3_path = segmentVideoS3Path[1];
+      slicedSegment.video_preview_url = segmentSignedUrl;
+      slicedSegment.video_thumbnail_url = keyframeSignedUrl;
       slicedSegment.segment_visual = {
         segment_visual_description: segment.ShotSegment ? 'Shot boundary detected' : 'Technical cue detected',
-        segment_visual_keyframe_path: segmentVideoS3Path[1],
       };
 
       // Check if the embedding service is running

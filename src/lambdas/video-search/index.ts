@@ -302,9 +302,12 @@ const transformSearchResults = async (hits: any[]): Promise<VideoResult[]> => {
         return '';
       }
     };
-    
+
     // Extract segments and add confidence scores
     const segments = hit._source.video_segments?.map((segment: any): VideoSegment => {
+      // TODO: Generate signed URLs for video preview and thumbnail, otherwise use the existing URLs which can be expired
+      // const videoPreviewUrl = await generateSignedUrl(segment.video_s3_path);
+      // const thumbnailUrl = await generateSignedUrl(segment.video_thumbnail_s3_path);
       return {
         segment_id: segment.segment_id,
         video_id: hit._id,
@@ -312,6 +315,9 @@ const transformSearchResults = async (hits: any[]): Promise<VideoResult[]> => {
         end_time: segment.end_time,
         duration: segment.duration,
         video_s3_path: segment.video_s3_path,
+        video_preview_url: segment.video_preview_url,
+        video_thumbnail_s3_path: segment.video_thumbnail_s3_path,
+        video_thumbnail_url: segment.video_thumbnail_url,
         confidence: segmentScores.get(segment.segment_id) || 0 // Add segment-level confidence score
       };
     }) || [];
