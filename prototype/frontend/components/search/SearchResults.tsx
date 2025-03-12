@@ -157,22 +157,26 @@ export default function SearchResults({
                      const centerPosition = (startTime + (endTime - startTime) / 2) / formatDuration(result.videoDuration) * 100;
                      const confidenceLevel = getConfidenceLevel(segmentConfidence);
                      
+                     // Calculate constrained position to keep the preview within bounds
+                     const constrainedPosition = Math.max(15, Math.min(centerPosition, 85));
+                     
                      return (
                       <div 
                         className="absolute bottom-8 transform -translate-x-1/2 z-10"
-                        style={{ left: `${centerPosition}%` }}
+                        style={{ left: `${constrainedPosition}%` }}
                       >
                         <div className="bg-gray-900 rounded-lg shadow-lg overflow-hidden max-w-xs">
-                          <div className="relative aspect-video bg-black">
+                          <div className="relative bg-black" style={{width: "240px", height: "135px"}}>
                             <img 
-                              src={segment.video_thumbnail_url || result.videoThumbnailUrl} 
+                              src={segment.segment_video_thumbnail_url} 
                               alt={`Segment at ${formatTimeDisplay(startTime)}`}
                               className="w-full h-full object-cover"
                             />
                             <div className="absolute top-0 left-0 right-0 bg-black/50 text-white text-center text-sm py-1">
                               {formatTimeDisplay(startTime)} - {formatTimeDisplay(endTime)}
                             </div>
-                            {showConfidenceScores && (
+                            {/* Only display confidence for matched segments */}
+                            {showConfidenceScores && segmentConfidence > 0 && (
                               <div className={`absolute bottom-2 left-2 px-2 py-1 rounded text-white text-sm ${
                                 segmentConfidence >= 0.9 
                                   ? 'bg-green-600' 

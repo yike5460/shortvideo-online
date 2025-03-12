@@ -55,10 +55,10 @@ export interface VideoSegment {
   start_time: number;        // Milliseconds from start, align with StartTimestampMillis in Rekognition response
   end_time: number;          // Milliseconds from start, align with EndTimestampMillis in Rekognition response
   duration: number;          // Segment duration in milliseconds, align with DurationMillis in Rekognition response
-  video_s3_path?: string;     // S3 storage location for each segment (shots)
-  video_preview_url?: string; // Pre-signed URL for thumbnail (video thumbnail)
-  video_thumbnail_s3_path?: string; // S3 path to thumbnail (image)
-  video_thumbnail_url?: string;     // Pre-signed URL for thumbnail (image thumbnail)
+  segment_video_s3_path?: string;     // S3 storage location for each segment (shots)
+  segment_video_preview_url?: string; // Pre-signed URL for thumbnail (video thumbnail)
+  segment_video_thumbnail_s3_path?: string; // S3 path to thumbnail (image)
+  segment_video_thumbnail_url?: string;     // Pre-signed URL for thumbnail (image thumbnail)
   confidence?: number;        // Confidence score for the segment
   segment_audio?: {
     segment_audio_transcript?: string;     // Raw transcript text
@@ -66,7 +66,6 @@ export interface VideoSegment {
     segment_audio_description?: string;    // Audio description
   };
   segment_visual?: {
-    segment_visual_keyframe_path?: string;  // S3 path to keyframe, will obsolete to use video_s3_path instead
     segment_visual_description?: string;    // Visual description
     segment_visual_embedding?: number[];    // Visual embedding
   };

@@ -831,10 +831,10 @@ async function processSegmentDetection(
       }
 
       // Add the segment to our results
-      slicedSegment.video_s3_path = segmentVideoS3Path[0];
-      slicedSegment.video_thumbnail_s3_path = segmentVideoS3Path[1];
-      slicedSegment.video_preview_url = segmentSignedUrl;
-      slicedSegment.video_thumbnail_url = keyframeSignedUrl;
+      slicedSegment.segment_video_s3_path = segmentVideoS3Path[0];
+      slicedSegment.segment_video_thumbnail_s3_path = segmentVideoS3Path[1];
+      slicedSegment.segment_video_preview_url = segmentSignedUrl;
+      slicedSegment.segment_video_thumbnail_url = keyframeSignedUrl;
       slicedSegment.segment_visual = {
         segment_visual_description: segment.ShotSegment ? 'Shot boundary detected' : 'Technical cue detected',
       };

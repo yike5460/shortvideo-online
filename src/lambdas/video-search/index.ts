@@ -304,7 +304,7 @@ const transformSearchResults = async (hits: any[]): Promise<VideoResult[]> => {
     };
 
     // Extract segments and add confidence scores
-    // TODO: we might use _source inside inner_hits to get the video_s3_path etc. instead of using the outer_source, once we reduce the size of the response configured in the search query, then the response format in inner_hits will be:
+    // TODO: we might use _source inside inner_hits to get the segment_video_s3_path etc. instead of using the outer_source, once we reduce the size of the response configured in the search query, then the response format in inner_hits will be:
     // 
     // {
     //   "_id": "B5DPhZUB007fNqCqq4HU",
@@ -315,40 +315,31 @@ const transformSearchResults = async (hits: any[]): Promise<VideoResult[]> => {
     //   "_score": 0.5681837,
     //   "_source": {<Non empty object if we are including the fields in _source of the search query>}
     // }
-    const segments = hit._source.video_segments?.map((segment: any): VideoSegment => {
-      // const videoPreviewUrl = await generateSignedUrl(segment.video_s3_path);
-      // const thumbnailUrl = await generateSignedUrl(segment.video_thumbnail_s3_path);
+
+    // Generate signed URLs for video preview and thumbnail, otherwise use the existing URLs which can be expired
+    const segmentsWithSignedUrls = await Promise.all(hit._source.video_segments?.map(async (segment: VideoSegment) => {
+      const segmentVideoPreviewUrl = await generateSignedUrl(segment.segment_video_s3_path || '');
+      const segmentVideoThumbnailUrl = await generateSignedUrl(segment.segment_video_thumbnail_s3_path || '');
+      console.log(`Generated signed URLs for segment ${segment.segment_id}: videoPreviewUrl: ${segmentVideoPreviewUrl}, videoThumbnailUrl: ${segmentVideoThumbnailUrl} for s3 paths: ${segment.segment_video_s3_path}, ${segment.segment_video_thumbnail_s3_path}`);
       return {
         segment_id: segment.segment_id,
         video_id: hit._id,
         start_time: segment.start_time,
         end_time: segment.end_time,
         duration: segment.duration,
-        video_s3_path: segment.video_s3_path,
-        video_preview_url: segment.video_preview_url,
-        video_thumbnail_s3_path: segment.video_thumbnail_s3_path,
-        video_thumbnail_url: segment.video_thumbnail_url,
-        confidence: segmentScores.get(segment.segment_id) || 0 // Add segment-level confidence score
+        segment_video_s3_path: segment.segment_video_s3_path,
+        segment_video_preview_url: segmentVideoPreviewUrl,
+        segment_video_thumbnail_s3_path: segment.segment_video_thumbnail_s3_path,
+        segment_video_thumbnail_url: segmentVideoThumbnailUrl,
+        confidence: segmentScores.get(segment.segment_id || '') || 0 // Add segment-level confidence score
       };
-    }) || [];
-    
-    const sortedSegments = segments.sort((a: VideoSegment, b: VideoSegment) => 
+    })) || [];
+
+    const sortedSegments = segmentsWithSignedUrls.sort((a: VideoSegment, b: VideoSegment) => 
       (b.confidence || 0) - (a.confidence || 0)
     );
     // const limitedSegments = sortedSegments.slice(0, 5);
 
-    // Generate signed URLs for video preview and thumbnail, otherwise use the existing URLs which can be expired
-    const segmentsWithSignedUrls = await Promise.all(sortedSegments.map(async (segment: VideoSegment) => {
-      const videoPreviewUrl = await generateSignedUrl(segment.video_s3_path || '');
-      const videoThumbnailUrl = await generateSignedUrl(segment.video_thumbnail_s3_path || '');
-      console.log(`Generated signed URLs for segment ${segment.segment_id}: videoPreviewUrl: ${videoPreviewUrl}, videoThumbnailUrl: ${videoThumbnailUrl} for s3 paths: ${segment.video_s3_path}, ${segment.video_thumbnail_s3_path}`);
-      return {
-        ...segment,
-        videoPreviewUrl,
-        videoThumbnailUrl
-      };
-    }));
-    
     // Generate fresh signed URLs for video preview and thumbnail
     const videoPreviewUrl = await generateSignedUrl(hit._source.video_s3_path);
     const thumbnailUrl = await generateSignedUrl(hit._source.video_thumbnail_s3_path);
@@ -367,7 +358,7 @@ const transformSearchResults = async (hits: any[]): Promise<VideoResult[]> => {
       format: hit._source.video_type || '',
       status: hit._source.video_status,
       size: hit._source.video_size || 0,
-      segments: segmentsWithSignedUrls,
+      segments: sortedSegments,
       searchConfidence: normalizedVideoScore,
       indexId: hit._source.video_index || 'videos'
     };
@@ -434,10 +425,10 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
             'video_segments.start_time',
             'video_segments.end_time',
             'video_segments.duration',
-            'video_segments.video_s3_path',
-            'video_segments.video_preview_url',
-            'video_segments.video_thumbnail_s3_path',
-            'video_segments.video_thumbnail_url'
+            'video_segments.segment_video_s3_path',
+            'video_segments.segment_video_preview_url',
+            'video_segments.segment_video_thumbnail_s3_path',
+            'video_segments.segment_video_thumbnail_url'
           ],
           query: {
             nested: {
@@ -456,10 +447,10 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
                   "start_time", 
                   "end_time", 
                   "duration",
-                  "video_s3_path",
-                  "video_preview_url",
-                  "video_thumbnail_s3_path",
-                  "video_thumbnail_url"
+                  "segment_video_s3_path",
+                  "segment_video_preview_url",
+                  "segment_video_thumbnail_s3_path",
+                  "segment_video_thumbnail_url"
                 ],
                 size: 5,
                 name: "matched_segments"

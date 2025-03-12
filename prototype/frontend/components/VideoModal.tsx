@@ -13,11 +13,13 @@ interface VideoModalProps {
   selectedSegment?: VideoSegment | null // Add selectedSegment prop
 }
 
-export default function VideoModal({ video, isOpen, onClose, viewMode = 'play', selectedSegment }: VideoModalProps) {
+export default function VideoModal({ video, isOpen, onClose, viewMode = 'play', selectedSegment: propSelectedSegment }: VideoModalProps) {
   // Use local state to track whether video is playing (for future use)
   const [isPlaying, setIsPlaying] = useState(false)
   // Add internal state to track the current view mode - initialize with the prop value
   const [currentViewMode, setCurrentViewMode] = useState<'play' | 'details'>(viewMode)
+  // Local state for selected segment that syncs with prop
+  const [localSelectedSegment, setLocalSelectedSegment] = useState<VideoSegment | null | undefined>(propSelectedSegment)
   // Reference to video element to control it programmatically
   const videoRef = useRef<HTMLVideoElement>(null)
   
@@ -26,10 +28,32 @@ export default function VideoModal({ video, isOpen, onClose, viewMode = 'play', 
     setCurrentViewMode(viewMode);
   }, [viewMode]);
   
+  // Sync local selected segment state with prop
+  useEffect(() => {
+    setLocalSelectedSegment(propSelectedSegment);
+  }, [propSelectedSegment]);
+  
+  // Listen for custom playSegment events
+  useEffect(() => {
+    const handlePlaySegment = (event: Event) => {
+      if (event instanceof CustomEvent && event.detail) {
+        setCurrentViewMode('play');
+        const segment = event.detail as VideoSegment;
+        setLocalSelectedSegment(segment);
+      }
+    };
+    
+    document.addEventListener('playSegment', handlePlaySegment);
+    
+    return () => {
+      document.removeEventListener('playSegment', handlePlaySegment);
+    };
+  }, []);
+  
   // Set start time when video loads if a segment is selected
   useEffect(() => {
-    if (videoRef.current && selectedSegment && selectedSegment.start_time) {
-      const startTimeSeconds = selectedSegment.start_time / 1000; // Convert ms to seconds
+    if (videoRef.current && localSelectedSegment && localSelectedSegment.start_time) {
+      const startTimeSeconds = localSelectedSegment.start_time / 1000; // Convert ms to seconds
       
       // Set the currentTime when the video is ready to play
       const handleCanPlay = () => {
@@ -53,7 +77,7 @@ export default function VideoModal({ video, isOpen, onClose, viewMode = 'play', 
         }
       };
     }
-  }, [selectedSegment, isOpen]);
+  }, [localSelectedSegment, isOpen]);
 
   // Safe check if we have a valid video
   if (!video) return null
@@ -122,15 +146,16 @@ export default function VideoModal({ video, isOpen, onClose, viewMode = 'play', 
                   // Video player view
                   <div className="relative">
                     <div className="aspect-video bg-black">
-                      {video.videoPreviewUrl ? (
+                      {(localSelectedSegment?.segment_video_preview_url || video.videoPreviewUrl) ? (
                         <video 
                           ref={videoRef}
-                          src={selectedSegment?.video_preview_url || video.videoPreviewUrl} 
+                          src={localSelectedSegment?.segment_video_preview_url || video.videoPreviewUrl} 
                           className="w-full h-full" 
                           controls 
                           autoPlay
                           onPlay={() => setIsPlaying(true)}
                           onPause={() => setIsPlaying(false)}
+                          poster={localSelectedSegment?.segment_video_thumbnail_url || video.videoThumbnailUrl}
                         />
                       ) : (
                         <div className="flex items-center justify-center h-full">
@@ -152,12 +177,12 @@ export default function VideoModal({ video, isOpen, onClose, viewMode = 'play', 
                         {video.videoDuration && <p>Duration: {video.videoDuration}</p>}
                         
                         {/* Display segment information if a segment is selected */}
-                        {selectedSegment && (
+                        {localSelectedSegment && (
                           <div className="mt-2 px-3 py-2 bg-blue-50 border border-blue-100 rounded-md">
                             <div className="flex items-center justify-between">
                               <span className="font-medium text-blue-700">Playing Segment</span>
                               <span className="text-blue-600">
-                                {formatTime(selectedSegment.start_time / 1000)} - {formatTime(selectedSegment.end_time / 1000)}
+                                {formatTime(localSelectedSegment.start_time / 1000)} - {formatTime(localSelectedSegment.end_time / 1000)}
                               </span>
                             </div>
                             
@@ -166,13 +191,13 @@ export default function VideoModal({ video, isOpen, onClose, viewMode = 'play', 
                                 <div
                                   className="h-full bg-blue-600"
                                   style={{
-                                    width: `${Math.round((selectedSegment.duration / (parseInt(video.videoDuration.split(':')[0]) * 3600 + parseInt(video.videoDuration.split(':')[1]) * 60 + parseInt(video.videoDuration.split(':')[2])) * 1000) * 100)}%`
+                                    width: `${Math.round((localSelectedSegment.duration / (parseInt(video.videoDuration.split(':')[0]) * 3600 + parseInt(video.videoDuration.split(':')[1]) * 60 + parseInt(video.videoDuration.split(':')[2])) * 1000) * 100)}%`
                                   }}
                                 />
                               </div>
-                              {selectedSegment.confidence !== undefined && (
+                              {localSelectedSegment.confidence !== undefined && (
                                 <div className="text-sm font-medium text-blue-800">
-                                  {Math.round(selectedSegment.confidence * 100)}% Match
+                                  {Math.round(localSelectedSegment.confidence * 100)}% Match
                                 </div>
                               )}
                             </div>
@@ -263,21 +288,59 @@ export default function VideoModal({ video, isOpen, onClose, viewMode = 'play', 
                         {video?.segments && viewMode === "details" && (
                           <div className="mt-6">
                             <h3 className="text-lg font-semibold mb-2">Video Segments</h3>
-                            <div className="space-y-2">
+                            <div className="space-y-4">
                               {video.segments.map((segment, index) => {
                                 const startTime = formatTime(segment.start_time / 1000); // Convert ms to seconds
                                 const endTime = formatTime(segment.end_time / 1000);
                                 return (
-                                  <div key={segment.segment_id} className="flex items-center justify-between bg-gray-50 p-3 rounded-md">
-                                    <div>
-                                      <span className="font-medium">{startTime}</span> - <span className="font-medium">{endTime}</span>
-                                      <span className="ml-4 text-gray-500">Duration: {formatTime(segment.duration / 1000)}</span>
-                                    </div>
-                                    {segment.confidence !== undefined && (
-                                      <div className="bg-primary-100 text-primary-800 px-2 py-1 rounded-md text-sm font-medium">
-                                        {Math.round(segment.confidence * 100)}% Confidence
+                                  <div key={segment.segment_id || index} className="grid grid-cols-3 gap-3 bg-gray-50 p-3 rounded-md">
+                                    {/* Segment thumbnail */}
+                                    <div className="col-span-1">
+                                      <div 
+                                        className="aspect-video bg-black rounded overflow-hidden" 
+                                        style={{width: "100%", height: "auto"}}
+                                      >
+                                        <img 
+                                          src={segment.segment_video_thumbnail_url || video.videoThumbnailUrl} 
+                                          alt={`Segment at ${startTime}`}
+                                          className="w-full h-full object-cover"
+                                        />
                                       </div>
-                                    )}
+                                    </div>
+                                    
+                                    {/* Segment metadata */}
+                                    <div className="col-span-2 flex flex-col justify-center">
+                                      <div className="flex items-center justify-between mb-2">
+                                        <div>
+                                          <span className="font-medium">{startTime}</span> - <span className="font-medium">{endTime}</span>
+                                          <span className="ml-4 text-gray-500">Duration: {formatTime(segment.duration / 1000)}</span>
+                                        </div>
+                                        {segment.confidence !== undefined && (
+                                          <div className={`px-2 py-1 rounded-md text-sm font-medium ${
+                                            segment.confidence >= 0.9 
+                                              ? 'bg-green-100 text-green-800' 
+                                              : segment.confidence >= 0.7 
+                                                ? 'bg-blue-100 text-blue-800' 
+                                                : 'bg-gray-100 text-gray-800'
+                                          }`}>
+                                            {Math.round(segment.confidence * 100)}% Confidence
+                                          </div>
+                                        )}
+                                      </div>
+                                      
+                                      <button
+                                        type="button"
+                                        className="mt-1 inline-flex items-center px-3 py-1.5 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none self-start"
+                                        onClick={() => {
+                                          setCurrentViewMode('play');
+                                          // Set the segment to play
+                                          const event = new CustomEvent('playSegment', { detail: segment });
+                                          document.dispatchEvent(event);
+                                        }}
+                                      >
+                                        Play Segment
+                                      </button>
+                                    </div>
                                   </div>
                                 );
                               })}
