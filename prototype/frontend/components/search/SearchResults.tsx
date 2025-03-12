@@ -4,7 +4,7 @@ import { useState, useCallback, useMemo, useRef } from 'react'
 import { Tab } from '@headlessui/react'
 import { VideoCameraIcon, ClockIcon } from '@heroicons/react/24/outline'
 import { cn } from '@/lib/utils'
-import { VideoResult } from '@/types'
+import { VideoResult, VideoSegment } from '@/types'
 import VideoModal from '@/components/VideoModal'
 
 interface SearchResultsProps {
@@ -18,6 +18,7 @@ export default function SearchResults({
 }: SearchResultsProps) {
   const [selectedView, setSelectedView] = useState<'clip' | 'video'>('clip')
   const [selectedVideo, setSelectedVideo] = useState<VideoResult | null>(null)
+  const [selectedSegment, setSelectedSegment] = useState<VideoSegment | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [hoveredSegment, setHoveredSegment] = useState<{
     videoId: string,
@@ -164,7 +165,7 @@ export default function SearchResults({
                         <div className="bg-gray-900 rounded-lg shadow-lg overflow-hidden max-w-xs">
                           <div className="relative aspect-video bg-black">
                             <img 
-                              src={result.videoThumbnailUrl} 
+                              src={segment.video_thumbnail_url || result.videoThumbnailUrl} 
                               alt={`Segment at ${formatTimeDisplay(startTime)}`}
                               className="w-full h-full object-cover"
                             />
@@ -232,6 +233,12 @@ export default function SearchResults({
                           }}
                           onMouseLeave={() => {
                             setHoveredSegment(null);
+                          }}
+                          onClick={(e) => {
+                            e.stopPropagation(); // Prevent triggering parent button click
+                            setSelectedVideo(result);
+                            setSelectedSegment(segment);
+                            setIsModalOpen(true);
                           }}
                         />
                       );
@@ -301,8 +308,12 @@ export default function SearchResults({
       {/* Video Player Modal */}
       <VideoModal
         video={selectedVideo}
+        selectedSegment={selectedSegment}
         isOpen={isModalOpen}
-        onClose={closeModal}
+        onClose={() => {
+          closeModal();
+          setSelectedSegment(null);
+        }}
       />
     </div>
   )

@@ -1,27 +1,59 @@
 'use client'
 
 import { Dialog, Transition } from '@headlessui/react'
-import { Fragment, useState, useEffect } from 'react'
+import { Fragment, useState, useEffect, useRef } from 'react'
 import { XMarkIcon } from '@heroicons/react/24/outline'
-import { VideoResult } from '@/types'
+import { VideoResult, VideoSegment } from '@/types'
 
 interface VideoModalProps {
   video: VideoResult | null
   isOpen: boolean
   onClose: () => void
   viewMode?: 'play' | 'details'  // Add viewMode prop with default as 'play'
+  selectedSegment?: VideoSegment | null // Add selectedSegment prop
 }
 
-export default function VideoModal({ video, isOpen, onClose, viewMode = 'play' }: VideoModalProps) {
+export default function VideoModal({ video, isOpen, onClose, viewMode = 'play', selectedSegment }: VideoModalProps) {
   // Use local state to track whether video is playing (for future use)
   const [isPlaying, setIsPlaying] = useState(false)
   // Add internal state to track the current view mode - initialize with the prop value
   const [currentViewMode, setCurrentViewMode] = useState<'play' | 'details'>(viewMode)
+  // Reference to video element to control it programmatically
+  const videoRef = useRef<HTMLVideoElement>(null)
   
   // Update the internal view mode when the prop changes using useEffect
   useEffect(() => {
     setCurrentViewMode(viewMode);
   }, [viewMode]);
+  
+  // Set start time when video loads if a segment is selected
+  useEffect(() => {
+    if (videoRef.current && selectedSegment && selectedSegment.start_time) {
+      const startTimeSeconds = selectedSegment.start_time / 1000; // Convert ms to seconds
+      
+      // Set the currentTime when the video is ready to play
+      const handleCanPlay = () => {
+        if (videoRef.current) {
+          videoRef.current.currentTime = startTimeSeconds;
+        }
+      };
+      
+      // Add event listener for canplay
+      videoRef.current.addEventListener('canplay', handleCanPlay, { once: true });
+      
+      // If video is already loaded, set currentTime immediately
+      if (videoRef.current.readyState >= 3) {
+        videoRef.current.currentTime = startTimeSeconds;
+      }
+      
+      return () => {
+        // Clean up event listener
+        if (videoRef.current) {
+          videoRef.current.removeEventListener('canplay', handleCanPlay);
+        }
+      };
+    }
+  }, [selectedSegment, isOpen]);
 
   // Safe check if we have a valid video
   if (!video) return null
@@ -92,7 +124,8 @@ export default function VideoModal({ video, isOpen, onClose, viewMode = 'play' }
                     <div className="aspect-video bg-black">
                       {video.videoPreviewUrl ? (
                         <video 
-                          src={video.videoPreviewUrl} 
+                          ref={videoRef}
+                          src={selectedSegment?.video_preview_url || video.videoPreviewUrl} 
                           className="w-full h-full" 
                           controls 
                           autoPlay
@@ -117,6 +150,34 @@ export default function VideoModal({ video, isOpen, onClose, viewMode = 'play' }
                       <div className="mt-4 text-sm text-gray-500">
                         <p>Uploaded: {formattedDate}</p>
                         {video.videoDuration && <p>Duration: {video.videoDuration}</p>}
+                        
+                        {/* Display segment information if a segment is selected */}
+                        {selectedSegment && (
+                          <div className="mt-2 px-3 py-2 bg-blue-50 border border-blue-100 rounded-md">
+                            <div className="flex items-center justify-between">
+                              <span className="font-medium text-blue-700">Playing Segment</span>
+                              <span className="text-blue-600">
+                                {formatTime(selectedSegment.start_time / 1000)} - {formatTime(selectedSegment.end_time / 1000)}
+                              </span>
+                            </div>
+                            
+                            <div className="mt-1 flex items-center gap-3">
+                              <div className="flex-1 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                                <div
+                                  className="h-full bg-blue-600"
+                                  style={{
+                                    width: `${Math.round((selectedSegment.duration / (parseInt(video.videoDuration.split(':')[0]) * 3600 + parseInt(video.videoDuration.split(':')[1]) * 60 + parseInt(video.videoDuration.split(':')[2])) * 1000) * 100)}%`
+                                  }}
+                                />
+                              </div>
+                              {selectedSegment.confidence !== undefined && (
+                                <div className="text-sm font-medium text-blue-800">
+                                  {Math.round(selectedSegment.confidence * 100)}% Match
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>

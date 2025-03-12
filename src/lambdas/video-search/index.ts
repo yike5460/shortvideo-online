@@ -304,8 +304,18 @@ const transformSearchResults = async (hits: any[]): Promise<VideoResult[]> => {
     };
 
     // Extract segments and add confidence scores
+    // TODO: we might use _source inside inner_hits to get the video_s3_path etc. instead of using the outer_source, once we reduce the size of the response configured in the search query, then the response format in inner_hits will be:
+    // 
+    // {
+    //   "_id": "B5DPhZUB007fNqCqq4HU",
+    //   "_nested": {
+    //       "field": "video_segments",
+    //       "offset": 65
+    //   },
+    //   "_score": 0.5681837,
+    //   "_source": {<Non empty object if we are including the fields in _source of the search query>}
+    // }
     const segments = hit._source.video_segments?.map((segment: any): VideoSegment => {
-      // TODO: Generate signed URLs for video preview and thumbnail, otherwise use the existing URLs which can be expired
       // const videoPreviewUrl = await generateSignedUrl(segment.video_s3_path);
       // const thumbnailUrl = await generateSignedUrl(segment.video_thumbnail_s3_path);
       return {
@@ -322,16 +332,27 @@ const transformSearchResults = async (hits: any[]): Promise<VideoResult[]> => {
       };
     }) || [];
     
-    // Sort segments by confidence and limit to top 5
     const sortedSegments = segments.sort((a: VideoSegment, b: VideoSegment) => 
       (b.confidence || 0) - (a.confidence || 0)
     );
-    const limitedSegments = sortedSegments.slice(0, 5);
+    // const limitedSegments = sortedSegments.slice(0, 5);
+
+    // Generate signed URLs for video preview and thumbnail, otherwise use the existing URLs which can be expired
+    const segmentsWithSignedUrls = await Promise.all(sortedSegments.map(async (segment: VideoSegment) => {
+      const videoPreviewUrl = await generateSignedUrl(segment.video_s3_path || '');
+      const videoThumbnailUrl = await generateSignedUrl(segment.video_thumbnail_s3_path || '');
+      console.log(`Generated signed URLs for segment ${segment.segment_id}: videoPreviewUrl: ${videoPreviewUrl}, videoThumbnailUrl: ${videoThumbnailUrl} for s3 paths: ${segment.video_s3_path}, ${segment.video_thumbnail_s3_path}`);
+      return {
+        ...segment,
+        videoPreviewUrl,
+        videoThumbnailUrl
+      };
+    }));
     
     // Generate fresh signed URLs for video preview and thumbnail
     const videoPreviewUrl = await generateSignedUrl(hit._source.video_s3_path);
     const thumbnailUrl = await generateSignedUrl(hit._source.video_thumbnail_s3_path);
-    
+
     return {
       id: hit._id,
       title: hit._source.video_title || '',
@@ -346,7 +367,7 @@ const transformSearchResults = async (hits: any[]): Promise<VideoResult[]> => {
       format: hit._source.video_type || '',
       status: hit._source.video_status,
       size: hit._source.video_size || 0,
-      segments: limitedSegments,
+      segments: segmentsWithSignedUrls,
       searchConfidence: normalizedVideoScore,
       indexId: hit._source.video_index || 'videos'
     };
@@ -412,7 +433,11 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
             'video_segments.segment_id',
             'video_segments.start_time',
             'video_segments.end_time',
-            'video_segments.duration'
+            'video_segments.duration',
+            'video_segments.video_s3_path',
+            'video_segments.video_preview_url',
+            'video_segments.video_thumbnail_s3_path',
+            'video_segments.video_thumbnail_url'
           ],
           query: {
             nested: {
@@ -430,7 +455,11 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
                   "segment_id", 
                   "start_time", 
                   "end_time", 
-                  "duration"
+                  "duration",
+                  "video_s3_path",
+                  "video_preview_url",
+                  "video_thumbnail_s3_path",
+                  "video_thumbnail_url"
                 ],
                 size: 5,
                 name: "matched_segments"

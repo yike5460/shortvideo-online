@@ -813,6 +813,4 @@ Backend:
 - [ ] Add index deletion using /indexes/{indexId} DELETE
 
 Frontend:
-- [ ] Integrate actual query data to display the search result in the video bar under "View by Video" mode, refer to the README.md in the frontend folder
-- [ ] View Details in the video card is not displaying the correct video detail but playing the video, need to fix it
-- [ ] Remove the Reprocess button for now
+- [ ] Integrate with Amplify, code like import { defineAuth } from '@aws-amplify/backend'
