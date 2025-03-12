@@ -175,7 +175,7 @@ export default function SearchResults({
                             <div className="absolute top-0 left-0 right-0 bg-black/50 text-white text-center text-sm py-1">
                               {formatTimeDisplay(startTime)} - {formatTimeDisplay(endTime)}
                             </div>
-                            {/* Only display confidence for matched segments */}
+                            {/* Only display confidence for matched segments (confidence > 0) */}
                             {showConfidenceScores && segmentConfidence > 0 && (
                               <div className={`absolute bottom-2 left-2 px-2 py-1 rounded text-white text-sm ${
                                 segmentConfidence >= 0.9 
@@ -194,7 +194,11 @@ export default function SearchResults({
                      );
                    })()
                   }
+                  {/* Only show confidence scores for matched segments (confidence > 0) */}
                   {showConfidenceScores && result.segments?.map((segment, index) => {
+                    // Skip segments with no confidence (unmatched segments)
+                    if ((segment.confidence || 0) <= 0) return null;
+                    
                     const centerPercent = ((segment.start_time + (segment.end_time - segment.start_time) / 2) / formatDuration(result.videoDuration)) * 100;
                     const confidence = segment.confidence || 0;
                     return (
@@ -212,6 +216,8 @@ export default function SearchResults({
                       const startPercent = (segment.start_time / formatDuration(result.videoDuration)) * 100;
                       const widthPercent = ((segment.end_time - segment.start_time) / formatDuration(result.videoDuration)) * 100;
                       const confidence = segment.confidence || 0;
+                      // Check if this is a matched segment
+                      const isMatched = confidence > 0;
                       
                       const getSegmentColor = (conf: number) => {
                         if (conf >= 0.9) return "bg-green-600";
@@ -222,11 +228,11 @@ export default function SearchResults({
                       return (
                         <div
                           key={index}
-                          className={`absolute h-full transition-opacity hover:opacity-80 cursor-pointer ${getSegmentColor(confidence)}`}
+                          className={`absolute h-full transition-opacity hover:opacity-80 cursor-pointer ${isMatched ? getSegmentColor(confidence) : "bg-gray-400"}`}
                           style={{
                             left: `${startPercent}%`,
                             width: `${widthPercent}%`,
-                            opacity: Math.max(0.3, confidence)
+                            opacity: isMatched ? Math.max(0.3, confidence) : 0.3
                           }}
                           onMouseEnter={(e) => {
                             setHoveredSegment({

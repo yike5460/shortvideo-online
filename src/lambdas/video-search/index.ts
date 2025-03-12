@@ -253,6 +253,7 @@ const transformSearchResults = async (hits: any[]): Promise<VideoResult[]> => {
     // Extract segment scores from inner_hits if available
     const segmentScores = new Map<string, number>();
     const segmentOffsetMap = new Map<number, any>();
+    const matchedSegments: any[] = [];
     
     // First, create a mapping between offsets and segment objects
     if (hit._source.video_segments) {
@@ -261,7 +262,7 @@ const transformSearchResults = async (hits: any[]): Promise<VideoResult[]> => {
       });
     }
     
-    // Process inner_hits if available to extract segment confidence scores
+    // Process inner_hits if available to extract segment confidence scores and matched segments
     if (hit.inner_hits?.matched_segments?.hits?.hits) {
       const innerHits = hit.inner_hits.matched_segments.hits.hits;
       // Find max score for normalization
@@ -270,7 +271,7 @@ const transformSearchResults = async (hits: any[]): Promise<VideoResult[]> => {
       console.log(`Max inner score: ${maxInnerScore}`);
       console.log('Inner hits:', JSON.stringify(innerHits, null, 2));
       
-      // Map scores to segments using the offset
+      // Map scores to segments using the offset and collect matched segments
       innerHits.forEach((segHit: any) => {
         const offset = segHit._nested?.offset;
         const score = segHit._score || 0;
@@ -278,9 +279,20 @@ const transformSearchResults = async (hits: any[]): Promise<VideoResult[]> => {
         if (offset !== undefined) {
           const segment = segmentOffsetMap.get(offset);
           if (segment) {
-            // Normalize the score relative to the highest score within this video
+            // Normalize the score relative to the highest score within this video, not used for now
             const normalizedScore = maxInnerScore > 0 ? score / maxInnerScore : 0;
-            segmentScores.set(segment.segment_id, normalizedScore);
+            // segmentScores.set(segment.segment_id, normalizedScore);
+            segmentScores.set(segment.segment_id, score);
+            
+            // Add to matched segments with score
+            matchedSegments.push({
+              ...segment,
+              // confidence: normalizedScore,
+              confidence: score,
+              _offset: offset,
+              _raw_score: score
+            });
+            
             console.log(`Mapped offset ${offset} to segment ${segment.segment_id} with score ${score} -> normalized ${normalizedScore}`);
           }
         }
@@ -303,24 +315,11 @@ const transformSearchResults = async (hits: any[]): Promise<VideoResult[]> => {
       }
     };
 
-    // Extract segments and add confidence scores
-    // TODO: we might use _source inside inner_hits to get the segment_video_s3_path etc. instead of using the outer_source, once we reduce the size of the response configured in the search query, then the response format in inner_hits will be:
-    // 
-    // {
-    //   "_id": "B5DPhZUB007fNqCqq4HU",
-    //   "_nested": {
-    //       "field": "video_segments",
-    //       "offset": 65
-    //   },
-    //   "_score": 0.5681837,
-    //   "_source": {<Non empty object if we are including the fields in _source of the search query>}
-    // }
-
-    // Generate signed URLs for video preview and thumbnail, otherwise use the existing URLs which can be expired
-    const segmentsWithSignedUrls = await Promise.all(hit._source.video_segments?.map(async (segment: VideoSegment) => {
+    // Generate signed URLs only for matched segments (from inner_hits)
+    const segmentsWithSignedUrls = await Promise.all(matchedSegments.map(async (segment: any) => {
       const segmentVideoPreviewUrl = await generateSignedUrl(segment.segment_video_s3_path || '');
       const segmentVideoThumbnailUrl = await generateSignedUrl(segment.segment_video_thumbnail_s3_path || '');
-      console.log(`Generated signed URLs for segment ${segment.segment_id}: videoPreviewUrl: ${segmentVideoPreviewUrl}, videoThumbnailUrl: ${segmentVideoThumbnailUrl} for s3 paths: ${segment.segment_video_s3_path}, ${segment.segment_video_thumbnail_s3_path}`);
+      
       return {
         segment_id: segment.segment_id,
         video_id: hit._id,
@@ -331,14 +330,14 @@ const transformSearchResults = async (hits: any[]): Promise<VideoResult[]> => {
         segment_video_preview_url: segmentVideoPreviewUrl,
         segment_video_thumbnail_s3_path: segment.segment_video_thumbnail_s3_path,
         segment_video_thumbnail_url: segmentVideoThumbnailUrl,
-        confidence: segmentScores.get(segment.segment_id || '') || 0 // Add segment-level confidence score
+        confidence: segment.confidence || 0 // Use the normalized confidence score we already calculated
       };
     })) || [];
 
+    // Sort segments by confidence
     const sortedSegments = segmentsWithSignedUrls.sort((a: VideoSegment, b: VideoSegment) => 
       (b.confidence || 0) - (a.confidence || 0)
     );
-    // const limitedSegments = sortedSegments.slice(0, 5);
 
     // Generate fresh signed URLs for video preview and thumbnail
     const videoPreviewUrl = await generateSignedUrl(hit._source.video_s3_path);

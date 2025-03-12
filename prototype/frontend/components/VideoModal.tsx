@@ -292,12 +292,17 @@ export default function VideoModal({ video, isOpen, onClose, viewMode = 'play', 
                               {video.segments.map((segment, index) => {
                                 const startTime = formatTime(segment.start_time / 1000); // Convert ms to seconds
                                 const endTime = formatTime(segment.end_time / 1000);
+                                const isActiveSegment = localSelectedSegment?.segment_id === segment.segment_id;
+                                
                                 return (
-                                  <div key={segment.segment_id || index} className="grid grid-cols-3 gap-3 bg-gray-50 p-3 rounded-md">
+                                  <div key={segment.segment_id || index} 
+                                       className={`grid grid-cols-3 gap-3 p-3 rounded-md ${
+                                         isActiveSegment ? 'bg-blue-50 border border-blue-200' : 'bg-gray-50'
+                                       }`}>
                                     {/* Segment thumbnail */}
                                     <div className="col-span-1">
                                       <div 
-                                        className="aspect-video bg-black rounded overflow-hidden" 
+                                        className="aspect-video bg-black rounded overflow-hidden relative" 
                                         style={{width: "100%", height: "auto"}}
                                       >
                                         <img 
@@ -305,6 +310,10 @@ export default function VideoModal({ video, isOpen, onClose, viewMode = 'play', 
                                           alt={`Segment at ${startTime}`}
                                           className="w-full h-full object-cover"
                                         />
+                                        {/* Only show time label */}
+                                        <div className="absolute bottom-0 left-0 right-0 bg-black/60 text-white text-xs text-center py-1">
+                                          {startTime} - {endTime}
+                                        </div>
                                       </div>
                                     </div>
                                     
@@ -312,10 +321,13 @@ export default function VideoModal({ video, isOpen, onClose, viewMode = 'play', 
                                     <div className="col-span-2 flex flex-col justify-center">
                                       <div className="flex items-center justify-between mb-2">
                                         <div>
-                                          <span className="font-medium">{startTime}</span> - <span className="font-medium">{endTime}</span>
-                                          <span className="ml-4 text-gray-500">Duration: {formatTime(segment.duration / 1000)}</span>
+                                          <span className="font-medium">
+                                            Segment Duration: {formatTime(segment.duration / 1000)}
+                                          </span>
                                         </div>
-                                        {segment.confidence !== undefined && (
+                                        
+                                        {/* Only show confidence for selected segment */}
+                                        {isActiveSegment && segment.confidence !== undefined && (
                                           <div className={`px-2 py-1 rounded-md text-sm font-medium ${
                                             segment.confidence >= 0.9 
                                               ? 'bg-green-100 text-green-800' 
@@ -330,7 +342,9 @@ export default function VideoModal({ video, isOpen, onClose, viewMode = 'play', 
                                       
                                       <button
                                         type="button"
-                                        className="mt-1 inline-flex items-center px-3 py-1.5 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none self-start"
+                                        className={`mt-1 inline-flex items-center px-3 py-1.5 border border-transparent text-sm font-medium rounded-md shadow-sm text-white focus:outline-none self-start ${
+                                          isActiveSegment ? 'bg-blue-700 hover:bg-blue-800' : 'bg-blue-600 hover:bg-blue-700'
+                                        }`}
                                         onClick={() => {
                                           setCurrentViewMode('play');
                                           // Set the segment to play
@@ -338,7 +352,7 @@ export default function VideoModal({ video, isOpen, onClose, viewMode = 'play', 
                                           document.dispatchEvent(event);
                                         }}
                                       >
-                                        Play Segment
+                                        {isActiveSegment ? 'Currently Playing' : 'Play Segment'}
                                       </button>
                                     </div>
                                   </div>
