@@ -468,7 +468,7 @@ async function handleSQSEvent(event: SQSEvent): Promise<LambdaResponse> {
     console.log(`Messages in queue: ${messagesInQueue}, Messages in flight: ${messagesInFlight}`);
     
     // If there are no more messages in the queue, update the indexes table
-    if (totalMessages <= 1) { // 1 means only the current message (which is being processed)
+    if (totalMessages <= 3) { // 1 means only the current message (which is being processed), and we use 3 to fault tolerance for the SQS and race condition in multiple Lambda instances
       console.log(`No more messages for video ${videoId} in queue, updating indexes table`);
       
       // Record the indexId and videoId in the indexes table
@@ -479,7 +479,7 @@ async function handleSQSEvent(event: SQSEvent): Promise<LambdaResponse> {
             indexId: videoIndex,
             videoId,
             video_status: 'ready_for_video_embed' as VideoStatus,
-            updated_at: new Date().toISOString()
+            // Don't need to record created_at and updated_at since they are already set in the OpenSearch document
           }
         })),
         3,
@@ -641,7 +641,7 @@ async function sendSegmentSlicingRequest(videoIndex: string, videoId: string, se
           indexId: videoIndex,
           videoId,
           video_status: 'ready_for_shots' as VideoStatus,
-          updated_at: new Date().toISOString()
+          // Don't need to record created_at and updated_at since they are already set in the OpenSearch document
         }
       })),
       3,
@@ -1233,7 +1233,7 @@ async function updateVideoLabels(videoIndex: string, videoId: string, labels: an
           indexId: videoIndex,
           videoId,
           video_status: 'ready_for_object' as VideoStatus,
-          updated_at: new Date().toISOString()
+          // Don't need to record created_at and updated_at since they are already set in the OpenSearch document
         }
       })),
       3,
@@ -1315,7 +1315,7 @@ async function updateVideoFaces(videoIndex: string, videoId: string, faces: any[
           indexId: videoIndex,
           videoId,
           video_status: 'ready_for_face' as VideoStatus,
-          updated_at: new Date().toISOString()
+          // Don't need to record created_at and updated_at since they are already set in the OpenSearch document
         }
       })),
       3,

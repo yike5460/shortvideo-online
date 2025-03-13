@@ -421,8 +421,13 @@ async function handleGetIndexStatus(event: APIGatewayProxyEvent): Promise<Lambda
     // Transform DynamoDB items to match the expected format
     const videos = (Items || []).map((item: any) => ({
       id: item.videoId,
-      status: item.video_status,
+      name: item.video_name || 'Untitled Video',
+      size: item.video_size,
+      type: item.video_type,
       title: item.video_title || 'Untitled',
+      description: item.video_description || '',
+      tags: item.video_tags || [],
+      status: item.video_status,
       error: item.error,
       uploadDate: item.updated_at
     }));
@@ -491,7 +496,7 @@ async function handleGetIndexStatus(event: APIGatewayProxyEvent): Promise<Lambda
       processingCount,
       currentVideo: currentVideo ? {
         id: currentVideo.id,
-        name: currentVideo.title || 'Untitled Video',
+        name: currentVideo.name || 'Untitled Video',
         status: currentVideo.status,
       } : undefined
     };
@@ -778,6 +783,7 @@ async function handlePresignRequest(event: APIGatewayProxyEvent): Promise<Lambda
     // Add the video index to the S3 key
     const s3Key = `RawVideos/${timestamp}/${videoIndex}/${videoId}/${sanitizedFileName}`;
 
+    const createdAt = new Date().toISOString();
     // Align body schema with VideoMetadata
     const aossInitialBody: VideoMetadata = {
       video_index: videoIndex,
@@ -790,8 +796,8 @@ async function handlePresignRequest(event: APIGatewayProxyEvent): Promise<Lambda
       video_description: request.metadata?.description || '',
       video_tags: request.metadata?.tags || [],
       video_status: 'awaiting_upload' as VideoStatus,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
+      created_at: createdAt,
+      updated_at: createdAt
     };
 
     // Create the index if it doesn't exist
@@ -848,8 +854,15 @@ async function handlePresignRequest(event: APIGatewayProxyEvent): Promise<Lambda
         Item: {
           indexId: videoIndex,
           videoId,
+          video_name: request.fileName,
+          video_size: request.fileSize,
+          video_type: request.fileType,
+          video_title: request.metadata?.title || path.basename(request.fileName),
+          video_description: request.metadata?.description || '',
+          video_tags: request.metadata?.tags || [],
           video_status: 'awaiting_upload' as VideoStatus,
-          updated_at: new Date().toISOString()
+          created_at: createdAt,
+          updated_at: ''
         }
       })),
       3,
@@ -956,6 +969,7 @@ async function handleCompleteUpload(event: APIGatewayProxyEvent): Promise<Lambda
           indexId,
           videoId,
           video_status: 'uploaded' as VideoStatus,
+          // Only update the updated_at field since since the field is already tracked in the OpenSearch document
           updated_at: new Date().toISOString()
         }
       })),
