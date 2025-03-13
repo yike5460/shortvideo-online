@@ -1201,6 +1201,7 @@ export class VideoSearchStack extends cdk.Stack {
     // Grant DynamoDB permissions
     indexesTable.grantReadWriteData(lambdaFunctions.videoUploadFunction.videoUploadHandler);
     indexesTable.grantReadWriteData(lambdaFunctions.videoUploadFunction.youtubeUploadHandler);
+    indexesTable.grantReadWriteData(lambdaFunctions.videoSliceFunction);
     indexesTable.grantReadWriteData(lambdaFunctions.indexCrudFunction);
     indexesTable.grantReadData(lambdaFunctions.videoSearchFunction);
   }

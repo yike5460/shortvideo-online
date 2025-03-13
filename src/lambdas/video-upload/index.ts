@@ -9,7 +9,7 @@ import { defaultProvider } from '@aws-sdk/credential-provider-node';
 import { AwsSigv4Signer } from '@opensearch-project/opensearch/aws';
 import { v4 as uuidv4 } from 'uuid';
 import * as path from 'path';
-import { DynamoDBDocumentClient, PutCommand, DeleteCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, PutCommand, DeleteCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import * as fs from 'fs';
 import { Readable } from 'stream';
@@ -402,43 +402,42 @@ async function handleGetIndexStatus(event: APIGatewayProxyEvent): Promise<Lambda
       };
     }
 
-    // TODO: Replace the status source from OpenSearch to DynamoDB
-    // Query OpenSearch for videos in this index with retry logic
-    const { body } = await withRetry(
-      async () => openSearch.search({
-        index: indexId,
-        body: {
-          query: {
-            bool: {
-              must_not: [
-                { term: { video_status: 'deleted' } }
-              ]
-            }
-          },
-          size: 100, // Limit to 100 videos
-          _source: ['video_id', 'video_status', 'video_title', 'error', 'created_at']
-        }
-      }),
+    // Using DynamoDB instead of OpenSearch as the video status source
+    const { Items } = await withRetry(
+      async () => docClient.send(new ScanCommand({
+        TableName: process.env.INDEXES_TABLE,
+        FilterExpression: "indexId = :indexId AND (attribute_not_exists(video_status) OR video_status <> :deletedStatus)",
+        ExpressionAttributeValues: {
+          ":indexId": indexId,
+          ":deletedStatus": "deleted"
+        },
+        Limit: 100  // Limit to 100 videos
+      })),
       3,
-      `Search videos in index ${indexId}`
+      `Fetch videos from DynamoDB for index ${indexId}`
     );
-    console.log(`Getting status for index: ${indexId} with body: ${JSON.stringify(body)}`);
+    console.log(`Getting status for index: ${indexId} from DynamoDB with items:`, Items);
 
-    // Count videos by status
-    const videos = body.hits.hits.map((hit: any) => ({
-      id: hit._id,
-      status: hit._source.video_status,
-      title: hit._source.video_title,
-      error: hit._source.error,
-      uploadDate: hit._source.created_at,
-      videoPreviewUrl: hit._source.video_preview_url
+    // Transform DynamoDB items to match the expected format
+    const videos = (Items || []).map((item: any) => ({
+      id: item.videoId,
+      status: item.video_status,
+      title: item.video_title || 'Untitled',
+      error: item.error,
+      uploadDate: item.updated_at
     }));
-    
+
+    console.log('Videos status from DynamoDB: ', videos);
+
     const videoCount = videos.length;
     
     // Define which statuses are considered "complete"
-    const completeStatuses: VideoStatus[] = ['ready'];
-    
+    const completeStatuses: VideoStatus[] = [
+      'ready',
+      'ready_for_video_embed',
+      'ready_for_audio_embed'
+    ];
+
     // Define which statuses are considered "in progress" but not error
     const processingStatuses: VideoStatus[] = [
       'awaiting_upload', 
@@ -448,34 +447,24 @@ async function handleGetIndexStatus(event: APIGatewayProxyEvent): Promise<Lambda
       'ready_for_face',
       'ready_for_object',
       'ready_for_shots',
-      'ready_for_video_embed',
-      'ready_for_audio_embed'
     ];
     
     // Define which statuses are considered errors
     const errorStatuses: VideoStatus[] = ['error'];
-    
-    // Check if a video has completed all processing steps
-    // A video is considered fully processed if it has reached the 'ready_for_face', 
-    // 'ready_for_object', and 'ready_for_shots' statuses
-    const isFullyProcessed = (status: string): boolean => {
-      return status === 'ready' || 
-        (status === 'ready_for_face' || status === 'ready_for_object' || status === 'ready_for_shots');
-    };
-    
+
     // Count videos by their processing state
     const completedCount = videos.filter((v: any) => 
-      completeStatuses.includes(v.status) || isFullyProcessed(v.status)
+      completeStatuses.includes(v.status)
     ).length;
-    
+
     const processingCount = videos.filter((v: any) => 
-      processingStatuses.includes(v.status) && !isFullyProcessed(v.status)
+      processingStatuses.includes(v.status)
     ).length;
-    
+
     const failedCount = videos.filter((v: any) => 
       errorStatuses.includes(v.status)
     ).length;
-    
+
     // Aggregate statuses in consideration of our support for multiple video statuses handling
     let status: WebVideoStatus = 'processing';
     if (failedCount > 0) {
@@ -504,7 +493,6 @@ async function handleGetIndexStatus(event: APIGatewayProxyEvent): Promise<Lambda
         id: currentVideo.id,
         name: currentVideo.title || 'Untitled Video',
         status: currentVideo.status,
-        thumbnail: videos.videoPreviewUrl
       } : undefined
     };
     
