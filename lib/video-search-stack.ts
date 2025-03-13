@@ -502,7 +502,19 @@ export class VideoSearchStack extends cdk.Stack {
     // Now add ingress rules to allow incoming traffic on HTTP and HTTPS (needed for VPC endpoint access)
     lambdaSG.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(443), 'Allow HTTPS inbound');
     lambdaSG.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(80), 'Allow HTTP inbound');
-    
+
+    // Extract just the DNS name part by splitting at ':' and selecting the second part, to remove DNS zone ID prefix 
+    const dynamoDbEndpointDns = cdk.Fn.select(
+      1, 
+      cdk.Fn.split(
+        ':', 
+        cdk.Fn.select(0, this.dynamodbEndpoint.vpcEndpointDnsEntries)
+      )
+    );
+
+    // Assemble to valid endpoint URL
+    const dynamoDbEndpointDnsHttp = `https://${dynamoDbEndpointDns}`;
+
     const commonLambdaProps = {
       runtime: lambda.Runtime.NODEJS_20_X,
       vpc: this.vpc,
@@ -516,6 +528,8 @@ export class VideoSearchStack extends cdk.Stack {
         REKOGNITION_ROLE_ARN: this.rekognitionRole.roleArn,
         OPENSEARCH_ENDPOINT: `https://${this.openSearchCollection.attrId}.${this.region}.aoss.amazonaws.com`,
         REDIS_ENDPOINT: this.redisCluster.attrRedisEndpointAddress,
+        INDEXES_TABLE: this.indexesTable.tableName,
+        INDEXES_TABLE_DYNAMODB_DNS_NAME: dynamoDbEndpointDnsHttp,
         EMBEDDING_SERVICE_URL: this.videoEmbeddingService.serviceName,
         EXTERNAL_EMBEDDING_ENDPOINT: this.externalVideoEmbeddingEndpoint || '',
       },

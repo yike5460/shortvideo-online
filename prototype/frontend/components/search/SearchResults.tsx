@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useMemo, useRef } from 'react'
 import { Tab } from '@headlessui/react'
-import { VideoCameraIcon, ClockIcon } from '@heroicons/react/24/outline'
+import { VideoCameraIcon, ClockIcon, CheckCircleIcon, ExclamationCircleIcon, QuestionMarkCircleIcon } from '@heroicons/react/24/outline'
 import { cn } from '@/lib/utils'
 import { VideoResult, VideoSegment } from '@/types'
 import VideoModal from '@/components/VideoModal'
@@ -56,9 +56,17 @@ export default function SearchResults({
   }, [])
   
   const getConfidenceLevel = useCallback((confidence: number): 'High' | 'Medium' | 'Low' => {
-    if (confidence >= 0.9) return 'High';
-    if (confidence >= 0.7) return 'Medium';
+    if (confidence >= 0.8) return 'High';
+    if (confidence >= 0.6) return 'Medium';
     return 'Low';
+  }, [])
+  
+  const getConfidenceIcon = useCallback((level: 'High' | 'Medium' | 'Low') => {
+    switch(level) {
+      case 'High': return <CheckCircleIcon className="h-4 w-4 text-white" />;
+      case 'Medium': return <ExclamationCircleIcon className="h-4 w-4 text-white" />;
+      case 'Low': return <QuestionMarkCircleIcon className="h-4 w-4 text-white" />;
+    }
   }, [])
 
   const handleVideoClick = useCallback((video: VideoResult) => {
@@ -162,34 +170,35 @@ export default function SearchResults({
                      
                      return (
                       <div 
-                        className="absolute bottom-8 transform -translate-x-1/2 z-10"
+                        className="absolute bottom-10 transform -translate-x-1/2 z-10"
                         style={{ left: `${constrainedPosition}%` }}
                       >
-                        <div className="bg-gray-900 rounded-lg shadow-lg overflow-hidden max-w-xs">
+                        <div className="bg-gray-900 rounded-lg shadow-xl overflow-hidden max-w-xs border border-gray-700">
                           <div className="relative bg-black" style={{width: "240px", height: "135px"}}>
                             <img 
                               src={segment.segment_video_thumbnail_url} 
                               alt={`Segment at ${formatTimeDisplay(startTime)}`}
                               className="w-full h-full object-cover"
                             />
-                            <div className="absolute top-0 left-0 right-0 bg-black/50 text-white text-center text-sm py-1">
+                            <div className="absolute top-0 left-0 right-0 bg-black/70 text-white text-center text-sm py-1 font-medium">
                               {formatTimeDisplay(startTime)} - {formatTimeDisplay(endTime)}
                             </div>
                             {/* Only display confidence for matched segments (confidence > 0) */}
                             {showConfidenceScores && segmentConfidence > 0 && (
-                              <div className={`absolute bottom-2 left-2 px-2 py-1 rounded text-white text-sm ${
-                                segmentConfidence >= 0.9 
+                              <div className={`absolute bottom-2 left-2 px-2 py-1 rounded text-white text-sm flex items-center gap-1 ${
+                                segmentConfidence >= 0.8
                                   ? 'bg-green-600' 
-                                  : segmentConfidence >= 0.7 
+                                  : segmentConfidence >= 0.6 
                                     ? 'bg-blue-600' 
                                     : 'bg-gray-600'
                               }`}>
-                                {`${confidenceLevel} - ${Math.round(segmentConfidence * 100)}%`}
+                                {getConfidenceIcon(confidenceLevel)}
+                                <span className="font-medium">{`${confidenceLevel} - ${Math.round(segmentConfidence * 100)}%`}</span>
                               </div>
                             )}
                           </div>
                         </div>
-                        <div className="w-3 h-3 bg-gray-900 rotate-45 absolute -bottom-1 left-1/2 transform -translate-x-1/2"></div>
+                        <div className="w-4 h-4 bg-gray-900 rotate-45 absolute -bottom-2 left-1/2 transform -translate-x-1/2 border-r border-b border-gray-700"></div>
                       </div>
                      );
                    })()
@@ -201,17 +210,32 @@ export default function SearchResults({
                     
                     const centerPercent = ((segment.start_time + (segment.end_time - segment.start_time) / 2) / formatDuration(result.videoDuration)) * 100;
                     const confidence = segment.confidence || 0;
+                    const confidenceLevel = getConfidenceLevel(confidence);
+                    const getBadgeColor = (level: string) => {
+                      if (level === 'High') return "bg-green-500";
+                      if (level === 'Medium') return "bg-blue-500";
+                      return "bg-gray-500";
+                    };
+                    
                     return (
                       <div
                         key={`confidence-${index}`}
-                        className="absolute -top-6 text-xs font-medium text-gray-600 transform -translate-x-1/2 whitespace-nowrap"
+                        className={`absolute -top-8 transform -translate-x-1/2 whitespace-nowrap flex items-center gap-1 rounded-full px-2 py-1 text-xs font-bold text-white shadow-md ${getBadgeColor(confidenceLevel)}`}
                         style={{ left: `${centerPercent}%` }}
                       >
-                        {Math.round(confidence * 100)}%
+                        {getConfidenceIcon(confidenceLevel)}
+                        <span>{Math.round(confidence * 100)}%</span>
                       </div>
                     );
                   })}
-                  <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+                  <div className="h-6 bg-gray-200 rounded-lg overflow-hidden border border-gray-300 shadow-inner relative">
+                    {/* Time markers for better navigation */}
+                    <div className="absolute inset-0 w-full pointer-events-none">
+                      <div className="absolute top-0 left-1/4 h-2 w-px bg-gray-400"></div>
+                      <div className="absolute top-0 left-1/2 h-2 w-px bg-gray-400"></div>
+                      <div className="absolute top-0 left-3/4 h-2 w-px bg-gray-400"></div>
+                    </div>
+                    
                     {result.segments?.map((segment, index) => {
                       const startPercent = (segment.start_time / formatDuration(result.videoDuration)) * 100;
                       const widthPercent = ((segment.end_time - segment.start_time) / formatDuration(result.videoDuration)) * 100;
@@ -220,19 +244,21 @@ export default function SearchResults({
                       const isMatched = confidence > 0;
                       
                       const getSegmentColor = (conf: number) => {
-                        if (conf >= 0.9) return "bg-green-600";
-                        if (conf >= 0.7) return "bg-blue-600";
-                        return "bg-gray-600";
+                        if (conf >= 0.8) return "bg-green-500";
+                        if (conf >= 0.6) return "bg-blue-500";
+                        return "bg-gray-500";
                       };
                       
                       return (
                         <div
                           key={index}
-                          className={`absolute h-full transition-opacity hover:opacity-80 cursor-pointer ${isMatched ? getSegmentColor(confidence) : "bg-gray-400"}`}
+                          className={`absolute h-full transition-all duration-200 hover:shadow-md hover:opacity-100 cursor-pointer rounded-sm ${isMatched ? getSegmentColor(confidence) : "bg-gray-400"}`}
                           style={{
                             left: `${startPercent}%`,
-                            width: `${widthPercent}%`,
-                            opacity: isMatched ? Math.max(0.3, confidence) : 0.3
+                            width: `${Math.max(widthPercent, 1)}%`, /* Ensure minimum width for very short segments */
+                            opacity: isMatched ? Math.max(0.5, confidence) : 0.3,
+                            transform: hoveredSegment?.segmentIndex === index ? 'scaleY(1.1)' : 'scaleY(1)',
+                            zIndex: hoveredSegment?.segmentIndex === index ? 10 : 1,
                           }}
                           onMouseEnter={(e) => {
                             setHoveredSegment({
@@ -255,9 +281,23 @@ export default function SearchResults({
                     })}
                   </div>
                 </div>
-                <div className="mt-1 flex justify-between text-sm text-gray-600">
-                  <span>0:00</span>
-                  <span>{result.videoDuration}</span>
+                <div className="mt-2 flex justify-between items-center">
+                  <span className="text-sm font-medium text-gray-700">0:00</span>
+                  <div className="flex space-x-2">
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-green-100 text-green-800 text-xs font-medium">
+                      <CheckCircleIcon className="h-3 w-3" />
+                      High
+                    </span>
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 text-xs font-medium">
+                      <ExclamationCircleIcon className="h-3 w-3" />
+                      Medium
+                    </span>
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gray-100 text-gray-800 text-xs font-medium">
+                      <QuestionMarkCircleIcon className="h-3 w-3" />
+                      Low
+                    </span>
+                  </div>
+                  <span className="text-sm font-medium text-gray-700">{result.videoDuration}</span>
                 </div>
               </div>
             </div>
@@ -265,7 +305,7 @@ export default function SearchResults({
         </button>
       ))}
     </div>
-  ), [results, showConfidenceScores, formatDuration, handleVideoClick, hoveredSegment, formatTimeDisplay, getConfidenceLevel])
+  ), [results, showConfidenceScores, formatDuration, handleVideoClick, hoveredSegment, formatTimeDisplay, getConfidenceLevel, getConfidenceIcon])
 
   const handleViewChange = useCallback((view: 'clip' | 'video') => {
     setSelectedView(view)

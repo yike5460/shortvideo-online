@@ -401,7 +401,8 @@ async function handleGetIndexStatus(event: APIGatewayProxyEvent): Promise<Lambda
         body: JSON.stringify({ error: 'Missing index parameter' })
       };
     }
-    
+
+    // TODO: Replace the status source from OpenSearch to DynamoDB
     // Query OpenSearch for videos in this index with retry logic
     const { body } = await withRetry(
       async () => openSearch.search({
@@ -852,6 +853,21 @@ async function handlePresignRequest(event: APIGatewayProxyEvent): Promise<Lambda
 
     const uploadUrl = await getSignedUrl(s3 as any, command as any, { expiresIn: 3600 });
 
+    // Record the indexId and videoId in the indexes table
+    await withRetry(
+      async () => docClient.send(new PutCommand({
+        TableName: process.env.INDEXES_TABLE,
+        Item: {
+          indexId: videoIndex,
+          videoId,
+          video_status: 'awaiting_upload' as VideoStatus,
+          updated_at: new Date().toISOString()
+        }
+      })),
+      3,
+      `Record indexId and videoId in indexes table`
+    );
+    
     return {
       statusCode: STATUS_CODES.OK,
       headers: corsHeaders,

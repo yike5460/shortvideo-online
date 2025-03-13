@@ -12,7 +12,7 @@ import {
   GetLabelDetectionCommand,
   GetFaceDetectionCommand,
 } from '@aws-sdk/client-rekognition';
-import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
+import { SQSClient, SendMessageCommand, GetQueueAttributesCommand } from '@aws-sdk/client-sqs';
 import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { Client } from '@opensearch-project/opensearch';
 import { defaultProvider } from '@aws-sdk/credential-provider-node';
@@ -24,9 +24,15 @@ import * as fs from 'fs';
 // path module for handling file paths and directories
 import * as path from 'path';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { DynamoDBDocumentClient, PutCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 
 const rekognition = new RekognitionClient({});
 const sqs = new SQSClient({});
+const getQueueAttributesCommand = new GetQueueAttributesCommand({
+  QueueUrl: process.env.VIDEO_SLICING_QUEUE_URL,
+  AttributeNames: ['ApproximateNumberOfMessages', 'ApproximateNumberOfMessagesNotVisible']
+});
 const s3 = new S3Client({});
 const openSearch = new Client({
   ...AwsSigv4Signer({
@@ -39,6 +45,9 @@ const openSearch = new Client({
   }),
   node: process.env.OPENSEARCH_ENDPOINT
 });
+const dynamoClient = new DynamoDBClient({endpoint: process.env.INDEXES_TABLE_DYNAMODB_DNS_NAME});
+const docClient = DynamoDBDocumentClient.from(dynamoClient);
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token',
@@ -126,7 +135,7 @@ export const handler = async (event: S3Event | SNSEvent | SQSEvent, _context: La
     //  ]
     // }
     if ('Records' in event && 'eventSource' in event.Records[0] && event.Records[0].eventSource === 'aws:sqs') {
-      return handleVideoSlicingEvent(event as unknown as SQSEvent);
+      return handleSQSEvent(event as unknown as SQSEvent);
     }
 
     return {
@@ -425,7 +434,7 @@ async function handleSNSEvent(event: SNSEvent): Promise<LambdaResponse> {
   };
 }
 
-async function handleVideoSlicingEvent(event: SQSEvent): Promise<LambdaResponse> {
+async function handleSQSEvent(event: SQSEvent): Promise<LambdaResponse> {
   try {
     // Parse the SQS message body
     const { videoIndex, videoId, segment, originalVideoKey, segmentNumber } = JSON.parse(event.Records[0].body);
@@ -449,7 +458,39 @@ async function handleVideoSlicingEvent(event: SQSEvent): Promise<LambdaResponse>
     if (slicedSegments) {
       await updateVideoSegments(videoIndex, videoId, [slicedSegments]);
     }
+
+    // Check if there are still SQS messages left in the queue
+    const queueAttributes = await sqs.send(getQueueAttributesCommand);
+    const messagesInQueue = parseInt(queueAttributes.Attributes?.ApproximateNumberOfMessages || '0') || 0;
+    const messagesInFlight = parseInt(queueAttributes.Attributes?.ApproximateNumberOfMessagesNotVisible || '0') || 0;
+    const totalMessages = messagesInQueue + messagesInFlight;
     
+    console.log(`Messages in queue: ${messagesInQueue}, Messages in flight: ${messagesInFlight}`);
+    
+    // If there are no more messages in the queue, update the indexes table
+    if (totalMessages <= 1) { // 1 means only the current message (which is being processed)
+      console.log(`No more messages for video ${videoId} in queue, updating indexes table`);
+      
+      // Record the indexId and videoId in the indexes table
+      await withRetry(
+        async () => docClient.send(new PutCommand({
+          TableName: process.env.INDEXES_TABLE,
+          Item: {
+            indexId: videoIndex,
+            videoId,
+            video_status: 'ready_for_video_embed' as VideoStatus,
+            updated_at: new Date().toISOString()
+          }
+        })),
+        3,
+        `Record indexId and videoId in indexes table`
+      );
+
+      console.log(`Successfully updated index status for video ${videoId} in index ${videoIndex}`);
+    } else {
+      console.log(`Still ${totalMessages - 1} messages in queue for video ${videoId}, not updating indexes table yet`);
+    }
+
     return {
       statusCode: STATUS_CODES.OK,
       headers: corsHeaders,
@@ -591,6 +632,22 @@ async function sendSegmentSlicingRequest(videoIndex: string, videoId: string, se
     } catch (error) {
       console.error('Error sending segment slicing request:', error, " for the segment:", segment);
     }
+
+    // Record the indexId and videoId in the indexes table
+    await withRetry(
+      async () => docClient.send(new PutCommand({
+        TableName: process.env.INDEXES_TABLE,
+        Item: {
+          indexId: videoIndex,
+          videoId,
+          video_status: 'ready_for_shots' as VideoStatus,
+          updated_at: new Date().toISOString()
+        }
+      })),
+      3,
+      `Record indexId and videoId in indexes table`
+    );
+
   }
 }
 
@@ -1168,6 +1225,21 @@ async function updateVideoLabels(videoIndex: string, videoId: string, labels: an
     });
     console.log(`Successfully updated video labels for video ${videoId} in index ${videoIndex}`);
 
+    // Record the indexId and videoId in the indexes table
+    await withRetry(
+      async () => docClient.send(new PutCommand({
+        TableName: process.env.INDEXES_TABLE,
+        Item: {
+          indexId: videoIndex,
+          videoId,
+          video_status: 'ready_for_object' as VideoStatus,
+          updated_at: new Date().toISOString()
+        }
+      })),
+      3,
+      `Record indexId and videoId in indexes table`
+    );
+
   } catch (error) {
     console.error(`Error updating video labels for video ${videoId}:`, error);
     throw error;
@@ -1234,6 +1306,21 @@ async function updateVideoFaces(videoIndex: string, videoId: string, faces: any[
       }
     });
     console.log(`Successfully updated video faces for video ${videoId} in index ${videoIndex}`);
+
+    // Record the indexId and videoId in the indexes table
+    await withRetry(
+      async () => docClient.send(new PutCommand({
+        TableName: process.env.INDEXES_TABLE,
+        Item: {
+          indexId: videoIndex,
+          videoId,
+          video_status: 'ready_for_face' as VideoStatus,
+          updated_at: new Date().toISOString()
+        }
+      })),
+      3,
+      `Record indexId and videoId in indexes table`
+    );
 
   } catch (error) {
     console.error(`Error updating video faces for video ${videoId}:`, error);

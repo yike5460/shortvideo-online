@@ -134,109 +134,6 @@ async function generateEmbedding(text: string): Promise<number[] | undefined> {
   }
 }
 
-// Update the buildSearchQuery function to support semantic search with embeddings
-const buildSearchQuery = (searchQuery: SearchQuery): OpenSearchQuery => {
-  console.log('Building search query:', JSON.stringify(searchQuery, null, 2));
-
-  const searchTerm = searchQuery.searchQuery.trim();
-  
-  // Simple query that should work with most OpenSearch configurations
-  const searchBody: OpenSearchQuery = {
-    size: searchQuery.topK || 3, // Limit to 3 results by default
-    _source: [
-      'video_id',
-      'video_title',
-      'video_description',
-      'video_preview_url',
-      'video_s3_path',
-      'video_duration',
-      'video_source',
-      'video_thumbnail_s3_path',
-      'video_thumbnail_url',
-      'created_at',
-      'video_type',
-      'video_status',
-      'video_size',
-      // Only include essential segment data
-      'video_segments.segment_id',
-      'video_segments.start_time',
-      'video_segments.end_time',
-      'video_segments.duration',
-      'video_segments.segment_visual.segment_visual_embedding'
-    ],
-    query: {
-      bool: {
-        must: [
-          // Filter for valid statuses
-          {
-            bool: {
-              should: [
-                { term: { video_status: 'ready' } },
-                { term: { video_status: 'ready_for_face' } },
-                { term: { video_status: 'ready_for_object' } },
-                { term: { video_status: 'ready_for_shots' } },
-                { term: { video_status: 'ready_for_video_embed' } },
-                { term: { video_status: 'ready_for_audio_embed' } }
-              ],
-              minimum_should_match: 1
-            }
-          }
-        ],
-        must_not: [
-          { term: { video_status: 'deleted' } }
-        ],
-        should: [
-          // Simple match on title with high boost
-          {
-            match: {
-              "video_title": {
-                query: searchTerm,
-                boost: 3.0
-              }
-            }
-          },
-          // Match on description with lower boost
-          {
-            match: {
-              "video_description": {
-                query: searchTerm,
-                boost: 1.0
-              }
-            }
-          },
-          // Prefix match for partial matches
-          {
-            prefix: {
-              "video_title": {
-                value: searchTerm.toLowerCase(),
-                boost: 2.0
-              }
-            }
-          }
-        ],
-        minimum_should_match: 1 // Require at least one match
-      }
-    }
-  };
-
-  console.log('Generated search body:', JSON.stringify(searchBody, null, 2));
-  return searchBody;
-};
-
-// Optimize the test query to return less data
-const getTestQuery = (indexName: string) => ({
-  index: indexName,
-  body: {
-    size: 3, // Limit to 3 results for testing
-    query: { match_all: {} },
-    _source: [
-      'video_id',
-      'video_title',
-      'video_status'
-    ]
-  }
-});
-
 // Update the transform function to normalize OpenSearch confidence scores, such score is relative and per index and per query, calculated using TF-IDF by default
 const transformSearchResults = async (hits: any[]): Promise<VideoResult[]> => {
   console.log('Transforming search results:', JSON.stringify(hits, null, 2));
@@ -436,7 +333,16 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
                 knn: {
                   "video_segments.segment_visual.segment_visual_embedding": {
                     vector: embedding,
-                    k: 50  // Number of nearest neighbors to find
+                    // Number of nearest neighbors to find
+                    k: 20,
+                    // Filter's Preemptive Effect: acts before the k-NN algorithm even selects the top k neighbors
+                    // filter: {
+                    //   range: {
+                    //     _score: {
+                    //       gte: searchQuery.minConfidence || 0 // Apply minConfidence filter
+                    //     }
+                    //   }
+                    // }
                   }
                 }
               },
@@ -451,7 +357,7 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
                   "segment_video_thumbnail_s3_path",
                   "segment_video_thumbnail_url"
                 ],
-                size: 5,
+                size: 10,
                 name: "matched_segments"
               }
             }
@@ -472,7 +378,9 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
               ],
               minimum_should_match: 1
             }
-          }
+          },
+          // The top-level min_score operates on the overall document score and is often redundant when used in conjunction with a knn filter
+          // min_score: searchQuery.minConfidence || 0
         };
 
         // console.log("Generated k-NN search body: ", JSON.stringify(searchBody, null, 4));
@@ -488,10 +396,24 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
           // Transform results to match VideoResult interface
           const results: VideoResult[] = await transformSearchResults(body.hits.hits);
           
+          // Apply minConfidence filtering in post-processing
+          let filteredResults = results;
+          
+          if (searchQuery.minConfidence > 0) {
+            // Filter segments based on confidence score
+            filteredResults = results.map(result => ({
+              ...result,
+              segments: result.segments.filter(segment => (segment.confidence || 0) >= searchQuery.minConfidence)
+            }));
+            
+            // Only keep videos that still have at least one segment after filtering
+            filteredResults = filteredResults.filter(result => result.segments.length > 0);
+          }
+          
           return {
             statusCode: STATUS_CODES.OK,
             headers: corsHeaders,
-            body: JSON.stringify(results)
+            body: JSON.stringify(filteredResults)
           };
         } catch (searchError) {
           console.error("k-NN search error:", searchError);
@@ -507,32 +429,10 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
     }
     
     // If we reach here, either advanced search is not enabled or embedding generation failed
-    // Proceed with basic search
-    
-    // Build and execute the search with limited results
-    const searchBody = buildSearchQuery(searchQuery);
-
-    const { body } = await openSearch.search({
-      index: searchQuery.selectedIndex,
-      body: searchBody
-    });
-
-    // Log only the count and IDs of results to avoid large logs
-    console.log(`Search returned ${body.hits.total.value} results`);
-    console.log('Result IDs:', body.hits.hits.map((hit: any) => hit._id));
-
-    // Transform results to match VideoResult interface with limited data
-    const results: VideoResult[] = await transformSearchResults(body.hits.hits);
-
-    // Cache results, skip the redis cache for now
-    // await redisClient.set(cacheKey, JSON.stringify(results), {
-    //   EX: 3600 // 1 hour
-    // });
-
     return {
-      statusCode: STATUS_CODES.OK,
+      statusCode: STATUS_CODES.INTERNAL_SERVER_ERROR,
       headers: corsHeaders,
-      body: JSON.stringify(results)
+      body: JSON.stringify({ error: 'Failed to generate embedding for advanced search, consider to fallback to basic search' })
     };
 
   } catch (error) {
@@ -550,4 +450,4 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
     //   await redisClient.disconnect();
     // }
   }
-}; 
+};

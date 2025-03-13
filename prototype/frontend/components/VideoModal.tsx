@@ -329,9 +329,9 @@ export default function VideoModal({ video, isOpen, onClose, viewMode = 'play', 
                                         {/* Only show confidence for selected segment */}
                                         {isActiveSegment && segment.confidence !== undefined && (
                                           <div className={`px-2 py-1 rounded-md text-sm font-medium ${
-                                            segment.confidence >= 0.9 
+                                            segment.confidence >= 0.8 
                                               ? 'bg-green-100 text-green-800' 
-                                              : segment.confidence >= 0.7 
+                                              : segment.confidence >= 0.6
                                                 ? 'bg-blue-100 text-blue-800' 
                                                 : 'bg-gray-100 text-gray-800'
                                           }`}>
