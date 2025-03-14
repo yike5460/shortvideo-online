@@ -3,24 +3,9 @@
 import { createContext, useContext, useReducer, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { AuthState, LoginCredentials, RegisterCredentials, User, Session } from '@/types/auth'
+import { cognitoClient, CognitoSessionData } from './cognitoClient'
 
-// Test account credentials
-const TEST_ACCOUNT = {
-  email: 'test@example.com',
-  password: 'password123',
-}
-
-// Mock user data
-const MOCK_USER: User = {
-  id: 'test-user-id',
-  email: TEST_ACCOUNT.email,
-  createdAt: new Date().toISOString(),
-  lastLogin: new Date().toISOString(),
-  verificationStatus: true,
-  twoFactorEnabled: false,
-}
-
-// Add session storage key
+// Session storage key
 const SESSION_STORAGE_KEY = 'video_search_session'
 
 // Add these types at the top of the file
@@ -83,33 +68,50 @@ const initialState: AuthState = {
 
 export const AuthContext = createContext<{
   state: AuthState
-  login: (credentials: any) => Promise<void>
+  login: (credentials: LoginCredentials) => Promise<void>
   logout: () => Promise<void>
-  register: (credentials: any) => Promise<void>
+  register: (credentials: RegisterCredentials) => Promise<void>
+  confirmRegistration: (email: string, code: string) => Promise<void>
   resendVerification: () => Promise<void>
+  forgotPassword: (email: string) => Promise<void>
+  confirmPassword: (email: string, code: string, newPassword: string) => Promise<void>
 }>({
   state: initialState,
   login: async () => {},
   logout: async () => {},
   register: async () => {},
-  resendVerification: async () => {}
+  confirmRegistration: async () => {},
+  resendVerification: async () => {},
+  forgotPassword: async () => {},
+  confirmPassword: async () => {}
 })
-
-// Mock API delay
-const mockApiDelay = () => new Promise(resolve => setTimeout(resolve, 500))
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(authReducer, initialState)
   const router = useRouter()
 
-  // Load session from storage on mount
+  // Load session from Cognito on mount
   useEffect(() => {
-    const loadSession = () => {
+    const loadSession = async () => {
       try {
-        const savedSession = sessionStorage.getItem(SESSION_STORAGE_KEY)
-        if (savedSession) {
-          const { session, user } = JSON.parse(savedSession)
-          dispatch({ type: 'SET_SESSION', payload: { session, user } })
+        dispatch({ type: 'SET_LOADING', payload: true })
+        const result = await cognitoClient.getCurrentSession()
+        
+        if (result) {
+          dispatch({ 
+            type: 'SET_SESSION', 
+            payload: { 
+              session: result.session,
+              user: {
+                id: result.user.sub || '',
+                email: result.user.email || '',
+                createdAt: result.user['custom:created_at'] || new Date().toISOString(),
+                lastLogin: new Date().toISOString(),
+                verificationStatus: result.user.email_verified === 'true',
+                twoFactorEnabled: false
+              }
+            } 
+          })
         }
       } catch (error) {
         console.error('Error loading session:', error)
@@ -121,32 +123,57 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     loadSession()
   }, [])
 
-  const login = async (credentials: any) => {
+  const login = async (credentials: LoginCredentials) => {
     try {
       dispatch({ type: 'SET_LOADING', payload: true })
       
-      // Mock successful login for test@example.com
-      if (credentials.email === 'test@example.com' && credentials.password === 'password123') {
-        const session = { token: 'mock-token' }
-        const user = { email: credentials.email }
-        
-        // Save to session storage
-        sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({ session, user }))
-        
-        dispatch({ type: 'SET_SESSION', payload: { session, user } })
-        router.push('/')
+      const result = await cognitoClient.signIn(credentials.email, credentials.password)
+      
+      // Map Cognito user data to our User type
+      const user: User = {
+        id: result.user.sub || result.user.username || '',
+        email: credentials.email,
+        createdAt: result.user['custom:created_at'] || new Date().toISOString(),
+        lastLogin: new Date().toISOString(),
+        verificationStatus: result.user.email_verified === 'true',
+        twoFactorEnabled: false
+      }
+      
+      // Save session to storage for persistence across page refreshes
+      sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({ 
+        session: result.session,
+        user
+      }))
+      
+      dispatch({ 
+        type: 'SET_SESSION', 
+        payload: { session: result.session, user } 
+      })
+      
+      router.push('/')
+    } catch (error: any) {
+      let errorMessage = 'Invalid email or password'
+      
+      if (error.code === 'UserNotConfirmedException') {
+        dispatch({ 
+          type: 'SET_VERIFICATION', 
+          payload: { 
+            verificationRequired: true, 
+            registrationEmail: credentials.email 
+          } 
+        })
+        router.push('/auth/verify-email')
         return
       }
-
-      throw new Error('Invalid credentials')
-    } catch (error) {
-      dispatch({ type: 'SET_ERROR', payload: 'Invalid email or password' })
+      
+      dispatch({ type: 'SET_ERROR', payload: errorMessage })
     } finally {
       dispatch({ type: 'SET_LOADING', payload: false })
     }
   }
 
   const logout = async () => {
+    cognitoClient.signOut()
     sessionStorage.removeItem(SESSION_STORAGE_KEY)
     dispatch({ type: 'CLEAR_SESSION' })
     router.push('/landing')
@@ -156,15 +183,43 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       dispatch({ type: 'SET_LOADING', payload: true })
 
-      await mockApiDelay()
+      await cognitoClient.signUp(credentials.email, credentials.password)
+      
+      dispatch({ 
+        type: 'SET_VERIFICATION', 
+        payload: { 
+          verificationRequired: true, 
+          registrationEmail: credentials.email 
+        } 
+      })
 
-      // Simulate sending verification email
-      dispatch({ type: 'SET_VERIFICATION', payload: { verificationRequired: true, registrationEmail: credentials.email } })
-
-      // Show verification required message
       router.push('/auth/verify-email')
-    } catch (error) {
-      dispatch({ type: 'SET_ERROR', payload: error instanceof Error ? error.message : 'An error occurred' })
+    } catch (error: any) {
+      let errorMessage = 'Registration failed'
+      
+      if (error.code === 'UsernameExistsException') {
+        errorMessage = 'An account with this email already exists'
+      } else if (error.message) {
+        errorMessage = error.message
+      }
+      
+      dispatch({ type: 'SET_ERROR', payload: errorMessage })
+    } finally {
+      dispatch({ type: 'SET_LOADING', payload: false })
+    }
+  }
+
+  const confirmRegistration = async (email: string, code: string) => {
+    try {
+      dispatch({ type: 'SET_LOADING', payload: true })
+      
+      await cognitoClient.confirmRegistration(email, code)
+      
+      // After confirmation, redirect to login
+      router.push('/landing?verified=true')
+    } catch (error: any) {
+      const errorMessage = error.message || 'Failed to verify account'
+      dispatch({ type: 'SET_ERROR', payload: errorMessage })
     } finally {
       dispatch({ type: 'SET_LOADING', payload: false })
     }
@@ -172,23 +227,74 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const resendVerification = async () => {
     try {
+      if (!state.registrationEmail) {
+        throw new Error('Email address is missing')
+      }
+      
       dispatch({ type: 'SET_LOADING', payload: true })
       
-      await mockApiDelay()
+      await cognitoClient.resendVerificationCode(state.registrationEmail)
+      
+      dispatch({ 
+        type: 'SET_VERIFICATION', 
+        payload: { 
+          error: 'Verification email resent. Please check your inbox.' 
+        } 
+      })
+    } catch (error: any) {
+      const errorMessage = error.message || 'Failed to resend verification email'
+      dispatch({ type: 'SET_ERROR', payload: errorMessage })
+    } finally {
+      dispatch({ type: 'SET_LOADING', payload: false })
+    }
+  }
 
-      dispatch({ type: 'SET_VERIFICATION', payload: { error: 'Verification email resent. Please check your inbox.' } })
-    } catch (error) {
-      dispatch({ type: 'SET_ERROR', payload: error instanceof Error ? error.message : 'Failed to resend verification email' })
+  const forgotPassword = async (email: string) => {
+    try {
+      dispatch({ type: 'SET_LOADING', payload: true })
+      
+      await cognitoClient.forgotPassword(email)
+      
+      // Navigate to reset password page with email in query
+      router.push(`/auth/reset-password?email=${encodeURIComponent(email)}`)
+    } catch (error: any) {
+      const errorMessage = error.message || 'Failed to process password reset'
+      dispatch({ type: 'SET_ERROR', payload: errorMessage })
+    } finally {
+      dispatch({ type: 'SET_LOADING', payload: false })
+    }
+  }
+
+  const confirmPassword = async (email: string, code: string, newPassword: string) => {
+    try {
+      dispatch({ type: 'SET_LOADING', payload: true })
+      
+      await cognitoClient.confirmPassword(email, code, newPassword)
+      
+      // Navigate to login with reset success message
+      router.push('/landing?reset=true')
+    } catch (error: any) {
+      const errorMessage = error.message || 'Failed to reset password'
+      dispatch({ type: 'SET_ERROR', payload: errorMessage })
     } finally {
       dispatch({ type: 'SET_LOADING', payload: false })
     }
   }
 
   return (
-    <AuthContext.Provider value={{ state, login, logout, register, resendVerification }}>
+    <AuthContext.Provider value={{ 
+      state, 
+      login, 
+      logout, 
+      register, 
+      confirmRegistration,
+      resendVerification,
+      forgotPassword,
+      confirmPassword
+    }}>
       {children}
     </AuthContext.Provider>
   )
 }
 
-export const useAuth = () => useContext(AuthContext) 
+export const useAuth = () => useContext(AuthContext)

@@ -15,6 +15,7 @@ import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as sns from 'aws-cdk-lib/aws-sns';
 import * as sns_subs from 'aws-cdk-lib/aws-sns-subscriptions';
+import * as cognito from 'aws-cdk-lib/aws-cognito';
 import { Construct } from 'constructs';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import * as nodejslambda from 'aws-cdk-lib/aws-lambda-nodejs';
@@ -40,6 +41,9 @@ export class VideoSearchStack extends cdk.Stack {
   private readonly dynamodbEndpoint: ec2.InterfaceVpcEndpoint;
   private readonly videoEmbeddingService: ecs.FargateService;
   private readonly externalVideoEmbeddingEndpoint: string;
+  private readonly userPool: cognito.UserPool;
+  private readonly userPoolClient: cognito.UserPoolClient;
+  private readonly identityPool: cognito.CfnIdentityPool;
   constructor(scope: Construct, id: string, props: VideoSearchStackProps) {
     super(scope, id, props);
 
@@ -51,6 +55,12 @@ export class VideoSearchStack extends cdk.Stack {
     this.vpc = vpc;
     this.dynamodbEndpoint = dynamodbEndpoint;
     this.videoBucket = this.createStorageInfrastructure(deploymentEnv);
+    
+    // Create Cognito resources for authentication
+    const { userPool, userPoolClient, identityPool } = this.createCognitoResources(deploymentEnv);
+    this.userPool = userPool;
+    this.userPoolClient = userPoolClient;
+    this.identityPool = identityPool;
     this.indexesTable = new dynamodb.Table(this, 'IndexesTable', {
       partitionKey: { name: 'indexId', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'videoId', type: dynamodb.AttributeType.STRING },
@@ -1251,6 +1261,114 @@ export class VideoSearchStack extends cdk.Stack {
       value: `https://${this.openSearchCollection.attrId}.${this.region}.aoss.amazonaws.com`,
       description: 'OpenSearch Serverless collection endpoint',
     });
+
+    new cdk.CfnOutput(this, 'UserPoolId', {
+      value: this.userPool.userPoolId,
+      description: 'Cognito User Pool ID',
+    });
+    
+    new cdk.CfnOutput(this, 'UserPoolClientId', {
+      value: this.userPoolClient.userPoolClientId,
+      description: 'Cognito User Pool Client ID',
+    });
+    
+    new cdk.CfnOutput(this, 'IdentityPoolId', {
+      value: this.identityPool.ref,
+      description: 'Cognito Identity Pool ID',
+    });
+  }
+
+  private createCognitoResources(stage: string): { 
+    userPool: cognito.UserPool; 
+    userPoolClient: cognito.UserPoolClient; 
+    identityPool: cognito.CfnIdentityPool;
+  } {
+    // Create user pool with email verification
+    const userPool = new cognito.UserPool(this, 'VideoSearchUserPool', {
+      userPoolName: `video-search-user-pool-${stage}`,
+      selfSignUpEnabled: true,
+      autoVerify: { email: true },
+      standardAttributes: {
+        email: {
+          required: true,
+          mutable: true,
+        },
+      },
+      passwordPolicy: {
+        minLength: 8,
+        requireLowercase: true,
+        requireUppercase: true,
+        requireDigits: true,
+        requireSymbols: true,
+      },
+      accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
+      removalPolicy: cdk.RemovalPolicy.DESTROY, // For development
+    });
+    
+    // Add app client
+    const userPoolClient = userPool.addClient('app-client', {
+      authFlows: {
+        userPassword: true,
+        userSrp: true,
+      },
+      oAuth: {
+        flows: {
+          implicitCodeGrant: true,
+        },
+        callbackUrls: ['http://localhost:3000/auth/callback'],
+        logoutUrls: ['http://localhost:3000/'],
+      },
+    });
+
+    // Create identity pool for AWS credentials
+    const identityPool = new cognito.CfnIdentityPool(this, 'VideoSearchIdentityPool', {
+      identityPoolName: `video_search_identity_pool_${stage}`,
+      allowUnauthenticatedIdentities: false,
+      cognitoIdentityProviders: [
+        {
+          clientId: userPoolClient.userPoolClientId,
+          providerName: userPool.userPoolProviderName,
+        },
+      ],
+    });
+    
+    // Set up roles for authenticated users
+    const authenticatedRole = new iam.Role(this, 'CognitoAuthenticatedRole', {
+      assumedBy: new iam.FederatedPrincipal(
+        'cognito-identity.amazonaws.com',
+        {
+          StringEquals: {
+            'cognito-identity.amazonaws.com:aud': identityPool.ref,
+          },
+          'ForAnyValue:StringLike': {
+            'cognito-identity.amazonaws.com:amr': 'authenticated',
+          },
+        },
+        'sts:AssumeRoleWithWebIdentity'
+      ),
+    });
+    
+    // Add permissions for authenticated users (S3, API calls, etc.)
+    authenticatedRole.addToPolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ['s3:GetObject', 's3:PutObject'],
+        resources: [
+          `${this.videoBucket.bucketArn}/RawVideos/*`,
+          `${this.videoBucket.bucketArn}/ProcessedVideos/*`,
+        ],
+      })
+    );
+    
+    // Attach roles to identity pool
+    new cognito.CfnIdentityPoolRoleAttachment(this, 'IdentityPoolRoleAttachment', {
+      identityPoolId: identityPool.ref,
+      roles: {
+        authenticated: authenticatedRole.roleArn,
+      },
+    });
+    
+    return { userPool, userPoolClient, identityPool };
   }
 
   private updateOpenSearchPolicies(stage: string, lambdaFunctions: {

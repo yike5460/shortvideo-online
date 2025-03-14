@@ -62,7 +62,10 @@ export default function LoginForm() {
         </div>
 
         <div className="text-sm">
-          <a href="#" className="font-medium text-indigo-600 hover:text-indigo-500">
+          <a 
+            href="/auth/forgot-password" 
+            className="font-medium text-indigo-600 hover:text-indigo-500"
+          >
             Forgot password?
           </a>
         </div>
@@ -83,4 +86,4 @@ export default function LoginForm() {
       </button>
     </form>
   )
-} 
+}
