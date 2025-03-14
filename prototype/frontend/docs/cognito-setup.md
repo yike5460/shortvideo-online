@@ -67,6 +67,47 @@ The application uses Amazon Cognito for user authentication with the following f
 4. User enters the verification code and new password
 5. Upon successful password reset, the user is redirected to the login page
 
+## Environment Configuration
+
+The Cognito setup includes environment-aware configuration for callback and logout URLs:
+
+### Development vs Production URLs
+
+The CDK stack automatically configures appropriate callback and logout URLs based on the deployment environment:
+
+```typescript
+// Determine the appropriate callback and logout URLs based on the deployment stage
+const isDev = stage === 'dev';
+
+// Default development URLs
+let callbackUrls = ['http://localhost:3000/auth/callback'];
+let logoutUrls = ['http://localhost:3000/'];
+
+// For production or staging, add appropriate domain URLs
+if (!isDev) {
+  const appDomain = process.env.APP_DOMAIN || 'yourdomain.com';
+  callbackUrls = [
+    ...callbackUrls,
+    `https://${appDomain}/auth/callback`
+  ];
+  logoutUrls = [
+    ...logoutUrls,
+    `https://${appDomain}/`
+  ];
+}
+```
+
+### Setting the App Domain
+
+For production deployments, specify the application domain using CDK context parameters:
+
+```bash
+# For production
+cdk deploy VideoSearchStack --context appDomain=youractualdomain.com --context deploymentEnvironment=prod
+```
+
+This is consistent with other CDK context parameters used in the stack, such as the `externalVideoEmbeddingEndpoint`.
+
 ## Security Considerations
 
 - The authentication tokens are stored in the browser's session storage
@@ -74,6 +115,9 @@ The application uses Amazon Cognito for user authentication with the following f
 - Sensitive operations require re-authentication
 - API calls are secured with IAM policies
 - S3 access is controlled via Cognito Identity Pool
+- Authenticated users have specific permissions:
+  - Read/Write access to specific S3 bucket paths for video uploads and processing
+  - Access to API Gateway endpoints for video search and processing
 
 ## Common Issues and Troubleshooting
 

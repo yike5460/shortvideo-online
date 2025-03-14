@@ -26,6 +26,7 @@ interface VideoSearchStackProps extends cdk.StackProps {
   maxAzs: number;
   deploymentEnvironment?: string;
   externalVideoEmbeddingEndpoint?: string;
+  appDomain?: string;
 }
 
 export class VideoSearchStack extends cdk.Stack {
@@ -41,6 +42,7 @@ export class VideoSearchStack extends cdk.Stack {
   private readonly dynamodbEndpoint: ec2.InterfaceVpcEndpoint;
   private readonly videoEmbeddingService: ecs.FargateService;
   private readonly externalVideoEmbeddingEndpoint: string;
+  private readonly appDomain?: string;
   private readonly userPool: cognito.UserPool;
   private readonly userPoolClient: cognito.UserPoolClient;
   private readonly identityPool: cognito.CfnIdentityPool;
@@ -48,6 +50,7 @@ export class VideoSearchStack extends cdk.Stack {
     super(scope, id, props);
 
     this.externalVideoEmbeddingEndpoint = props.externalVideoEmbeddingEndpoint || '';
+    this.appDomain = props.appDomain;
     const deploymentEnv = props.deploymentEnvironment || 'dev';
 
     // Initialize core infrastructure in correct order
@@ -1305,6 +1308,25 @@ export class VideoSearchStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY, // For development
     });
     
+    // Determine the appropriate callback and logout URLs based on the deployment stage
+    const isDev = stage === 'dev';
+    
+    // Default development URLs
+    let callbackUrls = ['http://localhost:3000/auth/callback'];
+    let logoutUrls = ['http://localhost:3000/'];
+    
+    // For production or staging, add appropriate domain URLs
+    if (!isDev && this.appDomain) {
+      callbackUrls = [
+        ...callbackUrls,
+        `https://${this.appDomain}/auth/callback`
+      ];
+      logoutUrls = [
+        ...logoutUrls,
+        `https://${this.appDomain}/`
+      ];
+    }
+    
     // Add app client
     const userPoolClient = userPool.addClient('app-client', {
       authFlows: {
@@ -1315,8 +1337,8 @@ export class VideoSearchStack extends cdk.Stack {
         flows: {
           implicitCodeGrant: true,
         },
-        callbackUrls: ['http://localhost:3000/auth/callback'],
-        logoutUrls: ['http://localhost:3000/'],
+        callbackUrls: callbackUrls,
+        logoutUrls: logoutUrls,
       },
     });
 
