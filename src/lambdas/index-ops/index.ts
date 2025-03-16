@@ -147,7 +147,6 @@ async function handleGetIndex(event: APIGatewayProxyEvent): Promise<APIGatewayPr
       const videoIdToSegmentVisualEmbedding = {};
       searchResult.hits.hits.forEach((hit: OpenSearchHit) => {
         const videoId = hit._source.video_id;
-        console.log('videoId: ', videoId, 'array video_segments: ', hit._source.video_segments);
         // Iterate the video_segments and add proper null checks with optional chaining
         hit._source.video_segments.forEach((segment: any) => {
           if (segment.segment_visual?.segment_visual_embedding && 
@@ -173,17 +172,21 @@ async function handleGetIndex(event: APIGatewayProxyEvent): Promise<APIGatewayPr
         }
       });
 
-      // Log the vector value only per videoId
-      console.log('videoIdToSegmentVisualEmbedding: ', videoIdToSegmentVisualEmbedding);
-      console.log('segmentVisualEmbeddingCount: ', segmentVisualEmbeddingCount);
-      
       // Summarize the detailed information of the index
       const indexSummary = {
         indexId,
         videoCount: searchResult.hits.total.value,
-        segmentVisualEmbeddingCount
+        segmentVisualEmbeddingCount,
+        videoIdToSegmentVisualEmbedding: {}
       };
-      
+
+      // Parse the option to display detailed vector, curl https://url/indexes/<indexId> -H "displayDetailedVector: true"
+      const displayDetailedVector = event.queryStringParameters?.displayDetailedVector;
+      if (displayDetailedVector) {
+        console.log('videoIdToSegmentVisualEmbedding: ', videoIdToSegmentVisualEmbedding);
+        indexSummary.videoIdToSegmentVisualEmbedding = videoIdToSegmentVisualEmbedding;
+      }
+
       return {
         statusCode: STATUS_CODES.OK,
         headers: corsHeaders,
