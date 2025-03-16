@@ -182,7 +182,7 @@ async function handleGetIndex(event: APIGatewayProxyEvent): Promise<APIGatewayPr
 
       // Parse the option to display detailed vector, curl https://url/indexes/<indexId> -H "displayDetailedVector: true"
       const displayDetailedVector = event.queryStringParameters?.displayDetailedVector;
-      if (displayDetailedVector) {
+      if (displayDetailedVector === 'true') {
         console.log('videoIdToSegmentVisualEmbedding: ', videoIdToSegmentVisualEmbedding);
         indexSummary.videoIdToSegmentVisualEmbedding = videoIdToSegmentVisualEmbedding;
       }
