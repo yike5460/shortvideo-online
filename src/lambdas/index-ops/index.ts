@@ -11,6 +11,7 @@ import { Client } from '@opensearch-project/opensearch';
 import { defaultProvider } from '@aws-sdk/credential-provider-node';
 import { AwsSigv4Signer } from '@opensearch-project/opensearch/aws';
 import { v4 as uuidv4 } from 'uuid';
+import { OpenSearchHit } from '../../types/common';
 
 // Initialize clients
 const dynamoClient = new DynamoDBClient({endpoint: process.env.INDEXES_TABLE_DYNAMODB_DNS_NAME});
@@ -93,34 +94,102 @@ async function handleGetIndex(event: APIGatewayProxyEvent): Promise<APIGatewayPr
   console.log('Getting index with event: ', event);
   const indexId = event.pathParameters?.indexId;
   
-  // If indexId is provided, get specific index
+  // If indexId is provided, return the detailed information of the index, including the vector inside the indexId per videoId
   if (indexId) {
     try {
-      // First let's get a dummy videoId entry to get the index information
-      // In a production environment, you'd want to use a Query with a condition on just the partition key
-      const result = await docClient.send(new ScanCommand({
-        TableName: process.env.INDEXES_TABLE,
-        FilterExpression: 'indexId = :indexId',
-        ExpressionAttributeValues: {
-          ':indexId': indexId
-        },
-        Limit: 1
-      }));
-      
-      if (!result.Items || result.Items.length === 0) {
-        return {
-          statusCode: STATUS_CODES.NOT_FOUND,
-          headers: corsHeaders,
-          body: JSON.stringify({ error: 'Index not found' })
-        };
-      }
-      console.log('Index found:', result.Items[0]);
+      // First get all the videoId in the index
 
+      // Get all the videoId from the search result
+      // The raw schema like:
+      // "took": 42,
+      // "timed_out": false,
+      // "_shards": {
+      //   "total": 0,
+      //   "successful": 0,
+      //   "skipped": 0,
+      //   "failed": 0
+      // },
+      // "hits": {
+      //   "total": {
+      //     "value": 2,
+      //     "relation": "eq"
+      //   },
+      //   "max_score": 1,
+      //   "hits": [
+      //     {
+      //       "_index": "test38",
+      //       "_id": "1%3A0%3AE5Ddk5UB007fNqCqMIEw",
+      //       "_score": 1,
+      //       "_source": {
+      //         "video_index": "test38",
+      //         "video_id": "95af47df-d9a7-4f4b-b389-843777a4fd4b",
+      //         "video_segments": [
+      //           {
+      //             "segment_visual": {
+      //               "segment_visual_embedding": [0.1, 0.2, 0.3]
+      //             }
+      //           }
+      //         ]
+      //       }
+      //     }
+      //    ...
+      //   ]
+      // }
+
+      const { body: searchResult } = await openSearch.search({
+        index: indexId,
+        body: {
+          query: { match_all: {} }
+        }
+      });
+
+      // Check if the segment_visual_embedding is not null and the dimension is 2048, set to actual value if true, otherwise set to 0
+      const videoIdToSegmentVisualEmbedding = {};
+      searchResult.hits.hits.forEach((hit: OpenSearchHit) => {
+        const videoId = hit._source.video_id;
+        console.log('videoId: ', videoId, 'array video_segments: ', hit._source.video_segments);
+        // Iterate the video_segments and add proper null checks with optional chaining
+        hit._source.video_segments.forEach((segment: any) => {
+          if (segment.segment_visual?.segment_visual_embedding && 
+            segment.segment_visual.segment_visual_embedding.length === 2048) {
+            (videoIdToSegmentVisualEmbedding as Record<string, number[] | null>)[videoId] = 
+              segment.segment_visual.segment_visual_embedding;
+          }
+        });
+      });
+
+      // Count how many segments are 1 and how many are 0
+      const segmentVisualEmbeddingCount = {
+        validEmbedding: 0,
+        invalidEmbedding: 0
+      };
+
+      Object.values(videoIdToSegmentVisualEmbedding).forEach((value) => {
+        // Check if value is an array with values (embedding) rather than checking for exact value of 1
+        if (value && Array.isArray(value) && value.length > 0) {
+          segmentVisualEmbeddingCount.validEmbedding++;
+        } else {
+          segmentVisualEmbeddingCount.invalidEmbedding++;
+        }
+      });
+
+      // Log the vector value only per videoId
+      console.log('videoIdToSegmentVisualEmbedding: ', videoIdToSegmentVisualEmbedding);
+      console.log('segmentVisualEmbeddingCount: ', segmentVisualEmbeddingCount);
+      
+      // Summarize the detailed information of the index
+      const indexSummary = {
+        indexId,
+        videoCount: searchResult.hits.total.value,
+        segmentVisualEmbeddingCount
+      };
+      
       return {
         statusCode: STATUS_CODES.OK,
         headers: corsHeaders,
-        body: JSON.stringify(result.Items[0])
+        body: JSON.stringify(indexSummary)
       };
+
     } catch (error) {
       console.error('Error getting index:', error);
       return {
@@ -175,10 +244,16 @@ async function handleGetIndex(event: APIGatewayProxyEvent): Promise<APIGatewayPr
               }
             };
             const { body } = await openSearch.search(searchQuery);
-            
+
             // Extract count from the total hits
             videoCount = body.hits.total.value || 0;
             success = true;
+            // add videoCount into the indexesWithoutVideoStatus
+            indexesWithoutVideoStatus.forEach((index) => {
+              if (index.indexId === index.indexId) {
+                index.videoCount = videoCount;
+              }
+            });
           } catch (countError) {
             console.warn(`Error getting video count for index ${index.indexId} (retry ${4-retries}/3):`, countError);
             retries--;
@@ -190,8 +265,6 @@ async function handleGetIndex(event: APIGatewayProxyEvent): Promise<APIGatewayPr
             }
           }
         }
-
-        index.videoCount = videoCount;
       }));
       
       return {

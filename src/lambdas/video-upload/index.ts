@@ -98,7 +98,11 @@ const indexSettings = {
                 dimension: 2048,
                 method: {
                   name: "hnsw",
-                  space_type: "cosinesimil"
+                  space_type: "cosinesimil",
+                  parameters: {
+                    ef_construction: 1024,
+                    m: 16
+                  }
                 }
               }
             }
@@ -112,7 +116,11 @@ const indexSettings = {
                 dimension: 2048,
                 method: {
                   name: "hnsw",
-                  space_type: "cosinesimil"
+                  space_type: "cosinesimil",
+                  parameters: {
+                    ef_construction: 1024,
+                    m: 16
+                  }
                 }
               }
             }
