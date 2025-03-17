@@ -25,20 +25,42 @@ interface IndexStatus {
     status: string
     thumbnail?: string
   }
+  processingVideos?: Array<{
+    id: string
+    name: string
+    status: string
+    thumbnail?: string
+  }>
 }
 
-// Map technical status values to user-friendly messages
-const statusMessages: Record<string, string> = {
+// Map status values to user-friendly messages
+export type VideoStatus = 
+  | 'awaiting_upload'   // Initial state when pre-signed URL is generated
+  | 'uploading'         // File is being uploaded to S3
+  | 'uploaded'          // File upload completed
+  | 'processing'        // Video is being processed (slicing/indexing)
+  | 'ready_for_face'    // Video completed face detection
+  | 'ready_for_object'   // Video completed object detection
+  | 'ready_for_shots'   // Video completed shot detection
+  | 'ready_for_video_embed'   // Video completed video embedding
+  | 'ready_for_audio_embed'   // Video completed audio embedding
+  | 'ready'             // Video is fully processed and searchable
+  | 'error'             // Processing failed
+  | 'deleted';          // Video was deleted
+
+const statusMessages: Record<VideoStatus, string> = {
+  awaiting_upload: 'Awaiting to upload video',
   uploading: 'Uploading video',
+  uploaded: 'Video uploaded',
   processing: 'Processing video',
-  extracting_audio: 'Extracting audio',
-  embedding_audio: 'Analyzing audio',
-  extracting_video: 'Extracting video frames',
-  embedding_video: 'Analyzing video content',
-  generating_thumbnail: 'Generating thumbnail',
-  ready_for_video_embed: 'Preparing final output',
-  completed: 'Completed',
-  failed: 'Processing failed'
+  ready_for_face: 'Facial processing complete',
+  ready_for_object: 'Object processing complete',
+  ready_for_shots: 'Shots processing complete',
+  ready_for_video_embed: 'Embedding video complete',
+  ready_for_audio_embed: 'Embedding audio complete',
+  ready: 'Processing complete',
+  error: 'Processing failed',
+  deleted: 'Video deleted',
 };
 
 export default function IndexProgress({ indexId, videoIds, onComplete }: IndexProgressProps) {
@@ -46,21 +68,18 @@ export default function IndexProgress({ indexId, videoIds, onComplete }: IndexPr
   // Align with the WebVideoStatus enum in types/common.ts
   const [status, setStatus] = useState<'processing' | 'completed' | 'error'>('processing')
   const [error, setError] = useState<string | null>(null)
-  const [currentVideo, setCurrentVideo] = useState<{
+  const [processingVideos, setProcessingVideos] = useState<Array<{
+    id: string;
     name: string;
     status: string;
-  } | null>(null)
+    thumbnail?: string;
+  }>>([])
   const [stats, setStats] = useState({
     videoCount: 0,
     completedCount: 0,
     failedCount: 0,
     processingCount: 0
   })
-  const [statusLog, setStatusLog] = useState<Array<{
-    timestamp: Date;
-    message: string;
-    type: 'success' | 'error' | 'info';
-  }>>([])
 
   useEffect(() => {
     // Poll for status of the index
@@ -78,75 +97,18 @@ export default function IndexProgress({ indexId, videoIds, onComplete }: IndexPr
         setProgress(indexStatus.progress);
         
         // Update statistics
-        const newStats = {
+        setStats({
           videoCount: indexStatus.videoCount,
           completedCount: indexStatus.completedCount,
           failedCount: indexStatus.failedCount,
           processingCount: indexStatus.processingCount
-        };
-        
-        // Check if any stats changed to update the log
-        if (
-          newStats.completedCount > stats.completedCount ||
-          newStats.failedCount > stats.failedCount ||
-          indexStatus.currentVideo?.status !== currentVideo?.status
-        ) {
-          // Add new log entry
-          if (newStats.completedCount > stats.completedCount) {
-            const completedDiff = newStats.completedCount - stats.completedCount;
-            setStatusLog(prev => [
-              {
-                timestamp: new Date(),
-                message: `${completedDiff} video${completedDiff > 1 ? 's' : ''} completed`,
-                type: 'success'
-              },
-              ...prev.slice(0, 4) // Keep only last 5 entries
-            ]);
-          }
-          
-          if (newStats.failedCount > stats.failedCount) {
-            const failedDiff = newStats.failedCount - stats.failedCount;
-            setStatusLog(prev => [
-              {
-                timestamp: new Date(),
-                message: `${failedDiff} video${failedDiff > 1 ? 's' : ''} failed processing`,
-                type: 'error'
-              },
-              ...prev.slice(0, 4)
-            ]);
-          }
-          
-          if (indexStatus.currentVideo?.status !== currentVideo?.status) {
-            const statusText = statusMessages[indexStatus.currentVideo?.status || ''] || 
-                              indexStatus.currentVideo?.status || 'Processing';
-            
-            setStatusLog(prev => [
-              {
-                timestamp: new Date(),
-                message: `Status changed: ${statusText}`,
-                type: 'info'
-              },
-              ...prev.slice(0, 4)
-            ]);
-          }
-        }
-        
-        setStats(newStats);
+        });
         
         if (indexStatus.status === 'failed') {
           setStatus('error');
           setError(`${indexStatus.failedCount} videos failed to process`);
         } else if (indexStatus.status === 'completed') {
           setStatus('completed');
-          // Add completion log
-          setStatusLog(prev => [
-            {
-              timestamp: new Date(),
-              message: 'All processing completed',
-              type: 'success'
-            },
-            ...prev.slice(0, 4)
-          ]);
           
           // Call onComplete after a short delay to show the completed state
           setTimeout(() => {
@@ -154,24 +116,26 @@ export default function IndexProgress({ indexId, videoIds, onComplete }: IndexPr
           }, 2000);
         }
         
-        // Update current video being processed
+        // Update processing videos array
+        // This is a placeholder - actual implementation will depend on your API response
+        // We'll assume the API can now return multiple processing videos
         if (indexStatus.currentVideo) {
-          setCurrentVideo({
+          // For backward compatibility, if API still returns single currentVideo
+          setProcessingVideos([{
+            id: indexStatus.currentVideo.id,
             name: indexStatus.currentVideo.name,
-            status: indexStatus.currentVideo.status
-          });
+            status: indexStatus.currentVideo.status,
+            thumbnail: indexStatus.currentVideo.thumbnail
+          }]);
+        } else if (Array.isArray(indexStatus.processingVideos)) {
+          // If the API has been updated to return multiple videos
+          setProcessingVideos(indexStatus.processingVideos);
+        } else {
+          setProcessingVideos([]);
         }
       } catch (err) {
         console.error('Error checking index progress:', err);
         setError('Failed to check indexing progress');
-        setStatusLog(prev => [
-          {
-            timestamp: new Date(),
-            message: 'Error checking progress',
-            type: 'error'
-          },
-          ...prev.slice(0, 4)
-        ]);
       }
     };
 
@@ -227,50 +191,41 @@ export default function IndexProgress({ indexId, videoIds, onComplete }: IndexPr
         </div>
       </div>
 
-      {/* Current video */}
-      {status === 'processing' && currentVideo && (
-        <div className="text-sm border border-gray-100 rounded-md p-3 bg-gray-50">
-          <div className="flex flex-col space-y-2">
-            <p>
-              <span className="text-gray-500">Currently processing: </span>
-              <span className="font-medium">{currentVideo.name}</span>
-            </p>
-            <p>
-              <span className="text-gray-500">Status: </span>
-              <span className="font-medium">
-                {statusMessages[currentVideo.status] || currentVideo.status}
-              </span>
-            </p>
-            <p className="text-xs text-gray-500">
-              This may take a few minutes depending on video length.
-            </p>
-          </div>
-        </div>
-      )}
-
-      {/* Status log */}
-      {statusLog.length > 0 && (
-        <div className="mt-4">
-          <h3 className="text-sm font-medium text-gray-700 mb-2">Recent activity:</h3>
-          <div className="space-y-1 text-sm max-h-32 overflow-y-auto">
-            {statusLog.map((log, index) => (
-              <div 
-                key={index} 
-                className={`flex items-center space-x-2 py-1 ${
-                  index === 0 ? 'text-gray-900' : 'text-gray-600'
-                }`}
-              >
-                <span>
-                  {log.type === 'success' && '✓ '}
-                  {log.type === 'error' && '✗ '}
-                  {log.type === 'info' && 'ⓘ '}
-                </span>
-                <span>{log.message}</span>
-                <span className="text-xs text-gray-400">
-                  {log.timestamp.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                </span>
+      {/* Processing videos */}
+      {status === 'processing' && processingVideos.length > 0 && (
+        <div className="space-y-4">
+          <h3 className="text-sm font-medium text-gray-700">Currently Processing Videos</h3>
+          <div className="space-y-3">
+            {processingVideos.slice(0, 5).map((video) => (
+              <div key={video.id} className="text-sm border border-gray-100 rounded-md p-3 bg-gray-50">
+                <div className="flex flex-col space-y-2">
+                  <div className="flex justify-between items-center">
+                    <span className="font-medium truncate">{video.name}</span>
+                    {video.thumbnail && (
+                      <img 
+                        src={video.thumbnail} 
+                        alt={video.name} 
+                        className="h-10 w-16 object-cover rounded"
+                      />
+                    )}
+                  </div>
+                  <div className="flex items-center">
+                    <div className="w-2 h-2 bg-primary-500 rounded-full animate-pulse mr-2"></div>
+                    <span className="font-medium">
+                      {statusMessages[video.status] || video.status}
+                    </span>
+                  </div>
+                </div>
               </div>
             ))}
+            {processingVideos.length > 5 && (
+              <p className="text-xs text-gray-500">
+                And {processingVideos.length - 5} more videos processing...
+              </p>
+            )}
+            <p className="text-xs text-gray-500">
+              Processing may take a few minutes depending on video length.
+            </p>
           </div>
         </div>
       )}
