@@ -71,6 +71,13 @@ export default function SearchResults({
 
   const handleVideoClick = useCallback((video: VideoResult) => {
     setSelectedVideo(video);
+    setSelectedSegment(null);
+    setIsModalOpen(true);
+  }, []);
+  
+  const handleSegmentClick = useCallback((video: VideoResult, segment: VideoSegment) => {
+    setSelectedVideo(video);
+    setSelectedSegment(segment);
     setIsModalOpen(true);
   }, []);
 
@@ -80,43 +87,91 @@ export default function SearchResults({
     setTimeout(() => setSelectedVideo(null), 300);
   }, []);
 
-  const renderGridView = useCallback(() => (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-      {results.map((result) => (
-        <button
-          key={result.id}
-          className="bg-white rounded-lg shadow-sm overflow-hidden text-left transition-transform hover:scale-[1.02] focus:outline-none focus:ring-2 focus:ring-primary-500"
-          onClick={() => handleVideoClick(result)}
-          type="button"
-        >
-          <div className="aspect-video relative">
-            <img
-              src={result.videoThumbnailUrl}
-              alt={result.title}
-              className="w-full h-full object-cover"
-            />
-            {showConfidenceScores && (
-              <div className="absolute top-2 right-2 px-2 py-1 bg-black/50 rounded text-white text-sm">
-                {Math.round((result.searchConfidence || 0) * 100)}% Match
+  const renderGridView = useCallback(() => {
+    // Extract all segments with confidence > 0 from all videos
+    const allMatchedSegments = results.flatMap(result => 
+      (result.segments || [])
+        .filter(segment => (segment.confidence || 0) > 0)
+        .map(segment => ({
+          segment,
+          video: result
+        }))
+    );
+
+    // Sort segments by confidence score (highest to lowest)
+    const sortedSegments = [...allMatchedSegments].sort((a, b) => 
+      (b.segment.confidence || 0) - (a.segment.confidence || 0)
+    );
+
+    // If no matched segments, show a message
+    if (sortedSegments.length === 0) {
+      return (
+        <div className="py-8 text-center">
+          <p className="text-gray-500">No matched clips found. Try adjusting your search criteria.</p>
+        </div>
+      );
+    }
+
+    return (
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {sortedSegments.map(({ segment, video }, index) => {
+          const startTime = segment.start_time || 0;
+          const endTime = segment.end_time || 0;
+          const confidenceScore = segment.confidence || 0;
+          const confidenceLevel = getConfidenceLevel(confidenceScore);
+          
+          return (
+            <button
+              key={`${video.id}_segment_${index}`}
+              className="bg-white rounded-lg shadow-sm overflow-hidden text-left transition-transform hover:scale-[1.02] focus:outline-none focus:ring-2 focus:ring-primary-500"
+              onClick={() => handleSegmentClick(video, segment)}
+              type="button"
+            >
+              <div className="aspect-video relative">
+                <img
+                  src={segment.segment_video_thumbnail_url || video.videoThumbnailUrl}
+                  alt={`${video.title} - Clip at ${formatTimeDisplay(startTime)}`}
+                  className="w-full h-full object-cover"
+                />
+                <div className="absolute top-0 left-0 right-0 bg-black/70 text-white text-center text-xs py-1 font-medium">
+                  {formatTimeDisplay(startTime)} - {formatTimeDisplay(endTime)}
+                </div>
+                {showConfidenceScores && (
+                  <div className={`absolute bottom-2 left-2 px-2 py-1 rounded text-white text-sm flex items-center gap-1 ${
+                    confidenceScore >= 0.8
+                      ? 'bg-green-600' 
+                      : confidenceScore >= 0.6 
+                        ? 'bg-blue-600' 
+                        : 'bg-gray-600'
+                  }`}>
+                    {getConfidenceIcon(confidenceLevel)}
+                    <span className="font-medium">{Math.round(confidenceScore * 100)}%</span>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
-          <div className="p-4">
-            <h3 className="text-lg font-semibold text-gray-900 line-clamp-1">
-              {result.title}
-            </h3>
-            <p className="mt-1 text-sm text-gray-500 line-clamp-2">
-              {result.description}
-            </p>
-            <div className="mt-4 flex items-center justify-between text-sm text-gray-600">
-              <span>{new Date(result.uploadDate).toLocaleDateString()}</span>
-              <span>{result.videoDuration}</span>
-            </div>
-          </div>
-        </button>
-      ))}
-    </div>
-  ), [results, showConfidenceScores, handleVideoClick])
+              <div className="p-4">
+                <h3 className="text-lg font-semibold text-gray-900 line-clamp-1">
+                  {video.title}
+                </h3>
+                <div className="mt-1 flex items-center gap-1">
+                  <span className="text-xs py-0.5 px-1.5 bg-blue-100 text-blue-800 rounded">Clip</span>
+                  <span className="text-sm text-gray-500">
+                    {formatTimeDisplay(segment.duration)} duration
+                  </span>
+                </div>
+                <div className="mt-4 flex items-center justify-between text-sm text-gray-600">
+                  <span>{new Date(video.uploadDate).toLocaleDateString()}</span>
+                  <span className="text-xs text-gray-500">
+                    From {video.videoDuration} video
+                  </span>
+                </div>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    );
+  }, [results, showConfidenceScores, handleSegmentClick, formatTimeDisplay, getConfidenceLevel, getConfidenceIcon]);
 
   const renderTimelineView = useCallback(() => (
     <div className="space-y-6">
@@ -305,7 +360,7 @@ export default function SearchResults({
         </button>
       ))}
     </div>
-  ), [results, showConfidenceScores, formatDuration, handleVideoClick, hoveredSegment, formatTimeDisplay, getConfidenceLevel, getConfidenceIcon])
+  ), [results, showConfidenceScores, formatDuration, handleVideoClick, handleSegmentClick, hoveredSegment, formatTimeDisplay, getConfidenceLevel, getConfidenceIcon])
 
   const handleViewChange = useCallback((view: 'clip' | 'video') => {
     setSelectedView(view)
