@@ -63,8 +63,25 @@ const statusMessages: Record<VideoStatus, string> = {
   deleted: 'Video deleted',
 };
 
+// Map status to progress percentage weight
+const statusProgressWeights: Record<VideoStatus, number> = {
+  awaiting_upload: 0,
+  uploading: 10,
+  uploaded: 20,
+  processing: 30,
+  ready_for_face: 45,
+  ready_for_object: 60,
+  ready_for_shots: 70,
+  ready_for_video_embed: 80,
+  ready_for_audio_embed: 90,
+  ready: 100,
+  error: 0,
+  deleted: 0
+};
+
 export default function IndexProgress({ indexId, videoIds, onComplete }: IndexProgressProps) {
   const [progress, setProgress] = useState(0)
+  const [statusBasedProgress, setStatusBasedProgress] = useState(0)
   // Align with the WebVideoStatus enum in types/common.ts
   const [status, setStatus] = useState<'processing' | 'completed' | 'error'>('processing')
   const [error, setError] = useState<string | null>(null)
@@ -74,6 +91,7 @@ export default function IndexProgress({ indexId, videoIds, onComplete }: IndexPr
     status: string;
     thumbnail?: string;
   }>>([])
+  const [previousVideoStatuses, setPreviousVideoStatuses] = useState<Record<string, string>>({})
   const [stats, setStats] = useState({
     videoCount: 0,
     completedCount: 0,
@@ -116,23 +134,58 @@ export default function IndexProgress({ indexId, videoIds, onComplete }: IndexPr
           }, 2000);
         }
         
-        // Update processing videos array
-        // This is a placeholder - actual implementation will depend on your API response
-        // We'll assume the API can now return multiple processing videos
+        // Update processing videos array and track status changes
+        let newProcessingVideos: Array<{
+          id: string;
+          name: string;
+          status: string;
+          thumbnail?: string;
+        }> = [];
+        
         if (indexStatus.currentVideo) {
           // For backward compatibility, if API still returns single currentVideo
-          setProcessingVideos([{
+          newProcessingVideos = [{
             id: indexStatus.currentVideo.id,
             name: indexStatus.currentVideo.name,
             status: indexStatus.currentVideo.status,
             thumbnail: indexStatus.currentVideo.thumbnail
-          }]);
+          }];
         } else if (Array.isArray(indexStatus.processingVideos)) {
           // If the API has been updated to return multiple videos
-          setProcessingVideos(indexStatus.processingVideos);
-        } else {
-          setProcessingVideos([]);
+          newProcessingVideos = indexStatus.processingVideos;
         }
+        
+        // Check for status changes and update progress accordingly
+        const newStatusMap: Record<string, string> = {};
+        let statusChanged = false;
+        let totalProgressWeight = 0;
+        
+        // Calculate status-based progress
+        newProcessingVideos.forEach(video => {
+          // Store current status for next comparison
+          newStatusMap[video.id] = video.status;
+          
+          // Check if this video's status has changed
+          if (previousVideoStatuses[video.id] !== video.status) {
+            statusChanged = true;
+          }
+          
+          // Add this video's progress weight to total
+          if (video.status in statusProgressWeights) {
+            totalProgressWeight += statusProgressWeights[video.status as VideoStatus];
+          }
+        });
+        
+        // Update progress when status changes
+        if (statusChanged && newProcessingVideos.length > 0) {
+          // Calculate average progress weight across all videos
+          const averageProgress = totalProgressWeight / newProcessingVideos.length;
+          setStatusBasedProgress(averageProgress);
+        }
+        
+        // Update state
+        setProcessingVideos(newProcessingVideos);
+        setPreviousVideoStatuses(newStatusMap);
       } catch (err) {
         console.error('Error checking index progress:', err);
         setError('Failed to check indexing progress');
@@ -155,7 +208,7 @@ export default function IndexProgress({ indexId, videoIds, onComplete }: IndexPr
         </h2>
         <div className="flex items-center space-x-2">
           <span className="text-sm font-medium text-gray-600">
-            {progress}% complete
+            {Math.max(progress, statusBasedProgress)}% complete
           </span>
           {status === 'completed' && (
             <CheckCircleIcon className="h-5 w-5 text-green-500" />
@@ -177,7 +230,7 @@ export default function IndexProgress({ indexId, videoIds, onComplete }: IndexPr
                   ? 'bg-green-500' 
                   : 'bg-primary-600'
             }`}
-            style={{ width: `${progress}%` }}
+            style={{ width: `${Math.max(progress, statusBasedProgress)}%` }}
           />
         </div>
         <div className="flex justify-between text-sm text-gray-600">
@@ -212,7 +265,9 @@ export default function IndexProgress({ indexId, videoIds, onComplete }: IndexPr
                   <div className="flex items-center">
                     <div className="w-2 h-2 bg-primary-500 rounded-full animate-pulse mr-2"></div>
                     <span className="font-medium">
-                      {statusMessages[video.status] || video.status}
+                      {(video.status in statusMessages) 
+                        ? statusMessages[video.status as VideoStatus] 
+                        : video.status}
                     </span>
                   </div>
                 </div>
