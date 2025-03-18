@@ -31,6 +31,12 @@ interface IndexStatus {
     status: string
     thumbnail?: string
   }>
+  pagination?: {
+    page: number
+    pageSize: number
+    totalPages: number
+    totalCount: number
+  }
 }
 
 // Map status values to user-friendly messages
@@ -103,8 +109,16 @@ export default function IndexProgress({ indexId, videoIds, onComplete }: IndexPr
     // Poll for status of the index
     const checkProgress = async () => {
       try {
+        // Construct the API URL based on whether specific videoIds are provided
+        let apiUrl = `${API_ENDPOINT}/videos/status?index=${indexId}`;
+        
+        // Add videoIds to the query if they exist
+        if (videoIds && videoIds.length > 0) {
+          apiUrl += `&videoIds=${videoIds.join(',')}`;
+        }
+        
         // Get the index status
-        const response = await fetch(`${API_ENDPOINT}/videos/status?index=${indexId}`);
+        const response = await fetch(apiUrl);
         if (!response.ok) {
           throw new Error(`Failed to get index status: ${response.statusText}`);
         }

@@ -410,24 +410,62 @@ async function handleGetIndexStatus(event: APIGatewayProxyEvent): Promise<Lambda
       };
     }
 
-    // Using DynamoDB instead of OpenSearch as the video status source
-    const { Items } = await withRetry(
-      async () => docClient.send(new ScanCommand({
-        TableName: process.env.INDEXES_TABLE,
-        FilterExpression: "indexId = :indexId AND (attribute_not_exists(video_status) OR video_status <> :deletedStatus)",
-        ExpressionAttributeValues: {
-          ":indexId": indexId,
-          ":deletedStatus": "deleted"
-        },
-        Limit: 100  // Limit to 100 videos
-      })),
+    // Parse videoIds parameter if provided
+    const videoIds = queryParams.videoIds ? queryParams.videoIds.split(',') : undefined;
+    
+    // Parse pagination parameters
+    const page = parseInt(queryParams.page || '1', 10);
+    const pageSize = parseInt(queryParams.pageSize || '20', 10);
+    const offset = (page - 1) * pageSize;
+    
+    // Build filter expression for DynamoDB
+    let filterExpression = "indexId = :indexId AND (attribute_not_exists(video_status) OR video_status <> :deletedStatus)";
+    const expressionAttributeValues: Record<string, any> = {
+      ":indexId": indexId,
+      ":deletedStatus": "deleted"
+    };
+    
+    // Add videoIds filter if provided
+    if (videoIds && videoIds.length > 0) {
+      // DynamoDB doesn't support direct IN operator, so we need to build an OR expression
+      const videoIdExpressions = videoIds.map((_, idx) => `videoId = :vid${idx}`);
+      filterExpression += ` AND (${videoIdExpressions.join(' OR ')})`;
+      
+      videoIds.forEach((id, idx) => {
+        expressionAttributeValues[`:vid${idx}`] = id;
+      });
+    }
+    
+    console.log(`Getting status for index: ${indexId} with filter: ${filterExpression} and values:`, expressionAttributeValues);
+
+    // Use a single scan operation to get all items
+    const scanParams = {
+      TableName: process.env.INDEXES_TABLE,
+      FilterExpression: filterExpression,
+      ExpressionAttributeValues: expressionAttributeValues,
+      // Select: 'COUNT' as const
+      // Use a reasonable maximum limit - we don't expect thousands of videos per index
+      Limit: 1000
+    };
+    
+    const scanResult = await withRetry(
+      async () => docClient.send(new ScanCommand(scanParams)),
       3,
-      `Fetch videos from DynamoDB for index ${indexId}`
+      `Count videos from DynamoDB for index ${indexId}`
     );
-    console.log(`Getting status for index: ${indexId} from DynamoDB with items:`, Items);
+    console.log("Scan result: ", scanResult)
+
+    // Get all items and total count
+    const allItems = scanResult.Items || []
+    const totalCount = scanResult.Count || 0
+
+    // Apply pagination in memory
+    const paginatedItems = allItems.slice(offset, offset + pageSize);
+
+    console.log("paginatedItems result: ", paginatedItems)
 
     // Transform DynamoDB items to match the expected format
-    const videos = (Items || []).map((item: any) => ({
+    const videos = paginatedItems.map((item: any) => ({
       id: item.videoId,
       name: item.video_name || 'Untitled Video',
       size: item.video_size,
@@ -440,10 +478,6 @@ async function handleGetIndexStatus(event: APIGatewayProxyEvent): Promise<Lambda
       uploadDate: item.updated_at
     }));
 
-    console.log('Videos status from DynamoDB: ', videos);
-
-    const videoCount = videos.length;
-    
     // Define which statuses are considered "complete"
     const completeStatuses: VideoStatus[] = [
       'ready',
@@ -482,31 +516,54 @@ async function handleGetIndexStatus(event: APIGatewayProxyEvent): Promise<Lambda
     let status: WebVideoStatus = 'processing';
     if (failedCount > 0) {
       status = 'failed';
-    } else if (processingCount === 0) {
+    } else if (processingCount === 0 && videos.length > 0) {
       status = 'completed';
     }
     
     // Calculate progress percentage
-    const progress = videoCount > 0 
-      ? Math.round((completedCount / videoCount) * 100) 
+    const progress = videos.length > 0 
+      ? Math.round((completedCount / videos.length) * 100) 
       : 100;
     
-    // Get the most recently created video
-    const currentVideo = videos.sort((a: any, b: any) => new Date(b.uploadDate).getTime() - new Date(a.uploadDate).getTime())[0];
+    // Get the most recently updated videos for processing display
+    const processingVideos = videos
+      .filter((v: any) => processingStatuses.includes(v.status))
+      .sort((a: any, b: any) => new Date(b.uploadDate).getTime() - new Date(a.uploadDate).getTime());
     
     // Format response to match IndexStatus interface in IndexProgress.tsx
+    // For backward compatibility, include currentVideo if there's at least one processing video
+    const currentVideo = processingVideos.length > 0 ? processingVideos[0] : undefined;
+    
     const response = {
+      // Overall status information
       status,
       progress,
-      videoCount,
+      videoCount: totalCount,
       completedCount,
       failedCount,
       processingCount,
+      
+      // For backward compatibility
       currentVideo: currentVideo ? {
         id: currentVideo.id,
         name: currentVideo.name || 'Untitled Video',
-        status: currentVideo.status,
-      } : undefined
+        status: currentVideo.status
+      } : undefined,
+      
+      // New detailed format
+      processingVideos: processingVideos.map(v => ({
+        id: v.id,
+        name: v.name || 'Untitled Video',
+        status: v.status,
+      })),
+      
+      // Pagination metadata
+      pagination: {
+        page,
+        pageSize,
+        totalPages: Math.ceil(totalCount / pageSize),
+        totalCount
+      }
     };
     
     return {
