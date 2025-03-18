@@ -75,9 +75,10 @@ const statusProgressWeights: Record<VideoStatus, number> = {
   uploading: 10,
   uploaded: 20,
   processing: 30,
-  ready_for_face: 45,
+  // Use a common weight for all parallel processing stages
+  ready_for_face: 60,
   ready_for_object: 60,
-  ready_for_shots: 70,
+  ready_for_shots: 60,
   ready_for_video_embed: 80,
   ready_for_audio_embed: 90,
   ready: 100,
