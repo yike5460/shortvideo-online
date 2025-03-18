@@ -24,7 +24,7 @@ import * as fs from 'fs';
 // path module for handling file paths and directories
 import * as path from 'path';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { DynamoDBDocumentClient, PutCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, PutCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 
 const rekognition = new RekognitionClient({});
@@ -470,20 +470,22 @@ async function handleSQSEvent(event: SQSEvent): Promise<LambdaResponse> {
     // If there are no more messages in the queue, update the indexes table
     if (totalMessages <= 3) { // 1 means only the current message (which is being processed), and we use 3 to fault tolerance for the SQS and race condition in multiple Lambda instances
       console.log(`No more messages for video ${videoId} in queue, updating indexes table`);
-      
-      // Record the indexId and videoId in the indexes table
+
+      // Use UpdateCommand to update only specific attributes:
       await withRetry(
-        async () => docClient.send(new PutCommand({
+        async () => docClient.send(new UpdateCommand({
           TableName: process.env.INDEXES_TABLE,
-          Item: {
+          Key: { 
             indexId: videoIndex,
-            videoId,
-            video_status: 'ready_for_video_embed' as VideoStatus,
-            // Don't need to record created_at and updated_at since they are already set in the OpenSearch document
+            videoId 
+          },
+          UpdateExpression: "SET video_status = :status",
+          ExpressionAttributeValues: {
+            ":status": "ready_for_video_embed"
           }
         })),
         3,
-        `Record indexId and videoId in indexes table`
+        `Update indexes table with status ready_for_video_embed`
       );
 
       console.log(`Successfully updated index status for video ${videoId} in index ${videoIndex}`);
@@ -633,19 +635,21 @@ async function sendSegmentSlicingRequest(videoIndex: string, videoId: string, se
       console.error('Error sending segment slicing request:', error, " for the segment:", segment);
     }
 
-    // Record the indexId and videoId in the indexes table
+    // Use UpdateCommand to update only specific attributes:
     await withRetry(
-      async () => docClient.send(new PutCommand({
+      async () => docClient.send(new UpdateCommand({
         TableName: process.env.INDEXES_TABLE,
-        Item: {
+        Key: { 
           indexId: videoIndex,
-          videoId,
-          video_status: 'ready_for_shots' as VideoStatus,
-          // Don't need to record created_at and updated_at since they are already set in the OpenSearch document
+          videoId 
+        },
+        UpdateExpression: "SET video_status = :status",
+        ExpressionAttributeValues: {
+          ":status": "ready_for_shots"
         }
       })),
       3,
-      `Record indexId and videoId in indexes table`
+      `Update indexes table with status ready_for_shots`
     );
 
   }
@@ -1225,19 +1229,21 @@ async function updateVideoLabels(videoIndex: string, videoId: string, labels: an
     });
     console.log(`Successfully updated video labels for video ${videoId} in index ${videoIndex}`);
 
-    // Record the indexId and videoId in the indexes table
+    // Use UpdateCommand to update only specific attributes:
     await withRetry(
-      async () => docClient.send(new PutCommand({
+      async () => docClient.send(new UpdateCommand({
         TableName: process.env.INDEXES_TABLE,
-        Item: {
+        Key: { 
           indexId: videoIndex,
-          videoId,
-          video_status: 'ready_for_object' as VideoStatus,
-          // Don't need to record created_at and updated_at since they are already set in the OpenSearch document
+          videoId 
+        },
+        UpdateExpression: "SET video_status = :status",
+        ExpressionAttributeValues: {
+          ":status": "ready_for_object"
         }
       })),
       3,
-      `Record indexId and videoId in indexes table`
+      `Update indexes table with status ready_for_object`
     );
 
   } catch (error) {
@@ -1307,19 +1313,21 @@ async function updateVideoFaces(videoIndex: string, videoId: string, faces: any[
     });
     console.log(`Successfully updated video faces for video ${videoId} in index ${videoIndex}`);
 
-    // Record the indexId and videoId in the indexes table
+    // Use UpdateCommand to update only specific attributes:
     await withRetry(
-      async () => docClient.send(new PutCommand({
+      async () => docClient.send(new UpdateCommand({
         TableName: process.env.INDEXES_TABLE,
-        Item: {
+        Key: { 
           indexId: videoIndex,
-          videoId,
-          video_status: 'ready_for_face' as VideoStatus,
-          // Don't need to record created_at and updated_at since they are already set in the OpenSearch document
+          videoId 
+        },
+        UpdateExpression: "SET video_status = :status",
+        ExpressionAttributeValues: {
+          ":status": "ready_for_face"
         }
       })),
       3,
-      `Record indexId and videoId in indexes table`
+      `Update indexes table with status ready_for_face`
     );
 
   } catch (error) {

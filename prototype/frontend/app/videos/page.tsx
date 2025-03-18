@@ -759,7 +759,8 @@ export default function VideosPage() {
       
       {/* Status sections, only show videos with status ready or similar processing states */}
       {Object.entries(videosByStatus).map(([status, statusVideos]) => (
-        (status === 'ready' || status.startsWith('ready_for_')) && (
+        // Currently we display all the videos don't filter the status with prefix 'ready_for'
+        (status.startsWith('')) && (
           <div key={status} className="mb-12">
             <h2 className="mb-4 text-lg font-semibold text-gray-900 capitalize">
               {status.replace(/_/g, ' ')}

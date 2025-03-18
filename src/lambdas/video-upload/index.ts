@@ -9,7 +9,7 @@ import { defaultProvider } from '@aws-sdk/credential-provider-node';
 import { AwsSigv4Signer } from '@opensearch-project/opensearch/aws';
 import { v4 as uuidv4 } from 'uuid';
 import * as path from 'path';
-import { DynamoDBDocumentClient, PutCommand, DeleteCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, PutCommand, DeleteCommand, ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import * as fs from 'fs';
 import { Readable } from 'stream';
@@ -1026,20 +1026,22 @@ async function handleCompleteUpload(event: APIGatewayProxyEvent): Promise<Lambda
     });
     const videoPreviewUrl = await getSignedUrl(s3 as any, getCommand as any, { expiresIn: 3600 });
 
-    // Record the indexId and videoId in the indexes table
+    // Use UpdateCommand to update only specific attributes:
     await withRetry(
-      async () => docClient.send(new PutCommand({
+      async () => docClient.send(new UpdateCommand({
         TableName: process.env.INDEXES_TABLE,
-        Item: {
+        Key: { 
           indexId,
-          videoId,
-          video_status: 'uploaded' as VideoStatus,
-          // Only update the updated_at field since since the field is already tracked in the OpenSearch document
-          updated_at: new Date().toISOString()
+          videoId 
+        },
+        UpdateExpression: "SET video_status = :status, updated_at = :updated_at",
+        ExpressionAttributeValues: {
+          ":status": "uploaded",
+          ":updated_at": new Date().toISOString()
         }
       })),
       3,
-      `Record indexId and videoId in indexes table`
+      `Update indexes table with status uploaded and updated_at`
     );
 
     // Format the duration as a human-readable string (HH:MM:SS)
