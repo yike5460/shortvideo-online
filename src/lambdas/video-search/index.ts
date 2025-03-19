@@ -302,7 +302,7 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
       if (embedding) {
         // Build a k-NN search query for OpenSearch based on documentation
         const searchBody = {
-          size: searchQuery.topK || 3,
+          size: 10,
           _source: [
             'video_id',
             'video_title',
@@ -334,7 +334,7 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
                   "video_segments.segment_visual.segment_visual_embedding": {
                     vector: embedding,
                     // Number of nearest neighbors to find
-                    k: 20,
+                    k: 100,
                     // Filter's Preemptive Effect: acts before the k-NN algorithm even selects the top k neighbors
                     // filter: {
                     //   range: {
@@ -357,7 +357,7 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
                   "segment_video_thumbnail_s3_path",
                   "segment_video_thumbnail_url"
                 ],
-                size: 10,
+                size: 100,
                 name: "matched_segments"
               }
             }

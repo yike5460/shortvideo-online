@@ -144,15 +144,26 @@ async function handleGetIndex(event: APIGatewayProxyEvent): Promise<APIGatewayPr
       });
 
       // Check if the segment_visual_embedding is not null and the dimension is 2048, set to actual value if true, otherwise set to 0
-      const videoIdToSegmentVisualEmbedding = {};
+      const videoIdToSegmentVisualEmbedding: Record<string, Array<{
+        embedding: number[];
+        startTime: number;
+        endTime: number;
+        videoS3Path: string;
+      }>> = {};
+      
       searchResult.hits.hits.forEach((hit: OpenSearchHit) => {
         const videoId = hit._source.video_id;
-        // Iterate the video_segments and add proper null checks with optional chaining
+        videoIdToSegmentVisualEmbedding[videoId] = [];
+        
         hit._source.video_segments.forEach((segment: any) => {
           if (segment.segment_visual?.segment_visual_embedding && 
-            segment.segment_visual.segment_visual_embedding.length === 2048) {
-            (videoIdToSegmentVisualEmbedding as Record<string, number[] | null>)[videoId] = 
-              segment.segment_visual.segment_visual_embedding;
+              segment.segment_visual.segment_visual_embedding.length === 2048) {
+            videoIdToSegmentVisualEmbedding[videoId].push({
+              embedding: segment.segment_visual.segment_visual_embedding,
+              startTime: segment.start_time,
+              endTime: segment.end_time,
+              videoS3Path: segment.segment_video_s3_path
+            });
           }
         });
       });

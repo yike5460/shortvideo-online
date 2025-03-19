@@ -52,7 +52,7 @@ const indexSettings = {
   settings: {
     number_of_shards: 1,
     number_of_replicas: 0,
-    "index.knn": true  // Enable k-NN for this index
+    "index.knn": true,
   },
 
   mappings: {
@@ -99,9 +99,10 @@ const indexSettings = {
                 method: {
                   name: "hnsw",
                   space_type: "cosinesimil",
+                  engine: "nmslib",
                   parameters: {
-                    ef_construction: 1024,
-                    m: 16
+                    ef_construction: 512,  // 增加构建时的精度
+                    m: 16  // 增加图中每个节点的连接数
                   }
                 }
               }
@@ -117,8 +118,9 @@ const indexSettings = {
                 method: {
                   name: "hnsw",
                   space_type: "cosinesimil",
+                  engine: "nmslib",
                   parameters: {
-                    ef_construction: 1024,
+                    ef_construction: 512,
                     m: 16
                   }
                 }
