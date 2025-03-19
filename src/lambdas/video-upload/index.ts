@@ -96,15 +96,6 @@ const indexSettings = {
               segment_visual_embedding: { 
                 type: 'knn_vector',
                 dimension: 2048,
-                method: {
-                  name: "hnsw",
-                  space_type: "cosinesimil",
-                  engine: "nmslib",
-                  parameters: {
-                    ef_construction: 512,  // 增加构建时的精度
-                    m: 16  // 增加图中每个节点的连接数
-                  }
-                }
               }
             }
           },
@@ -115,15 +106,6 @@ const indexSettings = {
               segment_audio_embedding: { 
                 type: 'knn_vector',
                 dimension: 2048,
-                method: {
-                  name: "hnsw",
-                  space_type: "cosinesimil",
-                  engine: "nmslib",
-                  parameters: {
-                    ef_construction: 512,
-                    m: 16
-                  }
-                }
               }
             }
           }
