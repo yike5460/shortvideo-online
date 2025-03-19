@@ -24,9 +24,9 @@ export default function Sidebar() {
   }
 
   return (
-    <div className="flex w-64 flex-col bg-gray-800">
-      <div className="flex h-16 flex-shrink-0 items-center px-4">
-        <h1 className="text-xl font-bold text-white">Video Search</h1>
+    <div className="flex w-64 flex-col bg-white shadow-md">
+      <div className="flex h-16 flex-shrink-0 items-center px-4 border-b border-gray-100">
+        <h1 className="text-xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-purple-600">Video Search</h1>
       </div>
       <div className="flex flex-1 flex-col overflow-y-auto">
         <nav className="flex-1 space-y-1 px-2 py-4">
@@ -38,17 +38,17 @@ export default function Sidebar() {
                 href={item.href}
                 className={cn(
                   isActive
-                    ? 'bg-gray-900 text-white'
-                    : 'text-gray-300 hover:bg-gray-700 hover:text-white',
-                  'group flex items-center rounded-md px-2 py-2 text-sm font-medium'
+                    ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md'
+                    : 'text-gray-600 hover:bg-indigo-50 hover:text-indigo-600',
+                  'group flex items-center rounded-md px-2 py-2 text-sm font-medium transition-all duration-200'
                 )}
               >
                 <item.icon
                   className={cn(
                     isActive
-                      ? 'text-gray-300'
-                      : 'text-gray-400 group-hover:text-gray-300',
-                    'mr-3 h-6 w-6 flex-shrink-0'
+                      ? 'text-white'
+                      : 'text-gray-500 group-hover:text-indigo-500',
+                    'mr-3 h-5 w-5 flex-shrink-0 transition-colors duration-200'
                   )}
                   aria-hidden="true"
                 />
@@ -57,24 +57,24 @@ export default function Sidebar() {
             )
           })}
         </nav>
-        <div className="flex flex-shrink-0 border-t border-gray-700 p-4">
+        <div className="flex flex-shrink-0 border-t border-gray-100 p-4">
           <div className="group block w-full flex-shrink-0">
             <div className="flex items-center">
               <div>
-                <div className="h-9 w-9 rounded-full bg-gray-700 flex items-center justify-center">
+                <div className="h-9 w-9 rounded-full bg-gradient-to-r from-indigo-600 to-purple-600 flex items-center justify-center">
                   <span className="text-sm font-medium text-white">
                     {state.user?.email[0].toUpperCase()}
                   </span>
                 </div>
               </div>
               <div className="ml-3 flex-grow">
-                <p className="text-sm font-medium text-white">
+                <p className="text-sm font-medium text-gray-700">
                   {state.user?.email}
                 </p>
               </div>
               <button
                 onClick={() => logout()}
-                className="ml-2 rounded-md bg-gray-700 p-1 text-gray-300 hover:text-white"
+                className="ml-2 rounded-md bg-gray-100 p-1 text-gray-500 hover:bg-indigo-50 hover:text-indigo-600 transition-colors duration-200"
               >
                 <LogoutIcon className="h-5 w-5" aria-hidden="true" />
               </button>
