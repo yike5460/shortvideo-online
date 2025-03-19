@@ -136,6 +136,7 @@ interface PresignRequest {
   fileType: string;
   fileSize: number;
   indexId: string;
+  multipleUpload?: boolean; // Flag to indicate if this is part of a multiple upload operation
   metadata: {
     title?: string;
     description?: string;
@@ -474,15 +475,17 @@ async function handleGetIndexStatus(event: APIGatewayProxyEvent): Promise<Lambda
       description: item.video_description || '',
       tags: item.video_tags || [],
       status: item.video_status,
+      video_embed_completed: item.video_embed_completed || false,
+      video_faces_completed: item.video_faces_completed || false,
+      video_objects_completed: item.video_objects_completed || false,
+      video_shots_completed: item.video_shots_completed || false,
       error: item.error,
       uploadDate: item.updated_at
     }));
 
     // Define which statuses are considered "complete"
     const completeStatuses: VideoStatus[] = [
-      'ready',
-      'ready_for_video_embed',
-      'ready_for_audio_embed'
+      'ready'
     ];
 
     // Define which statuses are considered "in progress" but not error
@@ -494,25 +497,28 @@ async function handleGetIndexStatus(event: APIGatewayProxyEvent): Promise<Lambda
       'ready_for_face',
       'ready_for_object',
       'ready_for_shots',
+      'ready_for_video_embed',
+      'ready_for_audio_embed'
     ];
     
     // Define which statuses are considered errors
     const errorStatuses: VideoStatus[] = ['error'];
 
-    // Count videos by their processing state
+    // Count videos by their processing flags
     const completedCount = videos.filter((v: any) => 
-      completeStatuses.includes(v.status)
-    ).length;
-
-    const processingCount = videos.filter((v: any) => 
-      processingStatuses.includes(v.status)
+      // Consider a video complete when all required flags are true, using shot and embed flags for now
+      v.video_embed_completed === true &&
+      v.video_shots_completed === true
     ).length;
 
     const failedCount = videos.filter((v: any) => 
       errorStatuses.includes(v.status)
     ).length;
 
-    // Aggregate statuses in consideration of our support for multiple video statuses handling
+    // Videos that are not complete and not failed are considered processing
+    const processingCount = videos.length - completedCount - failedCount;
+
+    // Aggregate statuses in consideration of flag-based completion
     let status: WebVideoStatus = 'processing';
     if (failedCount > 0) {
       status = 'failed';
@@ -520,20 +526,49 @@ async function handleGetIndexStatus(event: APIGatewayProxyEvent): Promise<Lambda
       status = 'completed';
     }
     
-    // Calculate progress percentage
-    const progress = videos.length > 0 
-      ? Math.round((completedCount / videos.length) * 100) 
-      : 100;
+    // Calculate detailed progress based on flags
+    const calculateVideoProgress = (video: any): number => {
+      if (errorStatuses.includes(video.status)) {
+        return 0;
+      }
+      
+      // Count how many processing steps are complete
+      let completedSteps = 0;
+      let totalSteps = 4; // We have 4 flags to check
+      
+      if (video.video_embed_completed === true) completedSteps++;
+      if (video.video_faces_completed === true) completedSteps++;
+      if (video.video_objects_completed === true) completedSteps++;
+      if (video.video_shots_completed === true) completedSteps++;
+      
+      return (completedSteps / totalSteps) * 100;
+    };
     
-    // Get the most recently updated videos for processing display
+    // Calculate overall progress as average of individual video progresses
+    const progress = videos.length > 0 
+      ? Math.round(videos.reduce((sum, video) => sum + calculateVideoProgress(video), 0) / videos.length) 
+      : 100;
+
+    // Update the video_status if all the flags are true, using shot and embed flags for now
+    for (const video of videos) {
+      if (video.video_embed_completed === true &&
+        video.video_shots_completed === true) {
+        video.status = 'ready' as VideoStatus;
+      }
+    }
+
+    const failedVideos = videos
+      .filter((v: any) => errorStatuses.includes(v.status))
+      .sort((a: any, b: any) => new Date(b.uploadDate).getTime() - new Date(a.uploadDate).getTime());
+
     const processingVideos = videos
       .filter((v: any) => processingStatuses.includes(v.status))
       .sort((a: any, b: any) => new Date(b.uploadDate).getTime() - new Date(a.uploadDate).getTime());
-    
-    // Format response to match IndexStatus interface in IndexProgress.tsx
-    // For backward compatibility, include currentVideo if there's at least one processing video
-    const currentVideo = processingVideos.length > 0 ? processingVideos[0] : undefined;
-    
+
+    const completedVideos = videos
+      .filter((v: any) => completeStatuses.includes(v.status))
+      .sort((a: any, b: any) => new Date(b.uploadDate).getTime() - new Date(a.uploadDate).getTime());
+
     const response = {
       // Overall status information
       status,
@@ -542,21 +577,25 @@ async function handleGetIndexStatus(event: APIGatewayProxyEvent): Promise<Lambda
       completedCount,
       failedCount,
       processingCount,
-      
-      // For backward compatibility
-      currentVideo: currentVideo ? {
-        id: currentVideo.id,
-        name: currentVideo.name || 'Untitled Video',
-        status: currentVideo.status
-      } : undefined,
-      
-      // New detailed format
+
+      failedVideos: failedVideos.map(v => ({
+        id: v.id,
+        name: v.name || 'Untitled Video',
+        status: v.status,
+      })),
+
       processingVideos: processingVideos.map(v => ({
         id: v.id,
         name: v.name || 'Untitled Video',
         status: v.status,
       })),
-      
+
+      completedVideos: completedVideos.map(v => ({
+        id: v.id,
+        name: v.name || 'Untitled Video',
+        status: v.status,
+      })),
+
       // Pagination metadata
       pagination: {
         page,
@@ -866,19 +905,33 @@ async function handlePresignRequest(event: APIGatewayProxyEvent): Promise<Lambda
     };
 
     // Create the index if it doesn't exist
-    const indexExists = await openSearch.indices.exists({ index: videoIndex });
-    if (!indexExists.body) {
-      console.log(`Index ${videoIndex} does not exist, creating it`);
-      // Use the indexSettings object to create the index
-      const createResult = await withRetry(
-        async () => openSearch.indices.create({ 
-          index: videoIndex, 
-          body: indexSettings 
-        }),
-        3,
-        `Create index ${videoIndex}`
-      );
-      console.log(`Successfully created index ${videoIndex}`);
+    try {
+      const indexExists = await openSearch.indices.exists({ index: videoIndex });
+      if (!indexExists.body) {
+        console.log(`Index ${videoIndex} does not exist, creating it`);
+        // Use the indexSettings object to create the index
+        try {
+          const createResult = await openSearch.indices.create({ 
+            index: videoIndex, 
+            body: indexSettings 
+          });
+          console.log(`Successfully created index ${videoIndex}`);
+        } catch (createError: any) {
+        // If this is a multiple upload request, ignore "resource_already_exists_exception" errors, as another parallel request might have created the index already
+          if (request.multipleUpload && createError.message && createError.message.includes('resource_already_exists_exception')) {
+            console.log(`Index ${videoIndex} was created by another parallel request, continuing...`);
+          } else {
+            // For other errors or if not a multiple upload, rethrow
+            throw createError;
+          }
+        }
+      }
+    } catch (indexError) {
+    // If this is not a critical error for multiple uploads, continue
+      if (!(request.multipleUpload && indexError instanceof Error && 
+ indexError.message.includes('resource_already_exists_exception'))) {
+        throw indexError;
+      }
     }
 
     // Create initial OpenSearch document with error handling

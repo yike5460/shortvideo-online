@@ -459,38 +459,61 @@ async function handleSQSEvent(event: SQSEvent): Promise<LambdaResponse> {
       await updateVideoSegments(videoIndex, videoId, [slicedSegments]);
     }
 
-    // Check if there are still SQS messages left in the queue
-    const queueAttributes = await sqs.send(getQueueAttributesCommand);
-    const messagesInQueue = parseInt(queueAttributes.Attributes?.ApproximateNumberOfMessages || '0') || 0;
-    const messagesInFlight = parseInt(queueAttributes.Attributes?.ApproximateNumberOfMessagesNotVisible || '0') || 0;
-    const totalMessages = messagesInQueue + messagesInFlight;
-    
-    console.log(`Messages in queue: ${messagesInQueue}, Messages in flight: ${messagesInFlight}`);
-    
-    // If there are no more messages in the queue, update the indexes table
-    if (totalMessages <= 3) { // 1 means only the current message (which is being processed), and we use 3 to fault tolerance for the SQS and race condition in multiple Lambda instances
-      console.log(`No more messages for video ${videoId} in queue, updating indexes table`);
-
-      // Use UpdateCommand to update only specific attributes:
-      await withRetry(
+    // Use DynamoDB's atomic operations to decrement the pending segments counter
+    try {
+      console.log(`Decrementing pending_segments_count for video ${videoId} in index ${videoIndex}`);
+      
+      // Atomically decrement the counter
+      const result = await withRetry(
         async () => docClient.send(new UpdateCommand({
           TableName: process.env.INDEXES_TABLE,
           Key: { 
             indexId: videoIndex,
             videoId 
           },
-          UpdateExpression: "SET video_status = :status",
+          UpdateExpression: "ADD pending_segments_count :decrement",
           ExpressionAttributeValues: {
-            ":status": "ready_for_video_embed"
-          }
+            ":decrement": -1
+          },
+          ReturnValues: "UPDATED_NEW"
         })),
         3,
-        `Update indexes table with status ready_for_video_embed`
+        `Atomically decrement pending segments count`
       );
-
-      console.log(`Successfully updated index status for video ${videoId} in index ${videoIndex}`);
-    } else {
-      console.log(`Still ${totalMessages - 1} messages in queue for video ${videoId}, not updating indexes table yet`);
+      
+      console.log(`Updated pending_segments_count result:`, result);
+      
+      // Check if this was the last segment (counter reached zero or negative)
+      const pendingCount = result.Attributes?.pending_segments_count;
+      // If the pending count is zero or negative, all segments have been processed and we can proceed with embedding
+      if (pendingCount !== undefined && pendingCount <= 0) {
+        console.log(`All segments for video ${videoId} have been processed, setting video_embed_completed flag`);
+        
+        // Set the completion flag
+        await withRetry(
+          async () => docClient.send(new UpdateCommand({
+            TableName: process.env.INDEXES_TABLE,
+            Key: { 
+              indexId: videoIndex,
+              videoId 
+            },
+            UpdateExpression: "SET video_status = :status, video_embed_completed = :completed",
+            ExpressionAttributeValues: {
+              ":status": "ready_for_video_embed",
+              ":completed": true
+            }
+          })),
+          3,
+          `Set video embedding completion flag`
+        );
+        
+        console.log(`Successfully set video_embed_completed flag for video ${videoId} in index ${videoIndex}`);
+      } else {
+        console.log(`Still ${pendingCount} segments remaining to process for video ${videoId}`);
+      }
+    } catch (err) {
+      console.error(`Error updating segment counter for video ${videoId}:`, err);
+      // Continue processing - don't fail the function just because counter update failed
     }
 
     return {
@@ -596,6 +619,28 @@ async function sendSegmentSlicingRequest(videoIndex: string, videoId: string, se
   );
 
   console.log('Sorted segments: ', sortedSegments, '\nlength: ', sortedSegments.length);
+  // Initialize a counter for pending segment embeddings in DynamoDB
+  const totalSegmentsCount = sortedSegments.length;
+  console.log(`Initializing pending_segments_count to ${totalSegmentsCount} for video ${videoId} in index ${videoIndex}`);
+  
+  await withRetry(
+    async () => docClient.send(new UpdateCommand({
+      TableName: process.env.INDEXES_TABLE,
+      Key: { 
+        indexId: videoIndex,
+        videoId 
+      },
+      UpdateExpression: "SET video_status = :status, video_shots_completed = :video_shots_completed, pending_segments_count = :count",
+      ExpressionAttributeValues: {
+        ":status": "ready_for_shots",
+        ":video_shots_completed": true,
+        ":count": totalSegmentsCount
+      }
+    })),
+    3,
+    `Initialize pending segments count to ${totalSegmentsCount}`
+  );
+  
   // Send a message to the video slicing queue per segment with sequential segment numbers
   for (let i = 0; i < sortedSegments.length; i++) {
     const segment = sortedSegments[i];
@@ -612,7 +657,8 @@ async function sendSegmentSlicingRequest(videoIndex: string, videoId: string, se
         videoId, 
         segment, 
         originalVideoKey,
-        segmentNumber
+        segmentNumber,
+        totalSegments: totalSegmentsCount // Include total segments count
       })
     };
     
@@ -634,24 +680,6 @@ async function sendSegmentSlicingRequest(videoIndex: string, videoId: string, se
     } catch (error) {
       console.error('Error sending segment slicing request:', error, " for the segment:", segment);
     }
-
-    // Use UpdateCommand to update only specific attributes:
-    await withRetry(
-      async () => docClient.send(new UpdateCommand({
-        TableName: process.env.INDEXES_TABLE,
-        Key: { 
-          indexId: videoIndex,
-          videoId 
-        },
-        UpdateExpression: "SET video_status = :status",
-        ExpressionAttributeValues: {
-          ":status": "ready_for_shots"
-        }
-      })),
-      3,
-      `Update indexes table with status ready_for_shots`
-    );
-
   }
 }
 
@@ -1229,7 +1257,7 @@ async function updateVideoLabels(videoIndex: string, videoId: string, labels: an
     });
     console.log(`Successfully updated video labels for video ${videoId} in index ${videoIndex}`);
 
-    // Use UpdateCommand to update only specific attributes:
+    // Use UpdateCommand to update only specific attributes, also update video_objects_completed flag to true
     await withRetry(
       async () => docClient.send(new UpdateCommand({
         TableName: process.env.INDEXES_TABLE,
@@ -1237,9 +1265,10 @@ async function updateVideoLabels(videoIndex: string, videoId: string, labels: an
           indexId: videoIndex,
           videoId 
         },
-        UpdateExpression: "SET video_status = :status",
+        UpdateExpression: "SET video_status = :status, video_objects_completed = :video_objects_completed",
         ExpressionAttributeValues: {
-          ":status": "ready_for_object"
+          ":status": "ready_for_object",
+          ":video_objects_completed": true
         }
       })),
       3,
@@ -1313,7 +1342,7 @@ async function updateVideoFaces(videoIndex: string, videoId: string, faces: any[
     });
     console.log(`Successfully updated video faces for video ${videoId} in index ${videoIndex}`);
 
-    // Use UpdateCommand to update only specific attributes:
+    // Use UpdateCommand to update only specific attributes, also update video_faces_completed flag to true
     await withRetry(
       async () => docClient.send(new UpdateCommand({
         TableName: process.env.INDEXES_TABLE,
@@ -1321,9 +1350,10 @@ async function updateVideoFaces(videoIndex: string, videoId: string, faces: any[
           indexId: videoIndex,
           videoId 
         },
-        UpdateExpression: "SET video_status = :status",
+        UpdateExpression: "SET video_status = :status, video_faces_completed = :video_faces_completed",
         ExpressionAttributeValues: {
-          ":status": "ready_for_face"
+          ":status": "ready_for_face",
+          ":video_faces_completed": true
         }
       })),
       3,
@@ -1334,4 +1364,4 @@ async function updateVideoFaces(videoIndex: string, videoId: string, faces: any[
     console.error(`Error updating video faces for video ${videoId}:`, error);
     throw error;
   }
-} 
+}

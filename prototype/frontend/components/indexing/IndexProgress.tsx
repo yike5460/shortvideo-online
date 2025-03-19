@@ -157,46 +157,55 @@ export default function IndexProgress({ indexId, videoIds, onComplete }: IndexPr
           thumbnail?: string;
         }> = [];
         
-        if (indexStatus.currentVideo) {
-          // For backward compatibility, if API still returns single currentVideo
-          newProcessingVideos = [{
-            id: indexStatus.currentVideo.id,
-            name: indexStatus.currentVideo.name,
-            status: indexStatus.currentVideo.status,
-            thumbnail: indexStatus.currentVideo.thumbnail
-          }];
-        } else if (Array.isArray(indexStatus.processingVideos)) {
-          // If the API has been updated to return multiple videos
+        // Use processingVideos array, ignoring currentVideo
+        if (Array.isArray(indexStatus.processingVideos)) {
           newProcessingVideos = indexStatus.processingVideos;
         }
         
         // Check for status changes and update progress accordingly
         const newStatusMap: Record<string, string> = {};
         let statusChanged = false;
-        let totalProgressWeight = 0;
         
-        // Calculate status-based progress
+        // Calculate status-based progress that includes both processing and completed videos
+        // Store video statuses for change detection
         newProcessingVideos.forEach(video => {
-          // Store current status for next comparison
           newStatusMap[video.id] = video.status;
-          
-          // Check if this video's status has changed
           if (previousVideoStatuses[video.id] !== video.status) {
             statusChanged = true;
           }
-          
-          // Add this video's progress weight to total
-          if (video.status in statusProgressWeights) {
-            totalProgressWeight += statusProgressWeights[video.status as VideoStatus];
-          }
         });
         
-        // Update progress when status changes
-        if (statusChanged && newProcessingVideos.length > 0) {
-          // Calculate average progress weight across all videos
-          const averageProgress = totalProgressWeight / newProcessingVideos.length;
-          setStatusBasedProgress(averageProgress);
-        }
+        // Calculate combined progress that includes both processing and completed videos
+        const calculateCombinedProgress = () => {
+          // If there are no videos, progress is 0
+          if (indexStatus.videoCount === 0) return 0;
+          
+          // Calculate progress contribution from processing videos
+          const processingProgress = newProcessingVideos.reduce((sum, video) => {
+            return sum + (video.status in statusProgressWeights 
+              ? statusProgressWeights[video.status as VideoStatus] 
+              : 0);
+          }, 0);
+          
+          // Each completed video contributes 100% to the progress
+          const completedProgress = indexStatus.completedCount * 100;
+          
+          // Failed videos contribute 0% (already accounted for by not including them)
+          
+          // Calculate total videos being considered for progress (processing + completed)
+          const totalVideosForProgress = newProcessingVideos.length + indexStatus.completedCount;
+          
+          // Avoid division by zero
+          if (totalVideosForProgress === 0) return 0;
+          
+          // Return the weighted average progress
+          return (processingProgress + completedProgress) / totalVideosForProgress;
+        };
+        
+        // Always calculate the progress to reflect the current state
+        const combinedProgress = calculateCombinedProgress();
+        // Round to nearest integer for display
+        setStatusBasedProgress(Math.round(combinedProgress));
         
         // Update state
         setProcessingVideos(newProcessingVideos);
@@ -263,38 +272,88 @@ export default function IndexProgress({ indexId, videoIds, onComplete }: IndexPr
       {status === 'processing' && processingVideos.length > 0 && (
         <div className="space-y-4">
           <h3 className="text-sm font-medium text-gray-700">Currently Processing Videos</h3>
-          <div className="space-y-3">
-            {processingVideos.slice(0, 5).map((video) => (
-              <div key={video.id} className="text-sm border border-gray-100 rounded-md p-3 bg-gray-50">
+          {/* Grid layout for videos */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {processingVideos.slice(0, 8).map((video) => (
+              <div 
+                key={video.id} 
+                className="text-sm border border-gray-100 rounded-md p-3 bg-gray-50 hover:bg-gray-100 transition-colors"
+              >
                 <div className="flex flex-col space-y-2">
+                  {/* Video title and thumbnail */}
                   <div className="flex justify-between items-center">
-                    <span className="font-medium truncate">{video.name}</span>
+                    <span className="font-medium truncate max-w-[180px]" title={video.name}>
+                      {video.name}
+                    </span>
                     {video.thumbnail && (
                       <img 
                         src={video.thumbnail} 
                         alt={video.name} 
-                        className="h-10 w-16 object-cover rounded"
+                        className="h-12 w-20 object-cover rounded shadow-sm"
                       />
                     )}
                   </div>
+                  
+                  {/* Status indicator with animated dot */}
                   <div className="flex items-center">
-                    <div className="w-2 h-2 bg-primary-500 rounded-full animate-pulse mr-2"></div>
-                    <span className="font-medium">
+                    <div 
+                      className={`w-2 h-2 rounded-full mr-2 animate-pulse ${
+                        video.status === 'error' 
+                          ? 'bg-red-500' 
+                          : video.status === 'ready' 
+                            ? 'bg-green-500' 
+                            : 'bg-primary-500'
+                      }`}
+                    ></div>
+                    <span className="font-medium text-xs sm:text-sm">
                       {(video.status in statusMessages) 
                         ? statusMessages[video.status as VideoStatus] 
                         : video.status}
                     </span>
                   </div>
+                  
+                  {/* Progress bar */}
+                  <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden mt-1">
+                    <div 
+                      className={`h-full transition-all duration-300 ${
+                        video.status === 'error' 
+                          ? 'bg-red-500' 
+                          : video.status === 'ready' 
+                            ? 'bg-green-500' 
+                            : 'bg-primary-500'
+                      }`}
+                      style={{ 
+                        width: `${
+                          video.status in statusProgressWeights 
+                            ? statusProgressWeights[video.status as VideoStatus] 
+                            : 0
+                        }%` 
+                      }}
+                    />
+                  </div>
+                  
+                  {/* Progress percentage */}
+                  <div className="text-right text-xs text-gray-500">
+                    {video.status in statusProgressWeights 
+                      ? `${statusProgressWeights[video.status as VideoStatus]}%`
+                      : '0%'
+                    }
+                  </div>
                 </div>
               </div>
             ))}
-            {processingVideos.length > 5 && (
-              <p className="text-xs text-gray-500">
-                And {processingVideos.length - 5} more videos processing...
-              </p>
-            )}
-            <p className="text-xs text-gray-500">
-              Processing may take a few minutes depending on video length.
+          </div>
+          
+          {/* Show count of additional videos */}
+          {processingVideos.length > 8 && (
+            <p className="text-xs text-gray-500 mt-2">
+              And {processingVideos.length - 8} more videos processing...
+            </p>
+          )}
+          
+          <div className="bg-gray-50 p-3 rounded-md mt-3 border border-gray-100">
+            <p className="text-xs text-gray-600">
+              Processing may take a few minutes depending on video length. The system processes multiple videos in parallel.
             </p>
           </div>
         </div>

@@ -143,30 +143,43 @@ async function handleGetIndex(event: APIGatewayProxyEvent): Promise<APIGatewayPr
         }
       });
 
-      // Check if the segment_visual_embedding is not null and the dimension is 2048, set to actual value if true, otherwise set to 0
-      const videoIdToSegmentVisualEmbedding = {};
+      // Initialize structure to store embeddings - each videoId will have an array of embeddings
+      const videoIdToSegmentVisualEmbedding: Record<string, number[][]> = {};
       searchResult.hits.hits.forEach((hit: OpenSearchHit) => {
         const videoId = hit._source.video_id;
+        
+        // Initialize array for this videoId if it doesn't exist
+        if (!videoIdToSegmentVisualEmbedding[videoId]) {
+          videoIdToSegmentVisualEmbedding[videoId] = [];
+        }
+        
         // Iterate the video_segments and add proper null checks with optional chaining
         hit._source.video_segments.forEach((segment: any) => {
           if (segment.segment_visual?.segment_visual_embedding && 
             segment.segment_visual.segment_visual_embedding.length === 2048) {
-            (videoIdToSegmentVisualEmbedding as Record<string, number[] | null>)[videoId] = 
-              segment.segment_visual.segment_visual_embedding;
+            // Push the embedding to the array instead of overwriting
+            videoIdToSegmentVisualEmbedding[videoId].push(
+              segment.segment_visual.segment_visual_embedding
+            );
           }
         });
       });
 
-      // Count how many segments are 1 and how many are 0
+      // Count valid and invalid segments
       const segmentVisualEmbeddingCount = {
         validEmbedding: 0,
-        invalidEmbedding: 0
+        invalidEmbedding: 0,
+        totalSegments: 0
       };
 
-      Object.values(videoIdToSegmentVisualEmbedding).forEach((value) => {
-        // Check if value is an array with values (embedding) rather than checking for exact value of 1
-        if (value && Array.isArray(value) && value.length > 0) {
-          segmentVisualEmbeddingCount.validEmbedding++;
+      // Count total segments and valid embeddings
+      Object.entries(videoIdToSegmentVisualEmbedding).forEach(([videoId, embeddings]) => {
+        // Track the total number of segments
+        segmentVisualEmbeddingCount.totalSegments += embeddings.length;
+        
+        // Check each embedding
+        if (embeddings.length > 0) {
+          segmentVisualEmbeddingCount.validEmbedding += embeddings.length;
         } else {
           segmentVisualEmbeddingCount.invalidEmbedding++;
         }
@@ -535,4 +548,4 @@ async function handleDeleteIndex(event: APIGatewayProxyEvent): Promise<APIGatewa
       })
     };
   }
-} 
+}

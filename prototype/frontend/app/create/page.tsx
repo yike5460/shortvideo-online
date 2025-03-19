@@ -51,10 +51,14 @@ export default function CreatePage() {
     console.log('Upload completed for files:', files, 'with IDs:', uploadIds);
     
     // Store the uploaded video IDs for the progress step
+    // Ensure we're handling multiple videoIds properly
     setUploadedVideoIds(uploadIds);
     
-    // Move to the progress step instead of redirecting
+    // Move to the progress step to track multiple video processing
     setStep('progress');
+    
+    // Log the number of videos being processed
+    console.log(`Processing ${uploadIds.length} video(s)...`);
   }
 
   // This function is called when indexing is complete
@@ -109,4 +113,4 @@ export default function CreatePage() {
       </div>
     </main>
   )
-} 
+}

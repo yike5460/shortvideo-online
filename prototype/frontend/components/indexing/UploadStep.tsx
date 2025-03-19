@@ -91,7 +91,7 @@ export default function UploadStep({
     })
   }
 
-  const uploadFile = async (file: File): Promise<string> => {
+  const uploadFile = async (file: File, isMultipleUpload: boolean): Promise<string> => {
     try {
       console.log('Uploading file:', file.name, 'to endpoint:', `${API_ENDPOINT}/videos/upload`)
       // Get pre-signed URL
@@ -105,8 +105,9 @@ export default function UploadStep({
           description: '',
           tags: []
         },
-        // Use the indexId from props
-        indexId: indexId
+        // Use the indexId from props and add multipleUpload flag
+        indexId: indexId,
+        multipleUpload: isMultipleUpload
       }, {
         headers: {
           'Content-Type': 'application/json'
@@ -212,7 +213,22 @@ export default function UploadStep({
 
       // Handle local file uploads
       if (selectedFiles.length > 0) {
-        uploadPromises.push(...selectedFiles.map(file => uploadFile(file)))
+        // Determine if this is a multiple upload
+        const isMultipleUpload = selectedFiles.length > 1
+        
+        // Upload all files in parallel
+        uploadPromises.push(...selectedFiles.map(file => {
+          // Update progress state for this file to "uploading"
+          setUploadProgress(prev => ({
+            ...prev,
+            [file.name]: { 
+              ...prev[file.name],
+              progress: 0,
+              status: 'uploading'
+            }
+          }))
+          return uploadFile(file, isMultipleUpload)
+        }))
       }
 
       // Handle YouTube upload
@@ -220,6 +236,7 @@ export default function UploadStep({
         uploadPromises.push(uploadYouTubeVideo(youtubeUrl))
       }
 
+      // Wait for all uploads to complete in parallel
       const uploadIds = await Promise.all(uploadPromises)
       
       // Only redirect if skipRedirect is false
@@ -380,4 +397,4 @@ export default function UploadStep({
       </div>
     </div>
   )
-} 
+}
