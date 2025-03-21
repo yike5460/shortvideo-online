@@ -171,7 +171,8 @@ const transformSearchResults = async (hits: any[]): Promise<VideoResult[]> => {
       // Map scores to segments using the offset and collect matched segments
       innerHits.forEach((segHit: any) => {
         const offset = segHit._nested?.offset;
-        const score = segHit._score || 0;
+        // 将分数除以2来将范围从0-2转换为0-1
+        const score = (segHit._score || 0) / 2;
         
         if (offset !== undefined) {
           const segment = segmentOffsetMap.get(offset);
@@ -330,21 +331,35 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
             nested: {
               path: "video_segments",
               query: {
-                knn: {
-                  "video_segments.segment_visual.segment_visual_embedding": {
-                    vector: embedding,
-                    // Number of nearest neighbors to find
-                    k: 20,
-                    // Filter's Preemptive Effect: acts before the k-NN algorithm even selects the top k neighbors
-                    // filter: {
-                    //   range: {
-                    //     _score: {
-                    //       gte: searchQuery.minConfidence || 0 // Apply minConfidence filter
-                    //     }
-                    //   }
-                    // }
+                "script_score": {
+                  "query": {
+                    "match_all": {}
+                  },
+                  "script": {
+                    "source": "knn_score",
+                    "lang": "knn",
+                    "params": {
+                      "field": "video_segments.segment_visual.segment_visual_embedding",
+                      "query_value": embedding,
+                      "space_type": "cosinesimil"
+                    }
                   }
                 }
+                // knn: {
+                //   "video_segments.segment_visual.segment_visual_embedding": {
+                //     vector: embedding,
+                //     // Number of nearest neighbors to find
+                //     k: 20,
+                //     // Filter's Preemptive Effect: acts before the k-NN algorithm even selects the top k neighbors
+                //     // filter: {
+                //     //   range: {
+                //     //     _score: {
+                //     //       gte: searchQuery.minConfidence || 0 // Apply minConfidence filter
+                //     //     }
+                //     //   }
+                //     // }
+                //   }
+                // }
               },
               inner_hits: {
                 _source: [
