@@ -386,6 +386,7 @@ async function formatSearchResults(body: any, page: number, pageSize: number, fr
     body: JSON.stringify({
       videos,
       total: body.hits.total?.value || videos.length,
+      // TODO: Web should use hasMore to determine if there are more pages
       hasMore: (body.hits.total?.value || 0) > (from + pageSize),
       page,
       pageSize

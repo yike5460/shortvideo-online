@@ -123,7 +123,7 @@ export default function SearchResults({
           return (
             <button
               key={`${video.id}_segment_${index}`}
-              className="bg-white rounded-lg shadow-sm overflow-hidden text-left transition-transform hover:scale-[1.02] focus:outline-none focus:ring-2 focus:ring-primary-500"
+              className="bg-white rounded-lg shadow-sm overflow-hidden text-left transition-transform hover:scale-[1.02] focus:outline-none focus:ring-2 focus:ring-indigo-500"
               onClick={() => handleSegmentClick(video, segment)}
               type="button"
             >
@@ -139,9 +139,9 @@ export default function SearchResults({
                 {showConfidenceScores && (
                   <div className={`absolute bottom-2 left-2 px-2 py-1 rounded text-white text-sm flex items-center gap-1 ${
                     confidenceScore >= 0.8
-                      ? 'bg-green-600' 
+                      ? 'bg-purple-600' 
                       : confidenceScore >= 0.6 
-                        ? 'bg-blue-600' 
+                        ? 'bg-indigo-600' 
                         : 'bg-gray-600'
                   }`}>
                     {getConfidenceIcon(confidenceLevel)}
@@ -154,7 +154,7 @@ export default function SearchResults({
                   {video.title}
                 </h3>
                 <div className="mt-1 flex items-center gap-1">
-                  <span className="text-xs py-0.5 px-1.5 bg-blue-100 text-blue-800 rounded">Clip</span>
+                  <span className="text-xs py-0.5 px-1.5 bg-indigo-100 text-indigo-800 rounded">Clip</span>
                   <span className="text-sm text-gray-500">
                     {formatTimeDisplay(segment.duration)} duration
                   </span>
@@ -178,7 +178,7 @@ export default function SearchResults({
       {results.map((result) => (
         <button
           key={result.id}
-          className="bg-white rounded-lg shadow-sm p-6 w-full text-left transition-transform hover:scale-[1.01] focus:outline-none focus:ring-2 focus:ring-primary-500"
+          className="bg-white rounded-lg shadow-sm p-6 w-full text-left transition-transform hover:scale-[1.01] focus:outline-none focus:ring-2 focus:ring-indigo-500"
           onClick={() => handleVideoClick(result)}
           type="button"
         >
@@ -242,9 +242,9 @@ export default function SearchResults({
                             {showConfidenceScores && segmentConfidence > 0 && (
                               <div className={`absolute bottom-2 left-2 px-2 py-1 rounded text-white text-sm flex items-center gap-1 ${
                                 segmentConfidence >= 0.8
-                                  ? 'bg-green-600' 
+                                  ? 'bg-purple-600' 
                                   : segmentConfidence >= 0.6 
-                                    ? 'bg-blue-600' 
+                                    ? 'bg-indigo-600' 
                                     : 'bg-gray-600'
                               }`}>
                                 {getConfidenceIcon(confidenceLevel)}
@@ -267,8 +267,8 @@ export default function SearchResults({
                     const confidence = segment.confidence || 0;
                     const confidenceLevel = getConfidenceLevel(confidence);
                     const getBadgeColor = (level: string) => {
-                      if (level === 'High') return "bg-green-500";
-                      if (level === 'Medium') return "bg-blue-500";
+                      if (level === 'High') return "bg-purple-500";
+                      if (level === 'Medium') return "bg-indigo-500";
                       return "bg-gray-500";
                     };
                     
@@ -299,8 +299,8 @@ export default function SearchResults({
                       const isMatched = confidence > 0;
                       
                       const getSegmentColor = (conf: number) => {
-                        if (conf >= 0.8) return "bg-green-500";
-                        if (conf >= 0.6) return "bg-blue-500";
+                        if (conf >= 0.8) return "bg-purple-500";
+                        if (conf >= 0.6) return "bg-indigo-500";
                         return "bg-gray-500";
                       };
                       
@@ -339,11 +339,11 @@ export default function SearchResults({
                 <div className="mt-2 flex justify-between items-center">
                   <span className="text-sm font-medium text-gray-700">0:00</span>
                   <div className="flex space-x-2">
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-green-100 text-green-800 text-xs font-medium">
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-purple-100 text-purple-800 text-xs font-medium">
                       <CheckCircleIcon className="h-3 w-3" />
                       High
                     </span>
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 text-xs font-medium">
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800 text-xs font-medium">
                       <ExclamationCircleIcon className="h-3 w-3" />
                       Medium
                     </span>

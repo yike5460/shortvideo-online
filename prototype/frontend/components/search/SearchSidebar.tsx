@@ -142,7 +142,7 @@ export default function SearchSidebar({
           id="index-select"
           value={options.selectedIndex || ''}
           onChange={(e) => onOptionsChange({ ...options, selectedIndex: e.target.value || null })}
-          className="w-full border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+          className="w-full border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
         >
           <option value="">Select an index</option>
           {indexes.map((index) => (
@@ -163,8 +163,8 @@ export default function SearchSidebar({
               checked={options.visualSearch}
               onChange={(checked) => onOptionsChange({ ...options, visualSearch: checked })}
               className={cn(
-                "relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2",
-                options.visualSearch ? "bg-primary-600" : "bg-gray-200"
+                "relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2",
+                options.visualSearch ? "bg-gradient-to-r from-indigo-600 to-purple-600" : "bg-gray-200"
               )}
             >
               <span
@@ -181,8 +181,8 @@ export default function SearchSidebar({
               checked={options.audioSearch}
               onChange={(checked) => onOptionsChange({ ...options, audioSearch: checked })}
               className={cn(
-                "relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2",
-                options.audioSearch ? "bg-primary-600" : "bg-gray-200"
+                "relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2",
+                options.audioSearch ? "bg-gradient-to-r from-indigo-600 to-purple-600" : "bg-gray-200"
               )}
             >
               <span
@@ -225,7 +225,7 @@ export default function SearchSidebar({
               <select
                 value={options.confidencePreset}
                 onChange={(e) => handleConfidencePresetChange(e.target.value as ConfidencePreset)}
-                className="w-full border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                className="w-full border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
               >
                 {Object.entries(CONFIDENCE_PRESETS).map(([key, { label }]) => (
                   <option key={key} value={key}>
@@ -269,8 +269,8 @@ export default function SearchSidebar({
                       "absolute top-1/2 -translate-y-1/2 -translate-x-1/2",
                       "w-3 h-3 rounded-full bg-white border-2 transition-all duration-200",
                       isDragging
-                        ? "scale-110 border-primary-600 shadow-lg"
-                        : "border-primary-600"
+                        ? "scale-110 border-indigo-600 shadow-lg"
+                        : "border-indigo-600"
                     )}
                     style={{
                       left: getDotPosition()
@@ -281,7 +281,7 @@ export default function SearchSidebar({
                   <span className={cn(
                     "text-xs font-medium transition-colors",
                     options.confidenceAdjustment === 'less'
-                      ? "text-primary-600"
+                      ? "text-indigo-600"
                       : "text-gray-500"
                   )}>
                     Less strict
@@ -289,7 +289,7 @@ export default function SearchSidebar({
                   <span className={cn(
                     "text-xs font-medium transition-colors",
                     options.confidenceAdjustment === 'default'
-                      ? "text-primary-600"
+                      ? "text-indigo-600"
                       : "text-gray-500"
                   )}>
                     Default
@@ -297,7 +297,7 @@ export default function SearchSidebar({
                   <span className={cn(
                     "text-xs font-medium transition-colors",
                     options.confidenceAdjustment === 'more'
-                      ? "text-primary-600"
+                      ? "text-indigo-600"
                       : "text-gray-500"
                   )}>
                     More strict
@@ -315,8 +315,8 @@ export default function SearchSidebar({
                 checked={options.showConfidenceScores}
                 onChange={(checked) => onOptionsChange({ ...options, showConfidenceScores: checked })}
                 className={cn(
-                  "relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2",
-                  options.showConfidenceScores ? "bg-primary-600" : "bg-gray-200"
+                  "relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2",
+                  options.showConfidenceScores ? "bg-gradient-to-r from-indigo-600 to-purple-600" : "bg-gray-200"
                 )}
               >
                 <span
@@ -332,4 +332,4 @@ export default function SearchSidebar({
       </div>
     </div>
   )
-} 
+}
