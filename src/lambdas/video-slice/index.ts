@@ -1238,21 +1238,68 @@ async function updateVideoLabels(videoIndex: string, videoId: string, labels: an
 
     console.log(`video labels updated search result for video ${videoId} in index ${videoIndex}:`, searchResult.hits.hits[0]);
     const documentId = searchResult.hits.hits[0]._id;
-    const existingVideo = searchResult.hits.hits[0]._source;
     
-    // Update the video_objects field
-    existingVideo.video_objects = labels.map(label => ({
-      label: label.Label.Name,
-      confidence: label.Label.Confidence,
-      bounding_box: label.Label.BoundingBox || { left: 0, top: 0, width: 0, height: 0 }
+    // Define types for better TypeScript support
+    interface LabelInfo {
+      name: string;
+      categories: any[];
+      aliases: any[];
+      parents: any[];
+      confidence: number;
+      instances: Array<{
+        boundingBox: any;
+        confidence: number;
+      }>;
+    }
+    
+    interface TimestampedLabels {
+      [timestamp: string]: LabelInfo[];
+    }
+
+    // Organize labels by timestamp to match the Rekognition structure
+    const labelsByTimestamp: TimestampedLabels = {};
+    labels.forEach(label => {
+      const timestamp = label.Timestamp.toString();
+      if (!labelsByTimestamp[timestamp]) {
+        labelsByTimestamp[timestamp] = [];
+      }
+      labelsByTimestamp[timestamp].push({
+        name: label.Label.Name,
+        categories: label.Label.Categories || [],
+        aliases: label.Label.Aliases || [],
+        parents: label.Label.Parents || [],
+        confidence: label.Label.Confidence,
+        instances: label.Label.Instances?.map((instance: any) => ({
+          boundingBox: instance.BoundingBox,
+          confidence: instance.Confidence
+        })) || []
+      });
+    });
+
+    // Convert to array structure for easier processing in OpenSearch
+    const formattedLabels = Object.entries(labelsByTimestamp).map(([timestamp, labelArray]: [string, LabelInfo[]]) => ({
+      timestamp: parseInt(timestamp),
+      labels: labelArray
     }));
 
-    // Use standard update with document ID instead of updateByQuery
+    // Use script-based update for AOSS compatibility
     await openSearch.update({
       index: videoIndex,
       id: documentId,
       body: {
-        doc: existingVideo
+        script: {
+          source: `
+            // Set video_objects with our formatted label structure
+            ctx._source.video_objects = params.formattedLabels;
+            ctx._source.video_status = params.video_status;
+            ctx._source.updated_at = params.updated_at;
+          `,
+          params: {
+            formattedLabels: formattedLabels,
+            video_status: "ready_for_object",
+            updated_at: new Date().toISOString()
+          }
+        }
       }
     });
     console.log(`Successfully updated video labels for video ${videoId} in index ${videoIndex}`);

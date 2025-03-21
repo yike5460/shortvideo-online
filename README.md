@@ -151,7 +151,7 @@ export interface VideoMetadata {
   
   video_metadata?: SearchMetadata;  // Quick search metadata
   video_segments?: VideoSegment[];  // Video segments
-  video_objects?: VisualObject[];
+  video_objects?: TimestampedLabel[];
   video_faces?: FaceDetection[];
   segment_visual_ocr_text?: string[];    // Extracted text
 }
@@ -197,7 +197,7 @@ export interface VideoSegment {
   };
 }
 
-export interface VisualObject {
+export interface TimestampedLabel {
   label: string;
   confidence: number;
   bounding_box: BoundingBox;

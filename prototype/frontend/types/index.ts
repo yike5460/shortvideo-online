@@ -40,10 +40,31 @@ export interface VideoSegment {
   };
 }
 
-export interface VisualObject {
-  label: string;
+// Define the categories, aliases, parents types
+export interface NamedEntity {
+  Name: string;
+}
+
+// Define a new interface for label instances
+export interface LabelInstance {
+  boundingBox: BoundingBox;
   confidence: number;
-  bounding_box: BoundingBox;
+}
+
+// Define a new interface for detailed label info
+export interface LabelInfo {
+  name: string;
+  categories: NamedEntity[];
+  aliases: NamedEntity[];
+  parents: NamedEntity[];
+  confidence: number;
+  instances: LabelInstance[];
+}
+
+// Define a new interface for timestamp-grouped labels
+export interface TimestampedLabel {
+  timestamp: number;
+  labels: LabelInfo[];
 }
 
 export interface FaceDetection {
