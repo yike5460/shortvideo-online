@@ -330,6 +330,20 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
             nested: {
               path: "video_segments",
               query: {
+                // "script_score": {
+                //   "query": {
+                //     "match_all": {}
+                //   },
+                //   "script": {
+                //     "source": "knn_score",
+                //     "lang": "knn",
+                //     "params": {
+                //       "field": "video_segments.segment_visual.segment_visual_embedding",
+                //       "query_value": embedding,
+                //       "space_type": "cosinesimil"
+                //     }
+                //   }
+                // }
                 knn: {
                   "video_segments.segment_visual.segment_visual_embedding": {
                     vector: embedding,
