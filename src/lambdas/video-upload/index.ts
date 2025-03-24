@@ -940,7 +940,7 @@ async function handlePresignRequest(event: APIGatewayProxyEvent): Promise<Lambda
     const indexResult = await withRetry(
       async () => openSearch.index({
         index: videoIndex,
-        // Remove 'id' parameter - OpenSearch Serverless will auto-generate one
+        // Remove 'id' parameter - AOSS DON'T SUPPORT ID in VECTORSEARCH, refer to https://github.com/langchain-ai/langchainjs/issues/4346, thus we need to search all the items in the index using video_id field and find the auto-generated ID to update the document, instead of using the videoId as the ID to get the document directly
         // id: videoId, 
         body: aossInitialBody
         // Remove refresh: true as it's not supported in OpenSearch Serverless
