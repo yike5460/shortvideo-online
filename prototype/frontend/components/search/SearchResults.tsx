@@ -349,14 +349,85 @@ export default function SearchResults({
   
   // Helper function to download selected segments
   const downloadSelectedSegments = useCallback((video: VideoResult, segments: VideoSegment[]) => {
-    // In a real application, you would trigger downloads for these segments
-    console.log('Downloading segments:', segments);
+    if (!segments || segments.length === 0) {
+      addToast('error', 'No clips selected for download', { duration: 3000 });
+      return;
+    }
     
-    // Show download notification as a toast
-    addToast('info', `Starting download for ${segments.length} segments from "${video.title}"`, {
+    console.log('Downloading segments:', segments);
+
+    // Browser download limitations - most browsers block multiple automatic downloads
+    const MAX_AUTO_DOWNLOADS = 3;
+    const hasMultipleSegments = segments.length > 1;
+    const hasTooManySegments = segments.length > MAX_AUTO_DOWNLOADS;
+    
+    if (hasTooManySegments) {
+      // Show warning about browser limitations for multiple downloads
+      addToast('info', `Browser security may block multiple downloads. Only the first ${MAX_AUTO_DOWNLOADS} clips will be downloaded.`, {
+        duration: 8000
+      });
+    }
+    
+    // Show initial download notification
+    addToast('info', `Starting download for ${Math.min(segments.length, MAX_AUTO_DOWNLOADS)} clips from "${video.title}"`, {
       duration: 5000
     });
-  }, [addToast]);
+    
+    // Limit the number of segments to download to prevent browser blocking
+    const segmentsToDownload = hasTooManySegments 
+      ? segments.slice(0, MAX_AUTO_DOWNLOADS) 
+      : segments;
+    
+    // Counter for successful downloads
+    let downloadCount = 0;
+    
+    // Process each segment for download using segment-specific URLs
+    segmentsToDownload.forEach((segment, index) => {
+      // Construct segment-specific URL based on segment_id and video information
+      // Fallback to the full video URL if segment-specific URL can't be constructed
+      const segmentUrl = (segment.segment_id && video.indexId) 
+                       ? `${API_ENDPOINT}/videos/${video.indexId}/${video.id}/segments/${segment.segment_id}/download`
+                       : video.videoPreviewUrl || '';
+      
+      // Ensure we have a URL to download
+      if (!segmentUrl) {
+        console.error(`No URL available for segment ${segment.segment_id || index}`);
+        addToast('error', `Failed to download clip ${index + 1}: No URL available`, { duration: 3000 });
+        return;
+      }
+      
+      // Open the URL directly in a new window with staggered timing to avoid browser blocking
+      setTimeout(() => {
+        try {
+          // Create a download link
+          const link = document.createElement('a');
+          link.href = segmentUrl;
+          
+          // Set the filename
+          const fileName = `${video.title.replace(/[^\w\s-]/gi, '')}-clip-${formatTimeDisplay(segment.start_time)}-${formatTimeDisplay(segment.end_time)}.mp4`;
+          link.setAttribute('download', fileName);
+          link.setAttribute('target', '_blank');
+          
+          // Add link to document, click it, then remove it
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          
+          downloadCount++;
+          if (downloadCount === segmentsToDownload.length) {
+            const message = hasTooManySegments
+              ? `Downloaded ${downloadCount}/${segments.length} clips. Use CSV export for all metadata.`
+              : `Downloaded ${downloadCount} video clips`;
+              
+            addToast('success', message, { duration: 5000 });
+          }
+        } catch (error) {
+          console.error(`Error downloading segment ${segment.segment_id || index}:`, error);
+          addToast('error', `Failed to download clip ${index + 1}`, { duration: 3000 });
+        }
+      }, 1500 * index); // Stagger downloads with a longer delay (1.5 seconds) to reduce browser blocking
+    });
+  }, [addToast, formatTimeDisplay, API_ENDPOINT]);
 
   const renderGridView = useCallback(() => {
     // Extract all segments with confidence > 0 from all videos
@@ -472,6 +543,14 @@ export default function SearchResults({
                 {result.description}
               </p>
               <div className="mt-4">
+                {/* User interaction hint banner - increased margin to avoid overlap with confidence scores */}
+                <div className="mb-12 text-xs text-gray-500 flex items-center gap-1 px-2 py-1 bg-gray-50 border border-gray-200 rounded">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-indigo-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <span>Click on colored segments to select clips for batch operations. Use <kbd className="px-1 py-0.5 bg-gray-200 rounded text-xs">Ctrl</kbd>/<kbd className="px-1 py-0.5 bg-gray-200 rounded text-xs">⌘</kbd>+Click to view clip details.</span>
+                </div>
+                
                 <div className="relative">
                   {hoveredSegment && hoveredSegment.videoId === result.id && result.segments && 
                    ((): JSX.Element | null => {
@@ -582,7 +661,7 @@ export default function SearchResults({
                           key={index}
                           className={`absolute h-full transition-all duration-200 hover:shadow-md hover:opacity-100 cursor-pointer rounded-sm ${
                             isSelected 
-                              ? 'bg-green-500 ring-2 ring-green-400 ring-offset-1' 
+                              ? 'bg-fuchsia-600 ring-2 ring-fuchsia-500 ring-offset-1' 
                               : isMatched 
                                 ? getSegmentColor(confidence) 
                                 : "bg-gray-400"
@@ -686,16 +765,67 @@ export default function SearchResults({
                       </>
                     )}
                   </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      downloadSelectedSegments(result, selectedSegments[result.id]);
-                    }}
-                    className="inline-flex items-center gap-1 px-3 py-1 bg-gray-600 hover:bg-gray-700 text-white text-sm font-medium rounded-md transition-colors"
-                  >
-                    <CloudArrowDownIcon className="h-4 w-4" />
-                    Download
-                  </button>
+                  <div className="relative group">
+                    <button
+                      className="inline-flex items-center gap-1 px-3 py-1 bg-gray-600 hover:bg-gray-700 text-white text-sm font-medium rounded-md transition-colors"
+                    >
+                      <CloudArrowDownIcon className="h-4 w-4" />
+                      Download
+                      <ChevronDownIcon className="h-3 w-3 ml-1" />
+                    </button>
+                    <div className="absolute right-0 mt-1 w-56 rounded-md shadow-lg bg-white ring-1 ring-black ring-opacity-5 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-10">
+                      <div className="py-1">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            downloadSelectedSegments(result, selectedSegments[result.id]);
+                            addToast('info', `Starting download of ${selectedSegments[result.id].length} video clips`, {
+                              duration: 5000
+                            });
+                          }}
+                          className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                        >
+                          Download Video Clips
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            
+                            // Generate CSV data
+                            const csvHeader = "segment_id,start_time,end_time,duration,confidence_score,description";
+                            const csvRows = selectedSegments[result.id].map(segment => {
+                              return [
+                                segment.segment_id,
+                                formatTimeDisplay(segment.start_time),
+                                formatTimeDisplay(segment.end_time),
+                                formatTimeDisplay(segment.duration),
+                                segment.confidence ? Math.round(segment.confidence * 100) + '%' : 'N/A',
+                                segment.segment_visual?.segment_visual_description || ""
+                              ].map(value => `"${value}"`).join(",");
+                            });
+                            const csvData = [csvHeader, ...csvRows].join("\n");
+                            
+                            // Create and download CSV file
+                            const blob = new Blob([csvData], { type: 'text/csv' });
+                            const url = window.URL.createObjectURL(blob);
+                            const link = document.createElement('a');
+                            link.href = url;
+                            link.setAttribute('download', `segments-${result.id}-${Date.now()}.csv`);
+                            document.body.appendChild(link);
+                            link.click();
+                            link.remove();
+                            
+                            addToast('success', `Downloaded CSV metadata for ${selectedSegments[result.id].length} segments`, {
+                              duration: 5000
+                            });
+                          }}
+                          className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                        >
+                          Download CSV Metadata
+                        </button>
+                      </div>
+                    </div>
+                  </div>
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
@@ -717,7 +847,7 @@ export default function SearchResults({
                   return (
                     <div
                       key={`selected-${index}`}
-                      className="absolute h-full bg-green-400 opacity-80 border border-green-500"
+                      className="absolute h-full bg-fuchsia-400 opacity-80 border border-fuchsia-500"
                       style={{
                         left: `${startPercent}%`,
                         width: `${Math.max(widthPercent, 1)}%`,
@@ -729,9 +859,9 @@ export default function SearchResults({
               
               {/* Merged segment preview if available */}
               {isMerging && mergedSegment && mergedSegment.video_id === result.id && (
-                <div className="bg-green-50 border border-green-200 rounded-md p-3 mt-3">
+                <div className="bg-fuchsia-50 border border-fuchsia-200 rounded-md p-3 mt-3">
                   <div className="flex items-center justify-between mb-2">
-                    <h5 className="text-sm font-medium text-green-800">
+                    <h5 className="text-sm font-medium text-fuchsia-800">
                       {mergeStatus.status === 'completed' 
                         ? 'Merge Complete'
                         : mergeStatus.status === 'failed'
@@ -740,7 +870,7 @@ export default function SearchResults({
                     </h5>
                     <button 
                       onClick={() => setIsMerging(false)}
-                      className="text-green-700 hover:text-green-900"
+                      className="text-fuchsia-700 hover:text-fuchsia-900"
                     >
                       <span className="text-xs">Close</span>
                     </button>

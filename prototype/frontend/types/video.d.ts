@@ -13,6 +13,7 @@ declare module '@/types' {
       segment_visual_description?: string;
     };
     segment_video_thumbnail_url?: string;
+    segment_video_url?: string;
     segment_audio?: {
       segment_audio_transcript?: string;
     };
