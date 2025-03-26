@@ -409,6 +409,7 @@ export default function HomePage() {
             <SearchResults
               results={searchResults}
               showConfidenceScores={searchOptions.showConfidenceScores}
+              searchOptions={searchOptions}
             />
           ) : (
             <div className="flex items-center justify-center h-full">
@@ -436,4 +437,4 @@ export default function HomePage() {
       />
     </div>
   )
-} 
+}

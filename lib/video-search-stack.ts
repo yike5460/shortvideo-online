@@ -969,6 +969,7 @@ export class VideoSearchStack extends cdk.Stack {
     // API Gateway Path:
     // Fixed index "videos"
     // /videos/upload                         POST - Start upload
+    // /videos/merge                          POST - Merge videos
     // /videos/upload/{videoId}/complete      POST - Complete upload
     // /videos/youtube                        POST - YouTube upload
     // /videos/?index={indexId} or /videos/   GET  - Get specific video details or all videos
@@ -986,6 +987,7 @@ export class VideoSearchStack extends cdk.Stack {
     const videos = api.root.addResource('videos');
     
     const upload = videos.addResource('upload');
+    const merge = videos.addResource('merge');
     const uploadComplete = upload.addResource('{uploadId}').addResource('complete');
     const youtube = videos.addResource('youtube');
 
@@ -1080,6 +1082,7 @@ export class VideoSearchStack extends cdk.Stack {
     addMethodWithCors(videos, 'GET', lambdaFunctions.videoUploadFunction.videoUploadHandler);
     addMethodWithCors(videos, 'DELETE', lambdaFunctions.videoUploadFunction.videoUploadHandler);
     addMethodWithCors(upload, 'POST', lambdaFunctions.videoUploadFunction.videoUploadHandler);
+    addMethodWithCors(merge, 'POST', lambdaFunctions.videoUploadFunction.videoUploadHandler);
     addMethodWithCors(uploadComplete, 'POST', lambdaFunctions.videoUploadFunction.videoUploadHandler);
     addMethodWithCors(youtube, 'POST', lambdaFunctions.videoUploadFunction.youtubeUploadHandler);
 

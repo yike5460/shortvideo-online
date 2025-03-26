@@ -149,6 +149,13 @@ interface CompleteUploadRequest {
   videoId: string;
 }
 
+interface MergeSegmentsRequest {
+  indexId: string;           // The index the segments belong to
+  videoId: string;           // The original video ID
+  segmentIds: string[];      // IDs of segments to merge
+  mergedName?: string;       // Optional custom name for the merged segment
+}
+
 /**
  * Utility function to perform OpenSearch operations with retry logic
  * @param operation Function that performs the OpenSearch operation
@@ -223,6 +230,8 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<LambdaRespon
         return handlePresignRequest(event);
       } else if (path.endsWith('/complete')) {
         return handleCompleteUpload(event);
+      } else if (path.endsWith('/merge')) {
+        return handleMergeSegments(event);
       }
     } else if (method === 'DELETE' && (path === '/videos' || path.endsWith('/videos/'))) {
       // Handle video deletion using query parameters: /videos/?index={indexId}?videoId={videoId}
@@ -1316,6 +1325,416 @@ async function extractAndUploadThumbnail(videoS3Path: string, thumbnailS3Path: s
     const thumbnailUrl = await getSignedUrl(s3 as any, getSignedUrlCommand as any, { expiresIn: 3600 });
     return { thumbnailUrl, duration: 0 };
   }
+}
+
+/**
+ * Handle the merging of video segments
+ */
+async function handleMergeSegments(event: APIGatewayProxyEvent): Promise<LambdaResponse> {
+  try {
+    const request: MergeSegmentsRequest = JSON.parse(event.body!);
+    const { indexId, videoId, segmentIds, mergedName } = request;
+
+    console.log(`Handling segment merge request for video ${videoId} in index ${indexId}, segments: ${segmentIds.join(', ')}`);
+    
+    // Validate request parameters
+    if (!indexId || !videoId || !segmentIds || segmentIds.length < 2) {
+      return {
+        statusCode: STATUS_CODES.BAD_REQUEST,
+        headers: corsHeaders,
+        body: JSON.stringify({ 
+          error: 'Invalid request parameters',
+          details: 'indexId, videoId, and at least 2 segmentIds are required'
+        })
+      };
+    }
+
+    // Get the original video info to extract timestamp and other metadata
+    const { body: videoSearchResult } = await withRetry(
+      async () => openSearch.search({
+        index: indexId,
+        body: {
+          query: {
+            term: {
+              video_id: videoId
+            }
+          }
+        }
+      }),
+      3,
+      `Search for video ${videoId} in index ${indexId}`
+    );
+
+    if (!videoSearchResult.hits || !videoSearchResult.hits.hits || videoSearchResult.hits.hits.length === 0) {
+      return {
+        statusCode: STATUS_CODES.NOT_FOUND,
+        headers: corsHeaders,
+        body: JSON.stringify({ error: `Video ${videoId} not found in index ${indexId}` })
+      };
+    }
+
+    // Extract video document and its OpenSearch ID
+    const videoDocument = videoSearchResult.hits.hits[0]._source;
+    const documentId = videoSearchResult.hits.hits[0]._id;
+    
+    // Get the original video S3 path to extract timestamp and path components
+    const videoS3Path = videoDocument.video_s3_path;
+    if (!videoS3Path) {
+      return {
+        statusCode: STATUS_CODES.BAD_REQUEST,
+        headers: corsHeaders,
+        body: JSON.stringify({ error: 'Original video S3 path not found' })
+      };
+    }
+
+    // Extract timestamp from original video path (format: RawVideos/2025-03-02/indexId/videoId/...)
+    const pathParts = videoS3Path.split('/');
+    console.log("pathParts: ", pathParts);
+
+    const timestamp = pathParts[1];
+    
+    // Get segments info
+    const segments = await getSegmentDetails(indexId, videoId, segmentIds);
+    
+    if (!segments || segments.length === 0) {
+      return {
+        statusCode: STATUS_CODES.NOT_FOUND,
+        headers: corsHeaders,
+        body: JSON.stringify({ error: 'No segments found for the provided IDs' })
+      };
+    }
+    
+    // Sort segments by start_time
+    const sortedSegments = [...segments].sort((a, b) => a.start_time - b.start_time);
+    
+    // Create a merged segment name if not provided
+    const mergedSegmentName = mergedName || `merged_${Date.now()}`;
+    const mergedFilename = `${mergedSegmentName}.mp4`;
+    
+    // Define S3 paths for merged video and its thumbnail
+    const mergedVideoS3Path = `ProcessedVideos/${timestamp}/${indexId}/${videoId}/merged/${mergedFilename}`;
+    const mergedThumbnailS3Path = mergedVideoS3Path.replace(/\.mp4$/i, '.jpg');
+    
+    // Create temporary directory for processing
+    const tempDir = '/tmp';
+    await fs.promises.mkdir(`${tempDir}/merge_${videoId}`, { recursive: true });
+    
+    // Download all segments to local storage
+    const downloadedSegments = await downloadSegmentsToLocalStorage(segments);
+    
+    // Create FFmpeg concat file
+    const concatFilePath = `${tempDir}/merge_${videoId}/concat_list.txt`;
+    await createFFmpegConcatFile(downloadedSegments, concatFilePath);
+    
+    // Merge segments using FFmpeg
+    const mergedVideoPath = `${tempDir}/merge_${videoId}/merged_output.mp4`;
+    await mergeVideoSegments(concatFilePath, mergedVideoPath);
+    
+    // Generate thumbnail for merged video
+    const mergedThumbnailPath = `${tempDir}/merge_${videoId}/merged_thumbnail.jpg`;
+    await generateThumbnail(mergedVideoPath, mergedThumbnailPath);
+    
+    // Upload merged video and thumbnail to S3
+    const bucketName = process.env.VIDEO_BUCKET!;
+    
+    // Upload merged video
+    await s3.send(new PutObjectCommand({
+      Bucket: bucketName, 
+      Key: mergedVideoS3Path,
+      Body: fs.readFileSync(mergedVideoPath),
+      ContentType: 'video/mp4'
+    }));
+    
+    // Upload thumbnail
+    await s3.send(new PutObjectCommand({
+      Bucket: bucketName,
+      Key: mergedThumbnailS3Path,
+      Body: fs.readFileSync(mergedThumbnailPath),
+      ContentType: 'image/jpeg'
+    }));
+    
+    // Generate signed URLs
+    const videoCommand = new GetObjectCommand({
+      Bucket: bucketName,
+      Key: mergedVideoS3Path
+    });
+    
+    const thumbnailCommand = new GetObjectCommand({
+      Bucket: bucketName,
+      Key: mergedThumbnailS3Path
+    });
+    
+    const [mergedVideoUrl, mergedThumbnailUrl] = await Promise.all([
+      getSignedUrl(s3 as any, videoCommand as any, { expiresIn: 3600 }),
+      getSignedUrl(s3 as any, thumbnailCommand as any, { expiresIn: 3600 })
+    ]);
+    
+    // Calculate merged segment metadata
+    const mergedSegmentId = `${videoId}_merged_${Date.now()}`;
+    const startTime = sortedSegments[0].start_time;
+    const endTime = sortedSegments[sortedSegments.length - 1].end_time;
+    const duration = endTime - startTime;
+    
+    // Create merged segment object
+    const mergedSegment = {
+      segment_id: mergedSegmentId,
+      video_id: videoId,
+      start_time: startTime,
+      end_time: endTime,
+      duration: duration,
+      segment_video_s3_path: mergedVideoS3Path,
+      segment_video_preview_url: mergedVideoUrl,
+      segment_video_thumbnail_s3_path: mergedThumbnailS3Path,
+      segment_video_thumbnail_url: mergedThumbnailUrl,
+      segment_visual: {
+        segment_visual_description: `Merged clip from ${sortedSegments.length} segments`
+      }
+    };
+    
+    // Add merged segment to OpenSearch document
+    try {
+      await openSearch.update({
+        index: indexId,
+        id: documentId,
+        body: {
+          script: {
+            source: `
+              // Initialize video_segments array if null
+              if (ctx._source.video_segments == null) {
+                ctx._source.video_segments = [];
+              }
+              
+              // Add merged segment to the array
+              ctx._source.video_segments.add(params.mergedSegment);
+              ctx._source.updated_at = params.updated_at;
+            `,
+            params: {
+              mergedSegment: mergedSegment,
+              updated_at: new Date().toISOString()
+            }
+          }
+        }
+      });
+      
+      console.log(`Successfully added merged segment to OpenSearch document for video ${videoId}`);
+    } catch (error) {
+      console.error('Error updating OpenSearch document:', error);
+      
+      // Clean up S3 objects if OpenSearch update fails
+      try {
+        await s3.send(new DeleteObjectCommand({
+          Bucket: bucketName,
+          Key: mergedVideoS3Path
+        }));
+        
+        await s3.send(new DeleteObjectCommand({
+          Bucket: bucketName,
+          Key: mergedThumbnailS3Path
+        }));
+      } catch (cleanupError) {
+        console.warn('Error cleaning up S3 objects after failed update:', cleanupError);
+      }
+      
+      return {
+        statusCode: STATUS_CODES.INTERNAL_SERVER_ERROR,
+        headers: corsHeaders,
+        body: JSON.stringify({ 
+          error: 'Failed to update metadata for merged segment',
+          details: error instanceof Error ? error.message : 'Unknown error'
+        })
+      };
+    }
+    
+    // Clean up temporary files
+    try {
+      await fs.promises.rm(`${tempDir}/merge_${videoId}`, { recursive: true, force: true });
+    } catch (cleanupError) {
+      console.warn('Error cleaning up temporary files:', cleanupError);
+    }
+    
+    // Return success response
+    return {
+      statusCode: STATUS_CODES.OK,
+      headers: corsHeaders,
+      body: JSON.stringify({
+        message: 'Segments merged successfully',
+        mergedSegment: mergedSegment
+      })
+    };
+    
+  } catch (error) {
+    console.error('Error merging segments:', error);
+    return {
+      statusCode: STATUS_CODES.INTERNAL_SERVER_ERROR,
+      headers: corsHeaders,
+      body: JSON.stringify({ 
+        error: 'Failed to merge segments', 
+        details: error instanceof Error ? error.message : 'Unknown error'
+      })
+    };
+  }
+}
+
+/**
+ * Get segment details from OpenSearch
+ */
+async function getSegmentDetails(indexId: string, videoId: string, segmentIds: string[]): Promise<any[]> {
+  const { body: searchResult } = await withRetry(
+    async () => openSearch.search({
+      index: indexId,
+      body: {
+        query: {
+          term: {
+            video_id: videoId
+          }
+        }
+      }
+    }),
+    3,
+    `Search for segments of video ${videoId} in index ${indexId}`
+  );
+  
+  if (!searchResult.hits || !searchResult.hits.hits || searchResult.hits.hits.length === 0) {
+    throw new Error(`Video ${videoId} not found in index ${indexId}`);
+  }
+  
+  // Extract video segments from the search result
+  const videoDocument = searchResult.hits.hits[0]._source;
+  const videoSegments = videoDocument.video_segments || [];
+  
+  // Filter segments by segmentIds, in format of `${videoId}_segment_${segmentNumber}`
+  const filteredSegments = videoSegments.filter((segment: any) => 
+    segmentIds.includes(segment.segment_id)
+  );
+  
+  return filteredSegments;
+}
+
+/**
+ * Download segments to local storage
+ */
+async function downloadSegmentsToLocalStorage(segments: any[]): Promise<string[]> {
+  const tempDir = '/tmp';
+  const localPaths: string[] = [];
+  const bucketName = process.env.VIDEO_BUCKET!;
+  
+  for (let i = 0; i < segments.length; i++) {
+    const segment = segments[i];
+    const segmentS3Path = segment.segment_video_s3_path;
+    
+    if (!segmentS3Path) {
+      console.warn(`Segment ${segment.segment_id} has no S3 path, skipping`);
+      continue;
+    }
+    
+    // Create local path for the segment
+    const localPath = `${tempDir}/segment_${i}.mp4`;
+    localPaths.push(localPath);
+    
+    // Download segment from S3
+    const getCommand = new GetObjectCommand({
+      Bucket: bucketName,
+      Key: segmentS3Path
+    });
+    
+    const response = await s3.send(getCommand);
+    
+    if (response.Body) {
+      // Convert the response body to a buffer and write to file
+      const data = await streamToBuffer(response.Body as Readable);
+      await fs.promises.writeFile(localPath, data);
+    } else {
+      throw new Error(`Failed to download segment from S3: ${segmentS3Path}`);
+    }
+  }
+  
+  return localPaths;
+}
+
+/**
+ * Create FFmpeg concat file
+ */
+async function createFFmpegConcatFile(segmentPaths: string[], outputPath: string): Promise<void> {
+  let content = '';
+  
+  // Create file content in FFmpeg concat format
+  for (const path of segmentPaths) {
+    content += `file '${path}'\n`;
+  }
+  
+  // Write content to file
+  await fs.promises.writeFile(outputPath, content);
+}
+
+/**
+ * Merge video segments using FFmpeg
+ */
+async function mergeVideoSegments(concatFilePath: string, outputPath: string): Promise<void> {
+  // FFmpeg command to concatenate videos
+  const ffmpegArgs = [
+    '-f', 'concat',            // Use concat demuxer
+    '-safe', '0',              // Don't validate filenames
+    '-i', concatFilePath,      // Input file listing segments
+    '-c:v', 'copy',            // Copy video codec without re-encoding
+    '-c:a', 'copy',            // Copy audio codec without re-encoding
+    outputPath                 // Output file
+  ];
+  
+  console.log(`Running FFmpeg command: ffmpeg ${ffmpegArgs.join(' ')}`);
+  
+  // Execute FFmpeg command
+  const ffmpegProcess = spawn('ffmpeg', ffmpegArgs);
+  
+  // Wait for the process to complete
+  await new Promise<void>((resolve, reject) => {
+    ffmpegProcess.on('close', (code) => {
+      if (code === 0) {
+        console.log('Successfully merged video segments');
+        resolve();
+      } else {
+        reject(new Error(`FFmpeg process exited with code ${code}`));
+      }
+    });
+    
+    ffmpegProcess.stderr.on('data', (data) => {
+      console.log(`FFmpeg stderr: ${data}`);
+    });
+  });
+}
+
+/**
+ * Generate thumbnail from video
+ */
+async function generateThumbnail(videoPath: string, outputPath: string): Promise<void> {
+  // FFmpeg command to extract a thumbnail
+  const ffmpegArgs = [
+    '-i', videoPath,          // Input file
+    '-ss', '00:00:01',        // Position at 1 second
+    '-vframes', '1',          // Extract 1 frame
+    '-q:v', '2',              // High quality
+    outputPath                // Output file
+  ];
+  
+  console.log(`Running FFmpeg command: ffmpeg ${ffmpegArgs.join(' ')}`);
+  
+  // Execute FFmpeg command
+  const ffmpegProcess = spawn('ffmpeg', ffmpegArgs);
+  
+  // Wait for the process to complete
+  await new Promise<void>((resolve, reject) => {
+    ffmpegProcess.on('close', (code) => {
+      if (code === 0) {
+        console.log('Successfully extracted thumbnail');
+        resolve();
+      } else {
+        reject(new Error(`FFmpeg process exited with code ${code}`));
+      }
+    });
+    
+    ffmpegProcess.stderr.on('data', (data) => {
+      console.log(`FFmpeg stderr: ${data}`);
+    });
+  });
 }
 
 // Helper function to convert a readable stream to a buffer

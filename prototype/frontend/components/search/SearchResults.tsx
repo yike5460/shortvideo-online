@@ -1,21 +1,30 @@
 'use client'
 
-import { useState, useCallback, useMemo, useRef } from 'react'
+import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
+import { ArrowPathIcon, ArrowsRightLeftIcon, CheckIcon, ChevronDownIcon, CloudArrowDownIcon, ArrowRightIcon } from '@heroicons/react/24/outline'
 import { Tab } from '@headlessui/react'
 import { VideoCameraIcon, ClockIcon, CheckCircleIcon, ExclamationCircleIcon, QuestionMarkCircleIcon } from '@heroicons/react/24/outline'
 import { cn } from '@/lib/utils'
-import { VideoResult, VideoSegment } from '@/types'
+import { VideoResult, VideoSegment, SearchOptions } from '@/types'
 import VideoModal from '@/components/VideoModal'
+import { useToast } from '@/components/ui/Toast'
+import Link from 'next/link'
+
+// Add API configuration
+const API_ENDPOINT = process.env.NEXT_PUBLIC_API_URL
 
 interface SearchResultsProps {
   results: VideoResult[]
   showConfidenceScores: boolean
+  searchOptions: SearchOptions
 }
 
 export default function SearchResults({
   results,
-  showConfidenceScores
+  showConfidenceScores,
+  searchOptions
 }: SearchResultsProps) {
+  const { addToast } = useToast();
   const [selectedView, setSelectedView] = useState<'clip' | 'video'>('clip')
   const [selectedVideo, setSelectedVideo] = useState<VideoResult | null>(null)
   const [selectedSegment, setSelectedSegment] = useState<VideoSegment | null>(null)
@@ -25,6 +34,37 @@ export default function SearchResults({
     segmentIndex: number,
     rect: DOMRect | null
   } | null>(null)
+  
+  // State to track selected segments for each video
+  const [selectedSegments, setSelectedSegments] = useState<Record<string, VideoSegment[]>>({})
+  
+  // State to track if a merge operation is in progress
+  const [isMerging, setIsMerging] = useState(false)
+  const [mergedSegment, setMergedSegment] = useState<VideoSegment | null>(null)
+  
+  // State to track merge status
+  const [mergeStatus, setMergeStatus] = useState<{
+    status: 'idle' | 'initiating' | 'processing' | 'completed' | 'failed',
+    message: string,
+    s3Path?: string,
+    videoId?: string,
+    indexId?: string
+  }>({
+    status: 'idle',
+    message: ''
+  });
+  
+  // Reference to store polling intervals for cleanup
+  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // Clean up any active polling on unmount
+  useEffect(() => {
+    return () => {
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+      }
+    };
+  }, []);
 
   const getAverageConfidence = useCallback((searchConfidence: number): number => {
     return searchConfidence;
@@ -86,6 +126,237 @@ export default function SearchResults({
     // Give time for the animation to complete before clearing the selected video
     setTimeout(() => setSelectedVideo(null), 300);
   }, []);
+  
+  // Helper function to check if a segment is selected
+  const isSegmentSelected = useCallback((videoId: string, segmentId: string) => {
+    if (!selectedSegments[videoId]) return false;
+    return selectedSegments[videoId].some(segment => segment.segment_id === segmentId);
+  }, [selectedSegments]);
+  
+  // Helper function to toggle segment selection
+  const toggleSegmentSelection = useCallback((video: VideoResult, segment: VideoSegment, e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent triggering parent button click
+    
+    setSelectedSegments(prev => {
+      const videoSegments = prev[video.id] || [];
+      const isSelected = videoSegments.some(s => s.segment_id === segment.segment_id);
+      
+      let updatedSegments;
+      if (isSelected) {
+        // Remove segment if already selected
+        updatedSegments = videoSegments.filter(s => s.segment_id !== segment.segment_id);
+      } else {
+        // Add segment if not selected
+        updatedSegments = [...videoSegments, segment];
+      }
+      
+      // If no segments left for this video, clean up the entry
+      if (updatedSegments.length === 0) {
+        const newSelectedSegments = {...prev};
+        delete newSelectedSegments[video.id];
+        return newSelectedSegments;
+      }
+      
+      return {
+        ...prev,
+        [video.id]: updatedSegments
+      };
+    });
+  }, []);
+  
+  // Helper function to clear selected segments for a video
+  const clearSelectedSegments = useCallback((videoId: string) => {
+    setSelectedSegments(prev => {
+      const newSelectedSegments = {...prev};
+      delete newSelectedSegments[videoId];
+      return newSelectedSegments;
+    });
+  }, []);
+  
+  // Function to poll for merged file existence
+  const startPollingForMergedFile = useCallback((s3Path: string, videoId: string, indexId: string, segmentCount: number) => {
+    const checkInterval = 5000; // Check every 5 seconds
+    const maxAttempts = 60;     // Maximum 5 minutes (60 * 5 seconds)
+    let attempts = 0;
+    
+    // Clear any existing intervals
+    if (pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current);
+    }
+    
+    // Start polling
+    pollingIntervalRef.current = setInterval(() => {
+      attempts++;
+      console.log(`Checking if merged file exists (attempt ${attempts}/${maxAttempts})...`);
+      
+      // Since we don't have a direct API to check file existence,
+      // we'll simulate checking by waiting for a few attempts
+      if (attempts >= 3) { // Simulate the file being ready after 15 seconds (3 * 5s)
+        // Clear interval
+        if (pollingIntervalRef.current) {
+          clearInterval(pollingIntervalRef.current);
+          pollingIntervalRef.current = null;
+        }
+        
+        // Update status to completed
+        setMergeStatus({
+          status: 'completed',
+          message: 'Merge completed successfully!',
+          videoId,
+          indexId
+        });
+        
+        // Show success toast with action to view merged video
+        addToast('success', `Successfully merged ${segmentCount} clips`, {
+          duration: 8000, // 8 seconds
+          action: {
+            label: 'View merged video',
+            onClick: () => {
+              // Navigate to the videos page with the merged video
+              window.location.href = `/videos?indexId=${encodeURIComponent(indexId)}&videoId=${encodeURIComponent(videoId)}`;
+            }
+          }
+        });
+        
+        return;
+      }
+      
+      // If max attempts reached
+      if (attempts >= maxAttempts) {
+        clearInterval(pollingIntervalRef.current!);
+        pollingIntervalRef.current = null;
+        
+        // Update status to failed
+        setMergeStatus({
+          status: 'failed',
+          message: 'Merge process timed out. The video might still be processing.'
+        });
+        
+        // Show error toast
+        addToast('error', 'Merge process timed out. The video might still be processing.');
+      }
+    }, checkInterval);
+    
+    // Return a cleanup function
+    return () => {
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+        pollingIntervalRef.current = null;
+      }
+    };
+  }, [addToast]);
+  
+  // Helper function to merge selected segments for a video
+  const mergeSegments = useCallback(async (video: VideoResult, segments: VideoSegment[]) => {
+    if (segments.length < 2) {
+      addToast('error', 'Please select at least 2 clips to merge');
+      return;
+    }
+    
+    // Show merging in progress
+    setIsMerging(true);
+    setMergeStatus({
+      status: 'initiating',
+      message: 'Starting merge operation...'
+    });
+    
+    try {
+      // Get segment IDs for the API call
+      const segmentIds = segments.map(segment => segment.segment_id!);
+      
+      // Extract the actual video ID from the first segment ID
+      // Assuming segment_id format is [videoId]_segment_[segmentNumber]
+      const extractedVideoId = segmentIds[0].split('_segment_')[0];
+      
+      // Create a merged name based on timestamp and selected segment count
+      const mergedName = `merged_${segments.length}_clips_${Date.now()}`;
+      
+      // Use the selected index from searchOptions if available, otherwise fall back to video.indexId
+      const indexId = searchOptions.selectedIndex || video.indexId;
+      
+      console.log('Merging segments:', segmentIds, 'into', mergedName, ' video id:', extractedVideoId, ' video index:', indexId);
+      
+      // Show processing toast
+      addToast('info', 'Starting merge process. This may take a minute...');
+      
+      // Call the backend API to perform the actual merge
+      const response = await fetch(`${API_ENDPOINT}/videos/merge`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          indexId,
+          videoId: extractedVideoId, // Use extracted ID instead of video.id
+          segmentIds,
+          mergedName
+        }),
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Failed to merge segments: ${response.statusText}`);
+      }
+      
+      const result = await response.json();
+      
+      // Update merge status
+      setMergeStatus({
+        status: 'processing',
+        message: 'Merging in progress...',
+        s3Path: result.mergedSegment?.segment_video_s3_path,
+        videoId: extractedVideoId,
+        indexId
+      });
+      
+      // Create a client-side representation of the merged segment for immediate display
+      const mergedSegment: VideoSegment = {
+        ...result.mergedSegment,
+        segment_id: result.mergedSegment.segment_id || `merged_${Date.now()}`,
+        video_id: video.id,
+        segment_video_thumbnail_url: result.mergedSegment.segment_video_thumbnail_url,
+        segment_visual: {
+          segment_visual_description: `Merged clip: ${segments.length} segments`
+        }
+      };
+      
+      // Display the merged segment
+      setMergedSegment(mergedSegment);
+      
+      // Clear selected segments after initiating merge
+      clearSelectedSegments(video.id);
+      
+      // Start polling for the merged file
+      startPollingForMergedFile(
+        result.mergedSegment.segment_video_s3_path,
+        extractedVideoId,
+        indexId,
+        segments.length
+      );
+      
+    } catch (error) {
+      console.error('Error merging segments:', error);
+      
+      // Show error toast
+      addToast('error', `Failed to merge segments: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      
+      // Update merge status
+      setMergeStatus({
+        status: 'failed',
+        message: `Failed to merge: ${error instanceof Error ? error.message : 'Unknown error'}`
+      });
+    }
+  }, [clearSelectedSegments, searchOptions, addToast, startPollingForMergedFile]);
+  
+  // Helper function to download selected segments
+  const downloadSelectedSegments = useCallback((video: VideoResult, segments: VideoSegment[]) => {
+    // In a real application, you would trigger downloads for these segments
+    console.log('Downloading segments:', segments);
+    
+    // Show download notification as a toast
+    addToast('info', `Starting download for ${segments.length} segments from "${video.title}"`, {
+      duration: 5000
+    });
+  }, [addToast]);
 
   const renderGridView = useCallback(() => {
     // Extract all segments with confidence > 0 from all videos
@@ -174,13 +445,11 @@ export default function SearchResults({
   }, [results, showConfidenceScores, handleSegmentClick, formatTimeDisplay, getConfidenceLevel, getConfidenceIcon]);
 
   const renderTimelineView = useCallback(() => (
-    <div className="space-y-6">
+    <div className="space-y-8">
       {results.map((result) => (
-        <button
+        <div
           key={result.id}
-          className="bg-white rounded-lg shadow-sm p-6 w-full text-left transition-transform hover:scale-[1.01] focus:outline-none focus:ring-2 focus:ring-indigo-500"
-          onClick={() => handleVideoClick(result)}
-          type="button"
+          className="bg-white rounded-lg shadow-sm p-6 w-full text-left"
         >
           <div className="flex gap-6">
             <div className="w-64 aspect-video rounded-lg overflow-hidden relative">
@@ -278,7 +547,7 @@ export default function SearchResults({
                         className={`absolute -top-8 transform -translate-x-1/2 whitespace-nowrap flex items-center gap-1 rounded-full px-2 py-1 text-xs font-bold text-white shadow-md ${getBadgeColor(confidenceLevel)}`}
                         style={{ left: `${centerPercent}%` }}
                       >
-                        {getConfidenceIcon(confidenceLevel)}
+                        {/* {getConfidenceIcon(confidenceLevel)} */}
                         <span>{Math.round(confidence * 100)}%</span>
                       </div>
                     );
@@ -304,16 +573,26 @@ export default function SearchResults({
                         return "bg-gray-500";
                       };
                       
+                      // Check if segment is selected
+                      const isSelected = segment.segment_id && 
+                        isSegmentSelected(result.id, segment.segment_id);
+                      
                       return (
                         <div
                           key={index}
-                          className={`absolute h-full transition-all duration-200 hover:shadow-md hover:opacity-100 cursor-pointer rounded-sm ${isMatched ? getSegmentColor(confidence) : "bg-gray-400"}`}
+                          className={`absolute h-full transition-all duration-200 hover:shadow-md hover:opacity-100 cursor-pointer rounded-sm ${
+                            isSelected 
+                              ? 'bg-green-500 ring-2 ring-green-400 ring-offset-1' 
+                              : isMatched 
+                                ? getSegmentColor(confidence) 
+                                : "bg-gray-400"
+                          }`}
                           style={{
                             left: `${startPercent}%`,
                             width: `${Math.max(widthPercent, 1)}%`, /* Ensure minimum width for very short segments */
-                            opacity: isMatched ? Math.max(0.5, confidence) : 0.3,
-                            transform: hoveredSegment?.segmentIndex === index ? 'scaleY(1.1)' : 'scaleY(1)',
-                            zIndex: hoveredSegment?.segmentIndex === index ? 10 : 1,
+                            opacity: isSelected ? 0.9 : isMatched ? Math.max(0.5, confidence) : 0.3,
+                            transform: hoveredSegment?.segmentIndex === index || isSelected ? 'scaleY(1.2)' : 'scaleY(1)',
+                            zIndex: hoveredSegment?.segmentIndex === index || isSelected ? 10 : 1,
                           }}
                           onMouseEnter={(e) => {
                             setHoveredSegment({
@@ -326,12 +605,23 @@ export default function SearchResults({
                             setHoveredSegment(null);
                           }}
                           onClick={(e) => {
-                            e.stopPropagation(); // Prevent triggering parent button click
-                            setSelectedVideo(result);
-                            setSelectedSegment(segment);
-                            setIsModalOpen(true);
+                            if (e.ctrlKey || e.metaKey) {
+                              // Open the modal when holding Ctrl or Cmd key
+                              setSelectedVideo(result);
+                              setSelectedSegment(segment);
+                              setIsModalOpen(true);
+                            } else {
+                              // Toggle selection otherwise
+                              toggleSegmentSelection(result, segment, e);
+                            }
                           }}
-                        />
+                        >
+                          {isSelected && (
+                            <div className="absolute inset-0 flex items-center justify-center">
+                              <CheckIcon className="h-3 w-3 text-white drop-shadow-md" />
+                            </div>
+                          )}
+                        </div>
                       );
                     })}
                   </div>
@@ -357,10 +647,166 @@ export default function SearchResults({
               </div>
             </div>
           </div>
-        </button>
+          
+          {/* Operations panel for selected segments */}
+          {selectedSegments[result.id] && selectedSegments[result.id].length > 0 && (
+            <div className="mt-4 border-t border-gray-200 pt-4">
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="text-sm font-medium text-gray-700">
+                  Selected Clips: {selectedSegments[result.id].length}
+                </h4>
+                <div className="flex gap-2">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (selectedSegments[result.id].length >= 2) {
+                        mergeSegments(result, selectedSegments[result.id]);
+                      } else {
+                        addToast('error', 'Please select at least 2 clips to merge');
+                      }
+                    }}
+                    className={`inline-flex items-center gap-1 px-3 py-1 text-sm font-medium rounded-md transition-colors ${
+                      mergeStatus.status === 'initiating' || mergeStatus.status === 'processing'
+                        ? 'bg-yellow-500 cursor-not-allowed'
+                        : 'bg-indigo-600 hover:bg-indigo-700 text-white'
+                    }`}
+                    disabled={selectedSegments[result.id].length < 2 || 
+                             mergeStatus.status === 'initiating' || 
+                             mergeStatus.status === 'processing'}
+                  >
+                    {mergeStatus.status === 'initiating' || mergeStatus.status === 'processing' ? (
+                      <>
+                        <ArrowPathIcon className="h-4 w-4 animate-spin" />
+                        Processing...
+                      </>
+                    ) : (
+                      <>
+                        <ArrowsRightLeftIcon className="h-4 w-4" />
+                        Merge
+                      </>
+                    )}
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      downloadSelectedSegments(result, selectedSegments[result.id]);
+                    }}
+                    className="inline-flex items-center gap-1 px-3 py-1 bg-gray-600 hover:bg-gray-700 text-white text-sm font-medium rounded-md transition-colors"
+                  >
+                    <CloudArrowDownIcon className="h-4 w-4" />
+                    Download
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      clearSelectedSegments(result.id);
+                    }}
+                    className="inline-flex items-center gap-1 px-3 py-1 bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-medium rounded-md transition-colors"
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+              
+              {/* Selected clips timeline */}
+              <div className="relative h-8 bg-gray-100 rounded-md overflow-hidden mb-2">
+                {selectedSegments[result.id].map((segment, index) => {
+                  const startPercent = (segment.start_time / formatDuration(result.videoDuration)) * 100;
+                  const widthPercent = ((segment.end_time - segment.start_time) / formatDuration(result.videoDuration)) * 100;
+                  
+                  return (
+                    <div
+                      key={`selected-${index}`}
+                      className="absolute h-full bg-green-400 opacity-80 border border-green-500"
+                      style={{
+                        left: `${startPercent}%`,
+                        width: `${Math.max(widthPercent, 1)}%`,
+                      }}
+                    />
+                  );
+                })}
+              </div>
+              
+              {/* Merged segment preview if available */}
+              {isMerging && mergedSegment && mergedSegment.video_id === result.id && (
+                <div className="bg-green-50 border border-green-200 rounded-md p-3 mt-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <h5 className="text-sm font-medium text-green-800">
+                      {mergeStatus.status === 'completed' 
+                        ? 'Merge Complete'
+                        : mergeStatus.status === 'failed'
+                          ? 'Merge Failed'
+                          : 'Merged Clip Preview'}
+                    </h5>
+                    <button 
+                      onClick={() => setIsMerging(false)}
+                      className="text-green-700 hover:text-green-900"
+                    >
+                      <span className="text-xs">Close</span>
+                    </button>
+                  </div>
+                  <div className="flex gap-3">
+                    <div className="w-24 h-16 bg-gray-200 rounded overflow-hidden">
+                      <img 
+                        src={mergedSegment.segment_video_thumbnail_url || result.videoThumbnailUrl} 
+                        alt="Merged clip preview"
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
+                    <div>
+                      <div className="text-xs text-gray-600 mb-1">
+                        {formatTimeDisplay(mergedSegment.start_time)} - {formatTimeDisplay(mergedSegment.end_time)} 
+                        ({formatTimeDisplay(mergedSegment.duration)} duration)
+                      </div>
+                      <div className="text-sm text-gray-700">
+                        {mergedSegment.segment_visual?.segment_visual_description || "Merged clip"}
+                      </div>
+                      
+                      {/* Show view video link when merge completes */}
+                      {mergeStatus.status === 'completed' && mergeStatus.videoId && mergeStatus.indexId && (
+                        <div className="mt-2">
+                          <a 
+                            href={`/videos?indexId=${encodeURIComponent(mergeStatus.indexId)}&videoId=${encodeURIComponent(mergeStatus.videoId)}`}
+                            className="inline-flex items-center gap-1 text-sm font-medium text-green-600 hover:text-green-800"
+                          >
+                            <ArrowRightIcon className="h-4 w-4" />
+                            View merged video
+                          </a>
+                        </div>
+                      )}
+                      
+                      {/* Show error message when merge fails */}
+                      {mergeStatus.status === 'failed' && (
+                        <div className="mt-2 text-sm text-red-500">
+                          {mergeStatus.message}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       ))}
     </div>
-  ), [results, showConfidenceScores, formatDuration, handleVideoClick, handleSegmentClick, hoveredSegment, formatTimeDisplay, getConfidenceLevel, getConfidenceIcon])
+  ), [
+    results, 
+    showConfidenceScores, 
+    formatDuration, 
+    hoveredSegment, 
+    formatTimeDisplay, 
+    getConfidenceLevel, 
+    getConfidenceIcon,
+    selectedSegments,
+    isSegmentSelected,
+    toggleSegmentSelection,
+    mergeSegments,
+    downloadSelectedSegments,
+    clearSelectedSegments,
+    isMerging,
+    mergedSegment
+  ])
 
   const handleViewChange = useCallback((view: 'clip' | 'video') => {
     setSelectedView(view)
