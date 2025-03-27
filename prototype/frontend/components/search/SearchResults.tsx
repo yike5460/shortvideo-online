@@ -173,6 +173,52 @@ export default function SearchResults({
     });
   }, []);
   
+  // Helper function to select all matched segments for a video
+  const selectAllMatchedSegments = useCallback((video: VideoResult) => {
+    // Get all segments that have a confidence score > 0
+    const matchedSegments = (video.segments || []).filter(segment => 
+      (segment.confidence || 0) > 0
+    );
+    
+    if (matchedSegments.length === 0) {
+      addToast('info', 'No matched segments found to select', { duration: 3000 });
+      return;
+    }
+    
+    setSelectedSegments(prev => {
+      // Get current selections for this video
+      const currentSelections = prev[video.id] || [];
+      
+      // Create a set of already selected segment IDs for quick lookup
+      const selectedIds = new Set(currentSelections.map(s => s.segment_id));
+      
+      // Add all matched segments that aren't already selected
+      const newSelections = [
+        ...currentSelections,
+        ...matchedSegments.filter(segment => 
+          segment.segment_id && !selectedIds.has(segment.segment_id)
+        )
+      ];
+      
+      // If no new segments were added, show a toast
+      if (newSelections.length === currentSelections.length) {
+        addToast('info', 'All matched segments are already selected', { duration: 3000 });
+        return prev;
+      }
+      
+      // Show success toast with count of newly selected segments
+      const newlyAdded = newSelections.length - currentSelections.length;
+      addToast('success', `Selected ${newlyAdded} additional segment${newlyAdded === 1 ? '' : 's'}`, {
+        duration: 3000
+      });
+      
+      return {
+        ...prev,
+        [video.id]: newSelections
+      };
+    });
+  }, [addToast]);
+  
   // Function to poll for merged file existence
   const startPollingForMergedFile = useCallback((s3Path: string, videoId: string, indexId: string, segmentCount: number) => {
     const checkInterval = 5000; // Check every 5 seconds
@@ -189,7 +235,7 @@ export default function SearchResults({
       attempts++;
       console.log(`Checking if merged file exists (attempt ${attempts}/${maxAttempts})...`);
       
-      // Since we don't have a direct API to check file existence,
+      // TODO, since we don't have a direct API to check file existence,
       // we'll simulate checking by waiting for a few attempts
       if (attempts >= 3) { // Simulate the file being ready after 15 seconds (3 * 5s)
         // Clear interval
@@ -380,14 +426,26 @@ export default function SearchResults({
     
     // Counter for successful downloads
     let downloadCount = 0;
-    
+
     // Process each segment for download using segment-specific URLs
     segmentsToDownload.forEach((segment, index) => {
-      // Construct segment-specific URL based on segment_id and video information
-      // Fallback to the full video URL if segment-specific URL can't be constructed
-      const segmentUrl = (segment.segment_id && video.indexId) 
-                       ? `${API_ENDPOINT}/videos/${video.indexId}/${video.id}/segments/${segment.segment_id}/download`
-                       : video.videoPreviewUrl || '';
+      // Determine the URL to use for download
+      // Since TypeScript doesn't recognize segment_video_url despite it being in the .d.ts file,
+      // we'll use a safe property access approach with type casting
+      const segmentVideoUrl = (segment as any).segment_video_preview_url;
+      console.log('Downloading segment URL is :', segmentVideoUrl);
+      // Create the download URL based on availability
+      let segmentUrl = '';
+      if (segmentVideoUrl) {
+        // Use the direct segment video URL if available
+        segmentUrl = segmentVideoUrl;
+      } else if (segment.segment_id && video.indexId) {
+        // Fall back to constructing a URL based on segment ID
+        segmentUrl = `${API_ENDPOINT}/videos/${video.indexId}/${video.id}/segments/${segment.segment_id}/download`;
+      } else {
+        // As a last resort, use the video preview URL
+        segmentUrl = video.videoPreviewUrl || '';
+      }
       
       // Ensure we have a URL to download
       if (!segmentUrl) {
@@ -395,7 +453,7 @@ export default function SearchResults({
         addToast('error', `Failed to download clip ${index + 1}: No URL available`, { duration: 3000 });
         return;
       }
-      
+
       // Open the URL directly in a new window with staggered timing to avoid browser blocking
       setTimeout(() => {
         try {
@@ -738,6 +796,18 @@ export default function SearchResults({
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
+                      selectAllMatchedSegments(result);
+                    }}
+                    className="inline-flex items-center gap-1 px-3 py-1 bg-gray-600 hover:bg-gray-700 text-white text-sm font-medium rounded-md transition-colors"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 5h16M4 12h16m-7 7h7" />
+                    </svg>
+                    Select All
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
                       if (selectedSegments[result.id].length >= 2) {
                         mergeSegments(result, selectedSegments[result.id]);
                       } else {
@@ -747,7 +817,7 @@ export default function SearchResults({
                     className={`inline-flex items-center gap-1 px-3 py-1 text-sm font-medium rounded-md transition-colors ${
                       mergeStatus.status === 'initiating' || mergeStatus.status === 'processing'
                         ? 'bg-yellow-500 cursor-not-allowed'
-                        : 'bg-indigo-600 hover:bg-indigo-700 text-white'
+                        : 'bg-gray-600 hover:bg-gray-700 text-white'
                     }`}
                     disabled={selectedSegments[result.id].length < 2 || 
                              mergeStatus.status === 'initiating' || 
@@ -831,7 +901,7 @@ export default function SearchResults({
                       e.stopPropagation();
                       clearSelectedSegments(result.id);
                     }}
-                    className="inline-flex items-center gap-1 px-3 py-1 bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-medium rounded-md transition-colors"
+                    className="inline-flex items-center gap-1 px-3 py-1 bg-rose-600 hover:bg-rose-700 text-white text-sm font-medium rounded-md transition-colors"
                   >
                     Clear
                   </button>
@@ -934,6 +1004,7 @@ export default function SearchResults({
     mergeSegments,
     downloadSelectedSegments,
     clearSelectedSegments,
+    selectAllMatchedSegments,
     isMerging,
     mergedSegment
   ])
