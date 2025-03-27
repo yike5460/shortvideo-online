@@ -589,30 +589,21 @@ export default function VideosPage() {
   return (
     <div className="container mx-auto p-4">
       {/* Index Header with Selection UI */}
-      {selectedIndex ? (
-        <IndexHeader 
-          indexId={selectedIndex.id}
-          indexName={selectedIndex.name}
-          isDefault={selectedIndex.isDefault}
-          expiresIn={selectedIndex.expiresIn}
-          models={selectedIndex.models}
-          onUploadClick={handleUploadClick}
-          onDeleteIndex={handleDeleteIndex}
-        />
-      ) : (
-        <div className="mb-6">
-          <h1 className="text-2xl font-bold mb-4">All Videos</h1>
-          <button 
-            onClick={handleUploadClick}
-            className="bg-gray-200 hover:bg-gray-300 text-gray-800 font-medium py-2 px-4 rounded-md flex items-center transition-colors"
-          >
-            Upload videos
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 ml-2" viewBox="0 0 20 20" fill="currentColor">
-              <path fillRule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM6.293 6.707a1 1 0 010-1.414l3-3a1 1 0 011.414 0l3 3a1 1 0 01-1.414 1.414L11 5.414V13a1 1 0 11-2 0V5.414L7.707 6.707a1 1 0 01-1.414 0z" clipRule="evenodd" />
-            </svg>
-          </button>
-        </div>
-      )}
+      <div className="mb-6">
+        {selectedIndex ? (
+          <IndexHeader 
+            indexId={selectedIndex.id}
+            indexName={selectedIndex.name}
+            isDefault={selectedIndex.isDefault}
+            expiresIn={selectedIndex.expiresIn}
+            models={selectedIndex.models}
+            onUploadClick={handleUploadClick}
+            onDeleteIndex={handleDeleteIndex}
+          />
+        ) : (
+          <h1 className="text-2xl font-bold">All Videos</h1>
+        )}
+      </div>
       
       {/* Index Selection Dropdown - keep this for switching between indexes */}
       <div className="mb-6">
@@ -666,9 +657,7 @@ export default function VideosPage() {
               <path fillRule="evenodd" d="M4 3a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V5a2 2 0 00-2-2H4zm3 2h6v4H7V5zm8 8v2h1v-2h-1zm-2-2H7v4h6v-4zm2 0h1V9h-1v2zm1-4V5h-1v2h1zM5 5v2H4V5h1zm0 4H4v2h1V9zm-1 4h1v2H4v-2z" clipRule="evenodd" />
             </svg>
             <span className="font-semibold">
-              {multiselectActive && selectedVideos.size > 0 
-                ? `${selectedVideos.size} selected (Total ${totalSelectedDuration})` 
-                : `${videos.length} video${videos.length !== 1 ? 's' : ''} (Total ${calculateTotalDuration(new Set(videos.map(v => v.id)))})`}
+              {`${videos.length} video${videos.length !== 1 ? 's' : ''} (Total ${calculateTotalDuration(new Set(videos.map(v => v.id)))})`}
             </span>
           </div>
           
@@ -681,10 +670,10 @@ export default function VideosPage() {
           </div>
         </div>
         
-        {/* Sort and multiselect controls */}
+        {/* Sort controls */}
         <div className="flex items-center">
           {/* Sort By Dropdown */}
-          <div className="relative mr-4" ref={sortRef}>
+          <div className="relative" ref={sortRef}>
             <div className="flex items-center">
               <span className="text-gray-700 mr-2">Sort by :</span>
               <button
@@ -723,82 +712,21 @@ export default function VideosPage() {
               </div>
             )}
           </div>
-          
-          <div className="flex items-center gap-4 border-l border-gray-300 pl-4">
-            <button 
-              onClick={() => setMultiselectActive(!multiselectActive)}
-              className={`px-3 py-1 ${multiselectActive 
-                ? 'bg-indigo-100 text-indigo-700 border border-indigo-300' 
-                : 'text-gray-700 hover:bg-gray-100'} rounded-md`}
-            >
-              Multiselect
-            </button>
-            
-            {multiselectActive && selectedVideos.size > 0 && (
-              <>
-                <button 
-                  onClick={clearSelection}
-                  className="px-3 py-1 text-gray-700 hover:bg-gray-100 rounded-md"
-                >
-                  Clear
-                </button>
-                <button 
-                  onClick={deleteSelectedVideos}
-                  className="px-3 py-1 text-white bg-red-600 hover:bg-red-700 rounded-md flex items-center"
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                  </svg>
-                  Delete
-                </button>
-              </>
-            )}
-          </div>
         </div>
       </div>
       
-      {/* Status sections, only show videos with status ready or similar processing states */}
-      {Object.entries(videosByStatus).map(([status, statusVideos]) => (
-        // Currently we display all the videos don't filter the status with prefix 'ready_for'
-        (status.startsWith('')) && (
-          <div key={status} className="mb-12">
-            <h2 className="mb-4 text-lg font-semibold text-gray-900 capitalize">
-              {status.replace(/_/g, ' ')}
-              <span className="ml-2 text-sm text-gray-500">
-                ({statusVideos.length})
-              </span>
-            </h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-              {statusVideos.map((video) => (
+      {/* Unified video grid */}
+      <div className="mb-12">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+          {sortedVideos.map((video) => (
                 <div 
                   key={video.id} 
                   className="relative bg-white rounded-lg shadow-md overflow-hidden group"
                 >
                   {/* Make only the thumbnail area clickable */}
                   <div className="relative aspect-video bg-gray-100 cursor-pointer"
-                    onClick={(e) => {
-                      if (multiselectActive) {
-                        e.preventDefault();
-                        toggleVideoSelection(video.id);
-                      } else {
-                        handleVideoClick(video);
-                      }
-                    }}
+                    onClick={() => handleVideoClick(video)}
                   >
-                    {/* Selection indicator - only visible in multiselect mode */}
-                    {multiselectActive && (
-                      <div className={`absolute top-3 right-3 z-10 w-6 h-6 flex items-center justify-center rounded-full border-2 ${
-                        selectedVideos.has(video.id) 
-                          ? 'bg-indigo-600 border-indigo-600' 
-                          : 'bg-white border-gray-300'
-                      }`}>
-                        {selectedVideos.has(video.id) && (
-                          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-white" viewBox="0 0 20 20" fill="currentColor">
-                            <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                          </svg>
-                        )}
-                      </div>
-                    )}
                     {/* Display static thumbnail instead of video */}
                     {video.videoThumbnailUrl ? (
                       <img
@@ -862,8 +790,7 @@ export default function VideosPage() {
               ))}
             </div>
           </div>
-        )
-      ))}
+      
       
       {/* Use the shared VideoModal component */}
       <VideoModal

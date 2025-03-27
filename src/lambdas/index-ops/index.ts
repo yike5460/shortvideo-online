@@ -265,9 +265,9 @@ async function handleGetIndex(event: APIGatewayProxyEvent): Promise<APIGatewayPr
             videoCount = body.hits.total.value || 0;
             success = true;
             // add videoCount into the indexesWithoutVideoStatus
-            indexesWithoutVideoStatus.forEach((index) => {
-              if (index.indexId === index.indexId) {
-                index.videoCount = videoCount;
+            indexesWithoutVideoStatus.forEach((item) => {
+              if (item.indexId === index.indexId) {
+                item.videoCount = videoCount;
               }
             });
           } catch (countError) {
