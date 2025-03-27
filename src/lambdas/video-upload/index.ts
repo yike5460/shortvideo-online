@@ -444,7 +444,8 @@ async function formatSearchResults(body: any, page: number, pageSize: number, fr
             videoPreviewUrl: videoUrl,
             videoThumbnailS3Path: segment.segment_video_thumbnail_s3_path,
             videoThumbnailUrl: thumbnailUrl,
-            videoDuration: formatDuration(segment.duration * 1000) || '00:00:00',
+            // Duration is already in seconds, so convert to milliseconds for formatDuration
+            videoDuration: formatDuration(segment.duration) || '00:00:00',
             source: 'merged' as const, // Add a new source type for merged segments
             uploadDate: doc._source.updated_at || doc._source.created_at,
             format: 'mp4',
