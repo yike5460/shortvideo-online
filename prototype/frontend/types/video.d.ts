@@ -30,5 +30,8 @@ declare module '@/types' {
     uploadDate: string;
     searchConfidence?: number;
     segments?: VideoSegment[];
+    source?: 'local' | 'youtube' | 'merged';
+    parentVideoId?: string;    // For merged segments to reference original video
+    isMerged?: boolean;        // Flag to identify merged segments
   }
 }

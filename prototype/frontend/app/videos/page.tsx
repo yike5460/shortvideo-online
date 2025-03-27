@@ -106,6 +106,11 @@ const VideoCardMenu = ({
   );
 };
 
+// Helper function to check if a video is a merged video
+const isMergedVideo = (video: VideoResult): boolean => {
+  return Boolean(video.isMerged || (video.source && video.source === 'merged' as any));
+};
+
 export default function VideosPage() {
   const { state } = useAuth()
   const searchParams = useSearchParams()
@@ -139,6 +144,8 @@ export default function VideosPage() {
   // Track total duration of selected videos
   const [totalSelectedDuration, setTotalSelectedDuration] = useState<string>("0m 0s")
   const [showConfidenceScores, setShowConfidenceScores] = useState(false)
+  // Add state for showing merged videos
+  const [includeMerged, setIncludeMerged] = useState(false)
   
   // Define sort options
   const sortOptions = [
@@ -273,8 +280,17 @@ export default function VideosPage() {
     const fetchVideos = async () => {
       try {
         setIsLoading(true);
-        // Add the selectedIndexId to the query parameters if it exists
-        const queryParams = selectedIndexId ? `?index=${selectedIndexId}` : '';
+        // Build query parameters with selectedIndexId and includeMerged
+        let queryParams = '';
+        if (selectedIndexId || includeMerged) {
+          queryParams = '?';
+          if (selectedIndexId) {
+            queryParams += `index=${selectedIndexId}`;
+          }
+          if (includeMerged) {
+            queryParams += `${selectedIndexId ? '&' : ''}includeMerged=true`;
+          }
+        }
         const response = await fetch(`${API_ENDPOINT}/videos${queryParams}`);
         
         // Only throw for actual HTTP errors, not for empty results
@@ -305,7 +321,7 @@ export default function VideosPage() {
     };
 
     fetchVideos();
-  }, [selectedIndexId]); // Add selectedIndexId as a dependency so videos are refreshed when index changes
+  }, [selectedIndexId, includeMerged]); // Reload videos when index or includeMerged changes
 
   // Fetch indexes from backend - similar to implementation in page.tsx
   useEffect(() => {
@@ -606,7 +622,7 @@ export default function VideosPage() {
       </div>
       
       {/* Index Selection Dropdown - keep this for switching between indexes */}
-      <div className="mb-6">
+      <div className="mb-6 space-y-4">
         <label htmlFor="index-select" className="block text-sm font-medium text-gray-700 mb-1">
           Switch Index
         </label>
@@ -642,6 +658,20 @@ export default function VideosPage() {
               <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-indigo-500"></div>
             </div>
           )}
+        </div>
+        
+        {/* Add checkbox for merged videos */}
+        <div className="flex items-center mt-3">
+          <input
+            id="include-merged"
+            type="checkbox"
+            className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
+            checked={includeMerged}
+            onChange={(e) => setIncludeMerged(e.target.checked)}
+          />
+          <label htmlFor="include-merged" className="ml-2 block text-sm text-gray-700">
+            Include merged video clips
+          </label>
         </div>
       </div>
       
@@ -721,7 +751,9 @@ export default function VideosPage() {
           {sortedVideos.map((video) => (
                 <div 
                   key={video.id} 
-                  className="relative bg-white rounded-lg shadow-md overflow-hidden group"
+                  className={`relative bg-white rounded-lg shadow-md overflow-hidden group
+                    ${video.isMerged ? 'border-2 border-purple-500' : ''}
+                  `}
                 >
                   {/* Make only the thumbnail area clickable */}
                   <div className="relative aspect-video bg-gray-100 cursor-pointer"
@@ -762,6 +794,13 @@ export default function VideosPage() {
                     {!selectedIndexId && video.indexId && (
                       <div className="absolute top-2 left-2 bg-black bg-opacity-70 text-white text-xs px-2 py-1 rounded">
                         {video.indexId}
+                      </div>
+                    )}
+                    
+                    {/* Merged video badge */}
+                    {isMergedVideo(video) && (
+                      <div className="absolute top-2 right-14 bg-purple-600 text-white text-xs px-2 py-1 rounded">
+                        Merged
                       </div>
                     )}
                   </div>

@@ -25,6 +25,7 @@ export interface VideoMetadata {
   
   video_metadata?: SearchMetadata;  // Quick search metadata
   video_segments?: VideoSegment[];  // Video segments
+  merged_segments?: VideoSegment[]; // Merged video segments
   video_objects?: TimestampedLabel[];
   video_faces?: FaceDetection[];
   segment_visual_ocr_text?: string[];    // Extracted text
@@ -167,7 +168,7 @@ export interface VideoResult {
   videoDuration: string;
   videoThumbnailS3Path?: string;  // S3 path to thumbnail (image)
   videoThumbnailUrl?: string;     // Pre-signed URL for thumbnail (image thumbnail)
-  source: 'local' | 'youtube';
+  source: 'local' | 'youtube' | 'merged';  // Added 'merged' source type
   uploadDate: string;
   format: string;
   status: VideoStatus;
@@ -175,4 +176,6 @@ export interface VideoResult {
   segments: VideoSegment[];
   searchConfidence?: number; // Add OpenSearch confidence score
   indexId: string;
+  parentVideoId?: string;    // For merged segments to reference original video
+  isMerged?: boolean;        // Flag to identify merged segments
 }

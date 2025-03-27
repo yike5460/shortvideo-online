@@ -261,8 +261,10 @@ async function handleListVideos(event: APIGatewayProxyEvent): Promise<LambdaResp
   // If the indexId is provided in the query string e.g. /videos?index=videos, use that index, otherwise it's wildcard search across all indexes
   try {
     const queryParams = event.queryStringParameters || {};
-    // extra the index from the query string e.g. /videos/?index=videos
+    // extract the index from the query string e.g. /videos/?index=videos
     const indexId = event.queryStringParameters?.index;
+    // Check if merged segments should be included
+    const includeMerged = queryParams.includeMerged === 'true';
     
     // Add pagination parameters
     const pageSize = 20;  // Limit number of videos per request
@@ -271,6 +273,28 @@ async function handleListVideos(event: APIGatewayProxyEvent): Promise<LambdaResp
     
     // Determine which index to search
     const searchIndex = indexId || '*';
+
+    // Define source fields
+    const sourceFields = [
+      'video_id',
+      'video_index',
+      'video_title', 
+      'video_description',
+      'video_s3_path',
+      'video_preview_url',
+      'video_duration',
+      'video_type',
+      'video_status',
+      'video_size',
+      'created_at',
+      'video_thumbnail_s3_path',
+      'video_thumbnail_url'
+    ];
+
+    // Only include merged_segments if requested
+    if (includeMerged) {
+      sourceFields.push('merged_segments');
+    }
     
     // Create the search query
     const searchQuery = {
@@ -286,21 +310,7 @@ async function handleListVideos(event: APIGatewayProxyEvent): Promise<LambdaResp
         size: pageSize,
         from: from,
         // Only return necessary fields
-        _source: [
-          'video_id',
-          'video_index',
-          'video_title', 
-          'video_description',
-          'video_s3_path',
-          'video_preview_url',
-          'video_duration',
-          'video_type',
-          'video_status',
-          'video_size',
-          'created_at',
-          'video_thumbnail_s3_path',
-          'video_thumbnail_url'
-        ]
+        _source: sourceFields
       }
     };
     
@@ -315,7 +325,7 @@ async function handleListVideos(event: APIGatewayProxyEvent): Promise<LambdaResp
         }
       });
       
-      return await formatSearchResults(body, page, pageSize, from);
+      return await formatSearchResults(body, page, pageSize, from, includeMerged);
     } catch (sortError) {
       console.warn('Error sorting by created_at, trying without sort:', sortError);
       
@@ -323,7 +333,7 @@ async function handleListVideos(event: APIGatewayProxyEvent): Promise<LambdaResp
       const { body } = await openSearch.search(searchQuery);
 
       console.log('Search results without sort: ', body);
-      return await formatSearchResults(body, page, pageSize, from);
+      return await formatSearchResults(body, page, pageSize, from, includeMerged);
     }
   } catch (error) {
     console.error('Error listing videos:', error);
@@ -342,7 +352,7 @@ async function handleListVideos(event: APIGatewayProxyEvent): Promise<LambdaResp
   }
 }
 
-async function formatSearchResults(body: any, page: number, pageSize: number, from: number): Promise<LambdaResponse> {
+async function formatSearchResults(body: any, page: number, pageSize: number, from: number, includeMerged: boolean = false): Promise<LambdaResponse> {
   if (!body.hits || !body.hits.hits) {
     return {
       statusCode: STATUS_CODES.OK,
@@ -367,6 +377,19 @@ async function formatSearchResults(body: any, page: number, pageSize: number, fr
     return await getSignedUrl(s3 as any, getCommand as any, { expiresIn: 3600 });
   };
 
+  // Format the duration as a human-readable string (HH:MM:SS) helper function
+  const formatDuration = (ms: number): string => {
+    if (!ms) return '00:00:00';
+    
+    const totalSeconds = Math.floor(ms / 1000);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    
+    return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+  };
+
+  // Process regular videos
   const videos: VideoResult[] = await Promise.all(body.hits.hits.map(async (hit: any) => {
     // Use dummy s3 path for thumbnail if it doesn't exist, avoid error like "No value provided for input HTTP label: Key"
     const videoPreviewUrlValue = await refreshvideoPreviewUrl(hit._source.video_s3_path || 'dummy_s3_path');
@@ -385,15 +408,68 @@ async function formatSearchResults(body: any, page: number, pageSize: number, fr
       format: hit._source.video_type,
       status: hit._source.video_status,
       size: hit._source.video_size,
-      indexId: hit._source.video_index || 'videos'
+      indexId: hit._source.video_index || 'videos',
+      segments: []
     };
   }));
+
+  // Process merged segments if requested
+  let mergedVideos: VideoResult[] = [];
+  if (includeMerged) {
+    // Get all docs that have merged_segments
+    const docsWithMergedSegments = body.hits.hits.filter((hit: any) => 
+      hit._source.merged_segments && Array.isArray(hit._source.merged_segments) && hit._source.merged_segments.length > 0
+    );
+    
+    if (docsWithMergedSegments.length > 0) {
+      // Extract and process all merged segments
+      for (const doc of docsWithMergedSegments) {
+        const parentVideoId = doc._source.video_id;
+        const indexId = doc._source.video_index || 'videos';
+        
+        // Convert each merged segment to a VideoResult
+        const docMergedVideos = await Promise.all(doc._source.merged_segments.map(async (segment: any) => {
+          // Generate fresh signed URLs
+          const videoUrl = await refreshvideoPreviewUrl(segment.segment_video_s3_path || 'dummy_s3_path');
+          const thumbnailUrl = await refreshvideoPreviewUrl(segment.segment_video_thumbnail_s3_path || 'dummy_s3_path');
+          
+          const title = segment.segment_visual?.segment_visual_description || 
+                       `Merged: ${doc._source.video_title || 'Untitled'} (${segment.start_time}-${segment.end_time})`;
+          
+          return {
+            id: segment.segment_id,
+            title: title,
+            description: segment.segment_visual?.segment_visual_description || '',
+            videoS3Path: segment.segment_video_s3_path,
+            videoPreviewUrl: videoUrl,
+            videoThumbnailS3Path: segment.segment_video_thumbnail_s3_path,
+            videoThumbnailUrl: thumbnailUrl,
+            videoDuration: formatDuration(segment.duration * 1000) || '00:00:00',
+            source: 'merged' as const, // Add a new source type for merged segments
+            uploadDate: doc._source.updated_at || doc._source.created_at,
+            format: 'mp4',
+            status: 'ready' as VideoStatus, // Merged segments are always ready
+            size: 0, // We may not have size info for merged segments
+            indexId: indexId,
+            parentVideoId: parentVideoId, // Add reference to parent video
+            isMerged: true,  // Flag to identify as merged segment
+            segments: []
+          };
+        }));
+        
+        mergedVideos = [...mergedVideos, ...docMergedVideos];
+      }
+    }
+  }
+
+  // Combine regular videos and merged segments
+  const allVideos = includeMerged ? [...videos, ...mergedVideos] : videos;
 
   return {
     statusCode: STATUS_CODES.OK,
     headers: corsHeaders,
     body: JSON.stringify({
-      videos,
+      videos: allVideos,
       total: body.hits.total?.value || videos.length,
       // TODO: Web should use hasMore to determine if there are more pages
       hasMore: (body.hits.total?.value || 0) > (from + pageSize),
@@ -1499,13 +1575,21 @@ async function handleMergeSegments(event: APIGatewayProxyEvent): Promise<LambdaR
         body: {
           script: {
             source: `
-              // Initialize video_segments array if null
+              // Initialize arrays if null
               if (ctx._source.video_segments == null) {
                 ctx._source.video_segments = [];
               }
+              if (ctx._source.merged_segments == null) {
+                ctx._source.merged_segments = [];
+              }
               
-              // Add merged segment to the array
+              // Add merged segment to both arrays
+              // Keep in video_segments for backward compatibility
               ctx._source.video_segments.add(params.mergedSegment);
+              
+              // Add to dedicated merged_segments array
+              ctx._source.merged_segments.add(params.mergedSegment);
+              
               ctx._source.updated_at = params.updated_at;
             `,
             params: {
