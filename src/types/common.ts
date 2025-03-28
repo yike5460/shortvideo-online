@@ -99,10 +99,30 @@ export interface TimestampedLabel {
   labels: LabelInfo[];
 }
 
+export interface FaceLandmark {
+  type: string;
+  x: number;
+  y: number;
+}
+
+export interface FacePose {
+  pitch: number;
+  roll: number;
+  yaw: number;
+}
+
+export interface FaceQuality {
+  brightness: number;
+  sharpness: number;
+}
+
 export interface FaceDetection {
-  person_name?: string;
   confidence: number;
   bounding_box: BoundingBox;
+  landmarks?: FaceLandmark[];
+  pose?: FacePose;
+  quality?: FaceQuality;
+  timestamp?: number;
 }
 
 export interface BoundingBox {

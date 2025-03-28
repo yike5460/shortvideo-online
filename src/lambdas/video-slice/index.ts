@@ -1373,11 +1373,46 @@ async function updateVideoFaces(videoIndex: string, videoId: string, faces: any[
     const documentId = searchResult.hits.hits[0]._id;
     const existingVideo = searchResult.hits.hits[0]._source;
 
-    // Update the video_faces field
-    existingVideo.video_faces = faces.map(face => ({
-      confidence: face.Face.Confidence,
-      bounding_box: face.Face.BoundingBox || { left: 0, top: 0, width: 0, height: 0 }
-    }));
+    // Update the video_faces field with enhanced face data
+    existingVideo.video_faces = faces.map(face => {
+      // Map bounding box with appropriate casing
+      const boundingBox = {
+        left: face.Face.BoundingBox?.Left || 0,
+        top: face.Face.BoundingBox?.Top || 0,
+        width: face.Face.BoundingBox?.Width || 0,
+        height: face.Face.BoundingBox?.Height || 0
+      };
+
+      // Map landmarks if present
+      const landmarks = face.Face.Landmarks?.map((landmark: any) => ({
+        type: landmark.Type.toLowerCase(),
+        x: landmark.X,
+        y: landmark.Y
+      }));
+
+      // Map pose if present
+      const pose = face.Face.Pose ? {
+        pitch: face.Face.Pose.Pitch,
+        roll: face.Face.Pose.Roll,
+        yaw: face.Face.Pose.Yaw
+      } : undefined;
+
+      // Map quality if present
+      const quality = face.Face.Quality ? {
+        brightness: face.Face.Quality.Brightness,
+        sharpness: face.Face.Quality.Sharpness
+      } : undefined;
+
+      // Return complete face detection object
+      return {
+        confidence: face.Face.Confidence,
+        bounding_box: boundingBox,
+        landmarks: landmarks,
+        pose: pose,
+        quality: quality,
+        timestamp: face.Timestamp
+      };
+    });
 
     // Use standard update with document ID instead of updateByQuery
     await openSearch.update({
