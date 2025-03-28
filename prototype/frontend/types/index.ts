@@ -126,6 +126,7 @@ export interface SearchOptions {
   selectedIndex: string | null;
   confidencePreset: ConfidencePreset;
   confidenceAdjustment: ConfidenceAdjustment;
+  skipValidation?: boolean; // When false, Exact Search is enabled; when true, Exact Search is disabled
 }
 
 // Video metadata types
