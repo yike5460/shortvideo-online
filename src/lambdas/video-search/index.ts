@@ -1,6 +1,6 @@
 import { APIGatewayProxyEvent } from 'aws-lambda';
 import { LambdaContext, LambdaResponse } from '../../types/aws-lambda';
-import { VideoResult, VideoSegment, VideoStatus, SearchOptions } from '../../types/common';
+import { VideoResult, VideoSegment, VideoStatus, SearchOptions, TimestampedLabel } from '../../types/common';
 import { Client } from '@opensearch-project/opensearch';
 import { defaultProvider } from '@aws-sdk/credential-provider-node';
 import { RedisClientType, createClient } from 'redis';
@@ -241,6 +241,33 @@ const transformSearchResults = async (hits: any[]): Promise<VideoResult[]> => {
     const videoPreviewUrl = await generateSignedUrl(hit._source.video_s3_path);
     const thumbnailUrl = await generateSignedUrl(hit._source.video_thumbnail_s3_path);
 
+    // Filter and process video_objects with minimum confidence threshold of 80%
+    let filteredVideoObjects: TimestampedLabel[] = [];
+    
+    if (hit._source.video_objects && Array.isArray(hit._source.video_objects)) {
+      filteredVideoObjects = hit._source.video_objects.map((obj: any) => {
+        // Filter labels with confidence >= 0.8 (80%)
+        const filteredLabels = (obj.labels || []).filter((label: any) => 
+          (label.confidence || 0) >= 0.8
+        );
+        
+        // For each label, keep only categories and aliases
+        const simplifiedLabels = filteredLabels.map((label: any) => ({
+          name: label.name,
+          confidence: label.confidence,
+          categories: label.categories || [],
+          aliases: label.aliases || []
+          // Note: We're specifically excluding parents and instances
+        }));
+        
+        // Return the timestamped label with filtered labels
+        return {
+          timestamp: obj.timestamp,
+          labels: simplifiedLabels
+        };
+      }).filter((obj: any) => obj.labels.length > 0); // Only include timestamps that have at least one label
+    }
+
     return {
       id: hit._id,
       title: hit._source.video_title || '',
@@ -257,7 +284,8 @@ const transformSearchResults = async (hits: any[]): Promise<VideoResult[]> => {
       size: hit._source.video_size || 0,
       segments: sortedSegments,
       searchConfidence: normalizedVideoScore,
-      indexId: hit._source.video_index || 'videos'
+      indexId: hit._source.video_index || 'videos',
+      video_objects: filteredVideoObjects // Add filtered video objects to the response
     };
   }));
 };
@@ -325,7 +353,13 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
             'video_segments.segment_video_s3_path',
             'video_segments.segment_video_preview_url',
             'video_segments.segment_video_thumbnail_s3_path',
-            'video_segments.segment_video_thumbnail_url'
+            'video_segments.segment_video_thumbnail_url',
+            // Add video_objects fields for categories and aliases
+            'video_objects.timestamp',
+            'video_objects.labels.name',
+            'video_objects.labels.confidence',
+            'video_objects.labels.categories',
+            'video_objects.labels.aliases'
           ],
           query: {
             nested: {

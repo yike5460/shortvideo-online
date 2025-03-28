@@ -198,4 +198,5 @@ export interface VideoResult {
   indexId: string;
   parentVideoId?: string;    // For merged segments to reference original video
   isMerged?: boolean;        // Flag to identify merged segments
+  video_objects?: TimestampedLabel[]; // Add filtered video objects with categories and aliases
 }

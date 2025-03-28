@@ -1,8 +1,13 @@
 'use client'
 
 import { useState, useEffect, useMemo, useRef, Fragment } from 'react'
-import { ChevronDownIcon, ChevronUpIcon } from '@heroicons/react/24/outline'
-import { VideoResult } from '@/types'
+import { ChevronDownIcon, ChevronUpIcon, XMarkIcon } from '@heroicons/react/24/outline'
+import { VideoResult, TimestampedLabel, LabelInfo, NamedEntity } from '@/types'
+
+// Extend VideoResult to include video_objects for TypeScript
+interface ExtendedVideoResult extends VideoResult {
+  video_objects?: TimestampedLabel[];
+}
 import VideoGrid from '@/components/VideoGrid'
 import VideoModal from '@/components/VideoModal'
 import { useSearchParams } from 'next/navigation'
@@ -111,6 +116,128 @@ const isMergedVideo = (video: VideoResult): boolean => {
   return Boolean(video.isMerged || (video.source && video.source === 'merged' as any));
 };
 
+// Helper function to extract unique categories from video objects
+const extractCategories = (videoObjects?: TimestampedLabel[]): string[] => {
+  if (!videoObjects || !Array.isArray(videoObjects)) return [];
+  
+  // Create a Set to store unique category names
+  const uniqueCategories = new Set<string>();
+  
+  // Process each timestamped label
+  videoObjects.forEach(timestamped => {
+    // Process each label within the timestamped label
+    timestamped.labels?.forEach(label => {
+      // Process each category within the label
+      label.categories?.forEach(category => {
+        if (category.Name) {
+          uniqueCategories.add(category.Name);
+        }
+      });
+    });
+  });
+  
+  // Convert the Set to an array and return
+  return Array.from(uniqueCategories);
+};
+
+// Helper function to extract unique aliases from video objects
+const extractAliases = (videoObjects?: TimestampedLabel[]): string[] => {
+  if (!videoObjects || !Array.isArray(videoObjects)) return [];
+  
+  const uniqueAliases = new Set<string>();
+  
+  videoObjects.forEach(timestamped => {
+    timestamped.labels?.forEach(label => {
+      label.aliases?.forEach(alias => {
+        if (alias.Name) {
+          uniqueAliases.add(alias.Name);
+        }
+      });
+    });
+  });
+  
+  return Array.from(uniqueAliases);
+};
+
+// Function to extract all tags (categories and aliases) from all videos
+const extractAllTags = (videos: VideoResult[]): {tag: string, count: number, type: 'category' | 'alias'}[] => {
+  const tagCounts = new Map<string, {count: number, type: 'category' | 'alias'}>();
+  
+  videos.forEach(video => {
+    // Cast to ExtendedVideoResult to access video_objects
+    const extendedVideo = video as ExtendedVideoResult;
+    
+    // Extract categories from video objects
+    if (extendedVideo.video_objects) {
+      const categories = extractCategories(extendedVideo.video_objects);
+      categories.forEach(category => {
+        const existingTag = tagCounts.get(category);
+        if (existingTag) {
+          existingTag.count++;
+        } else {
+          tagCounts.set(category, {count: 1, type: 'category'});
+        }
+      });
+      
+      // Extract aliases
+      const aliases = extractAliases(extendedVideo.video_objects);
+      aliases.forEach(alias => {
+        const existingTag = tagCounts.get(alias);
+        if (existingTag) {
+          existingTag.count++;
+        } else {
+          tagCounts.set(alias, {count: 1, type: 'alias'});
+        }
+      });
+    }
+  });
+  
+  // Convert Map to array
+  return Array.from(tagCounts.entries()).map(([tag, data]) => ({
+    tag,
+    count: data.count,
+    type: data.type
+  }));
+};
+
+// Helper function to get a color for a category tag based on its name (for consistent colors)
+const getCategoryColor = (category: string): string => {
+  // Simple hash function to generate consistent colors
+  const hash = category.split('').reduce((acc, char) => {
+    return char.charCodeAt(0) + ((acc << 5) - acc);
+  }, 0);
+  
+  // List of tailwind color classes for tags
+  const colorClasses = [
+    'bg-blue-100 text-blue-800',
+    'bg-green-100 text-green-800',
+    'bg-yellow-100 text-yellow-800',
+    'bg-red-100 text-red-800',
+    'bg-purple-100 text-purple-800',
+    'bg-pink-100 text-pink-800',
+    'bg-indigo-100 text-indigo-800',
+    'bg-teal-100 text-teal-800',
+  ];
+  
+  // Use the hash to pick a color
+  const index = Math.abs(hash) % colorClasses.length;
+  return colorClasses[index];
+};
+
+// Helper function to get limited tags for display in card (to avoid overcrowding)
+const getLimitedTags = (tags: string[], limit: number = 3): { displayed: string[], remaining: number } => {
+  if (!tags || !Array.isArray(tags)) return { displayed: [], remaining: 0 };
+  
+  if (tags.length <= limit) {
+    return { displayed: tags, remaining: 0 };
+  }
+  
+  return {
+    displayed: tags.slice(0, limit),
+    remaining: tags.length - limit
+  };
+};
+
 export default function VideosPage() {
   const { state } = useAuth()
   const searchParams = useSearchParams()
@@ -146,6 +273,9 @@ export default function VideosPage() {
   const [showConfidenceScores, setShowConfidenceScores] = useState(false)
   // Add state for showing merged videos
   const [includeMerged, setIncludeMerged] = useState(false)
+  // Add state for tag management and filtering
+  const [allTags, setAllTags] = useState<{tag: string, count: number, type: 'category' | 'alias'}[]>([])
+  const [selectedTags, setSelectedTags] = useState<string[]>([])
   
   // Define sort options
   const sortOptions = [
@@ -306,11 +436,16 @@ export default function VideosPage() {
         const data: VideoResponse = await response.json();
         console.log('Videos data:', data);
         // Even if we get a successful response, videos might be null or undefined
-        setVideos(data.videos || []); 
+        const videosData = data.videos || [];
+        setVideos(videosData); 
+        
+        // Extract all tags from videos
+        const extractedTags = extractAllTags(videosData);
+        setAllTags(extractedTags);
         
         // Update the total videos count when loading all videos
-        if (!selectedIndexId && data.videos.length > 0) {
-          setTotalVideos(data.videos.length);
+        if (!selectedIndexId && videosData.length > 0) {
+          setTotalVideos(videosData.length);
         }
       } catch (error) {
         console.error('Error fetching videos:', error);
@@ -389,11 +524,30 @@ export default function VideosPage() {
     fetchIndexes();
   }, [state.session, selectedIndexId]);
 
-  // Sort videos based on selection
+  // Filter videos by selected tags and sort them
   const sortedVideos = useMemo(() => {
     if (!videos || !Array.isArray(videos)) return [];
     
-    return [...videos].sort((a, b) => {
+    // First filter by selected tags if any
+    let filteredVideos = [...videos];
+    if (selectedTags.length > 0) {
+      filteredVideos = videos.filter(video => {
+        // Cast to ExtendedVideoResult to access video_objects
+        const extendedVideo = video as ExtendedVideoResult;
+        if (!extendedVideo.video_objects) return false;
+        
+        // Extract all categories and aliases from this video
+        const categories = extractCategories(extendedVideo.video_objects);
+        const aliases = extractAliases(extendedVideo.video_objects);
+        const allVideoTags = [...categories, ...aliases];
+        
+        // Check if any of the selected tags match this video's tags
+        return selectedTags.some(selectedTag => allVideoTags.includes(selectedTag));
+      });
+    }
+    
+    // Then sort the filtered videos
+    return filteredVideos.sort((a, b) => {
       switch (sortBy) {
         case "recent_upload":
           return new Date(b.uploadDate || 0).getTime() - new Date(a.uploadDate || 0).getTime();
@@ -621,57 +775,114 @@ export default function VideosPage() {
         )}
       </div>
       
-      {/* Index Selection Dropdown - keep this for switching between indexes */}
-      <div className="mb-6 space-y-4">
-        <label htmlFor="index-select" className="block text-sm font-medium text-gray-700 mb-1">
-          Switch Index
-        </label>
-        <div className="relative">
-          <select
-            id="index-select"
-            className="w-full md:w-64 px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
-            value={selectedIndexId || ''}
-            onChange={(e) => {
-              const newIndex = e.target.value || null;
-              setSelectedIndexId(newIndex);
-              // Reset videos array to show loading state when changing indexes
-              setVideos([]);
-              setIsLoading(true);
-            }}
-            disabled={isLoadingIndexes}
-          >
-            <option value="">All Indexes ({totalVideos})</option>
-            {indexes.length > 0 ? (
-              indexes.map((index) => (
-                <option key={index.id} value={index.id}>
-                  {index.name} ({index.videoCount} videos)
+      {/* Index Selection and Tag Library Section */}
+      <div className="mb-6 md:flex md:space-x-8 items-start">
+        {/* Index Selection Dropdown */}
+        <div className="md:w-1/4 mb-4 md:mb-0">
+          <label htmlFor="index-select" className="block text-sm font-medium text-gray-700 mb-2">
+            Switch Index
+          </label>
+          <div className="relative mb-3">
+            <select
+              id="index-select"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+              value={selectedIndexId || ''}
+              onChange={(e) => {
+                const newIndex = e.target.value || null;
+                setSelectedIndexId(newIndex);
+                // Reset videos array to show loading state when changing indexes
+                setVideos([]);
+                setIsLoading(true);
+                // Reset selected tags when changing index
+                setSelectedTags([]);
+              }}
+              disabled={isLoadingIndexes}
+            >
+              <option value="">All Indexes ({totalVideos})</option>
+              {indexes.length > 0 ? (
+                indexes.map((index) => (
+                  <option key={index.id} value={index.id}>
+                    {index.name} ({index.videoCount} videos)
+                  </option>
+                ))
+              ) : (
+                <option value="" disabled>
+                  {isLoadingIndexes ? 'Loading indexes...' : 'No indexes available'}
                 </option>
-              ))
-            ) : (
-              <option value="" disabled>
-                {isLoadingIndexes ? 'Loading indexes...' : 'No indexes available'}
-              </option>
+              )}
+            </select>
+            {isLoading && (
+              <div className="absolute right-10 top-3">
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-indigo-500"></div>
+              </div>
             )}
-          </select>
-          {isLoading && (
-            <div className="absolute right-10 top-3">
-              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-indigo-500"></div>
-            </div>
-          )}
+          </div>
+          
+          {/* Add checkbox for merged videos */}
+          <div className="flex items-center">
+            <input
+              id="include-merged"
+              type="checkbox"
+              className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
+              checked={includeMerged}
+              onChange={(e) => setIncludeMerged(e.target.checked)}
+            />
+            <label htmlFor="include-merged" className="ml-2 block text-sm text-gray-700">
+              Include merged video clips
+            </label>
+          </div>
         </div>
         
-        {/* Add checkbox for merged videos */}
-        <div className="flex items-center mt-3">
-          <input
-            id="include-merged"
-            type="checkbox"
-            className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
-            checked={includeMerged}
-            onChange={(e) => setIncludeMerged(e.target.checked)}
-          />
-          <label htmlFor="include-merged" className="ml-2 block text-sm text-gray-700">
-            Include merged video clips
-          </label>
+        {/* Tag Library */}
+        <div className="flex-1">
+          <div className="flex justify-between items-center mb-2">
+            <label className="block text-sm font-medium text-gray-700">
+              Categories & Tags
+            </label>
+            {selectedTags.length > 0 && (
+              <button
+                type="button"
+                className="text-sm text-indigo-600 hover:text-indigo-800"
+                onClick={() => setSelectedTags([])}
+              >
+                Clear filters
+              </button>
+            )}
+          </div>
+          
+          <div className="border border-gray-200 rounded-md p-3 bg-gray-50 h-[105px] overflow-y-auto">
+            {allTags.length > 0 ? (
+              <div className="flex flex-wrap gap-2">
+                {allTags.map(tag => (
+                  <button
+                    key={tag.tag}
+                    onClick={() => {
+                      // Toggle tag selection
+                      if (selectedTags.includes(tag.tag)) {
+                        setSelectedTags(prev => prev.filter(t => t !== tag.tag));
+                      } else {
+                        setSelectedTags(prev => [...prev, tag.tag]);
+                      }
+                    }}
+                    className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-medium 
+                      ${selectedTags.includes(tag.tag) 
+                        ? 'bg-indigo-100 text-indigo-800 border border-indigo-300' 
+                        : tag.type === 'category' 
+                          ? getCategoryColor(tag.tag) 
+                          : 'bg-gray-100 text-gray-800'
+                      }`}
+                  >
+                    {tag.tag} 
+                    <span className="ml-1 bg-white text-xs px-1.5 rounded-full">
+                      {tag.count}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="text-gray-500 text-sm">No categories or tags detected</div>
+            )}
+          </div>
         </div>
       </div>
       
@@ -811,6 +1022,36 @@ export default function VideosPage() {
                     <p className="text-sm text-gray-500 mt-1">
                       Uploaded {new Date(video.uploadDate || Date.now()).toLocaleDateString()}
                     </p>
+                    
+                    {/* Category tags */}
+                    {(() => {
+                      // Cast to ExtendedVideoResult to access video_objects
+                      const extendedVideo = video as ExtendedVideoResult;
+                      if (extendedVideo.video_objects) {
+                        const categories = extractCategories(extendedVideo.video_objects);
+                        if (categories.length > 0) {
+                          const { displayed, remaining } = getLimitedTags(categories, 3);
+                          return (
+                            <div className="mt-2 flex flex-wrap gap-1">
+                              {displayed.map((category, index) => (
+                                <span 
+                                  key={`${video.id}-${category}-${index}`} 
+                                  className={`px-2 py-0.5 rounded-full text-xs ${getCategoryColor(category)}`}
+                                >
+                                  {category}
+                                </span>
+                              ))}
+                              {remaining > 0 && (
+                                <span className="px-2 py-0.5 rounded-full text-xs bg-gray-100 text-gray-800" title={`${remaining} more categories`}>
+                                  +{remaining} more
+                                </span>
+                              )}
+                            </div>
+                          );
+                        }
+                      }
+                      return null;
+                    })()}
                   </div>
                   
                   {/* Video card menu in absolute position - hide during multiselect */}

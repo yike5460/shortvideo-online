@@ -139,7 +139,17 @@ async function handleGetIndex(event: APIGatewayProxyEvent): Promise<APIGatewayPr
       const { body: searchResult } = await openSearch.search({
         index: indexId,
         body: {
-          query: { match_all: {} }
+          query: { match_all: {} },
+          _source: [
+            'video_id',
+            'video_index', 
+            'video_segments',
+            'video_objects.timestamp',
+            'video_objects.labels.name',
+            'video_objects.labels.confidence',
+            'video_objects.labels.categories',
+            'video_objects.labels.aliases'
+          ]
         }
       });
 

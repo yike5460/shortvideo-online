@@ -288,7 +288,13 @@ async function handleListVideos(event: APIGatewayProxyEvent): Promise<LambdaResp
       'video_size',
       'created_at',
       'video_thumbnail_s3_path',
-      'video_thumbnail_url'
+      'video_thumbnail_url',
+      // Add video_objects fields for categories and aliases
+      'video_objects.timestamp',
+      'video_objects.labels.name',
+      'video_objects.labels.confidence',
+      'video_objects.labels.categories',
+      'video_objects.labels.aliases'
     ];
 
     // Only include merged_segments if requested
@@ -389,11 +395,46 @@ async function formatSearchResults(body: any, page: number, pageSize: number, fr
     return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
   };
 
+  // Helper function to process video_objects with filtering
+    const processVideoObjects = (videoObjects: any[] | undefined): any[] => {
+    if (!videoObjects || !Array.isArray(videoObjects)) return [];
+    
+    return videoObjects.map(obj => {
+      // Filter labels with confidence >= 90, align with the MinConfidence setting in Rekognition
+      const filteredLabels = (obj.labels || []).filter((label: { confidence?: number }) => 
+        (label.confidence || 0) >= 90
+      );
+      
+      // Keep only categories and aliases
+      const simplifiedLabels = filteredLabels.map((label: { 
+        name?: string; 
+        confidence?: number; 
+        categories?: any[]; 
+        aliases?: any[];
+      }) => ({
+        name: label.name,
+        confidence: label.confidence,
+        categories: label.categories || [],
+        aliases: label.aliases || []
+        // Note: Specifically excluding parents and instances
+      }));
+      
+      return {
+        timestamp: obj.timestamp,
+        labels: simplifiedLabels
+      };
+    }).filter(obj => obj.labels.length > 0); // Only include timestamps that have at least one label
+  };
+
   // Process regular videos
   const videos: VideoResult[] = await Promise.all(body.hits.hits.map(async (hit: any) => {
     // Use dummy s3 path for thumbnail if it doesn't exist, avoid error like "No value provided for input HTTP label: Key"
     const videoPreviewUrlValue = await refreshvideoPreviewUrl(hit._source.video_s3_path || 'dummy_s3_path');
     const thumbnailUrlValue = await refreshvideoPreviewUrl(hit._source.video_thumbnail_s3_path || 'dummy_s3_path');
+    
+    // Process video_objects with filtering
+    const filteredVideoObjects = processVideoObjects(hit._source.video_objects);
+    
     return {
       id: hit._id,
       title: hit._source.video_title || '',
@@ -409,7 +450,8 @@ async function formatSearchResults(body: any, page: number, pageSize: number, fr
       status: hit._source.video_status,
       size: hit._source.video_size,
       indexId: hit._source.video_index || 'videos',
-      segments: []
+      segments: [],
+      video_objects: filteredVideoObjects // Add filtered video objects to the response
     };
   }));
 

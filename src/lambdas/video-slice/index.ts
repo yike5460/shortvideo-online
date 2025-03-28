@@ -261,7 +261,7 @@ async function handleS3Event(event: S3Event): Promise<LambdaResponse> {
     Video: { S3Object: { Bucket: bucket, Name: key } },
     NotificationChannel: notificationChannel,
     JobTag: `${videoIndex}-${videoId}-labels`,
-    MinConfidence: 80
+    MinConfidence: 90
   }));
 
   // Start face detection
@@ -1268,6 +1268,7 @@ async function updateVideoLabels(videoIndex: string, videoId: string, labels: an
         categories: label.Label.Categories || [],
         aliases: label.Label.Aliases || [],
         parents: label.Label.Parents || [],
+        // Confidence is a float, convert to number
         confidence: label.Label.Confidence,
         instances: label.Label.Instances?.map((instance: any) => ({
           boundingBox: instance.BoundingBox,
