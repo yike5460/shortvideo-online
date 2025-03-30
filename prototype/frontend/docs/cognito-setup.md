@@ -103,7 +103,7 @@ For production deployments, specify the application domain using CDK context par
 
 ```bash
 # For production
-cdk deploy VideoSearchStack --context appDomain=youractualdomain.com --context deploymentEnvironment=prod
+npx cdk deploy --require-approval never --context externalVideoEmbeddingEndpoint=yourEmbeddingEndpoint --context appDomain=youractualdomain.com --context deploymentEnvironment=prod --context siliconflowApiKey=yourApiKey
 ```
 
 This is consistent with other CDK context parameters used in the stack, such as the `externalVideoEmbeddingEndpoint`.

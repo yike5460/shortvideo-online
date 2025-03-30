@@ -12,7 +12,8 @@ new VideoSearchStack(app, 'VideoSearchStack', {
   deploymentEnvironment: process.env.DEPLOYMENT_ENV || 'dev',
   maxAzs: 2,
   externalVideoEmbeddingEndpoint: app.node.tryGetContext('externalVideoEmbeddingEndpoint') || process.env.EXTERNAL_EMBEDDING_ENDPOINT || '',
-  appDomain: app.node.tryGetContext('appDomain') || process.env.APP_DOMAIN
+  appDomain: app.node.tryGetContext('appDomain') || process.env.APP_DOMAIN,
+  siliconflowApiKey: app.node.tryGetContext('siliconflowApiKey') || process.env.SILICONFLOW_API_KEY || '',
 });
 
 app.synth();

@@ -195,7 +195,6 @@ async function downloadVideoFromS3(s3Path: string): Promise<string> {
   // Create a temporary file
   const tempDir = os.tmpdir();
   const tempPath = path.join(tempDir, `temp_${Date.now()}.mp4`);
-  const fileStream = fs.createWriteStream(tempPath);
   
   try {
     const command = new GetObjectCommand({
@@ -208,113 +207,245 @@ async function downloadVideoFromS3(s3Path: string): Promise<string> {
       throw new Error('Empty response body');
     }
     
-    // Convert readable stream to Node.js stream
-    const responseBodyStream = response.Body as any;
+    // Download the entire file as a buffer first (more reliable than streaming)
+    const buf = Buffer.from(await response.Body.transformToByteArray());
     
-    // Create a promise to track when the piping is complete
-    const finished = promisify(stream.finished);
+    // Write the complete buffer to file
+    fs.writeFileSync(tempPath, buf);
+    console.log(`Downloaded video from S3, size: ${buf.length} bytes, path: ${tempPath}`);
     
-    // Pipe the response to the file
-    responseBodyStream.pipe(fileStream);
-    
-    // Wait for the piping to complete
-    await finished(fileStream);
+    // Validate the file contains a moov atom
+    await validateMP4Structure(tempPath);
     
     return tempPath;
   } catch (error) {
+    // Clean up the temporary file if it exists
+    if (fs.existsSync(tempPath)) {
+      try {
+        fs.unlinkSync(tempPath);
+      } catch (unlinkError) {
+        console.warn(`Failed to clean up temporary file ${tempPath}:`, unlinkError);
+      }
+    }
     console.error(`Error downloading video from S3: ${error}`);
-    fs.unlinkSync(tempPath);
     throw error;
   }
 }
 
-// New function to extract frames from video using ffmpeg instead of opencv
-async function extractFramesFromVideo(videoPath: string, maxFrames: number = MAX_FRAMES): Promise<string[]> {
+// Add a function to validate MP4 structure
+async function validateMP4Structure(filePath: string): Promise<void> {
+  // Define ffprobe path - it's included in the FFmpeg Lambda layer
+  const ffprobePath = process.env.LAMBDA_TASK_ROOT ? '/opt/bin/ffprobe' : 'ffprobe';
   
-  try {
-    // Create a temporary directory for the frames
-    const tempDir = path.join(os.tmpdir(), `frames_${Date.now()}`);
-    fs.mkdirSync(tempDir, { recursive: true });
-    
-    // Define ffprobe path - it's included in the FFmpeg Lambda layer
-    const ffprobePath = process.env.LAMBDA_TASK_ROOT ? '/opt/bin/ffprobe' : 'ffprobe';
-    const ffmpegPath = process.env.LAMBDA_TASK_ROOT ? '/opt/bin/ffmpeg' : 'ffmpeg';
-    
-    // First, get total frames with ffprobe
+  return new Promise((resolve, reject) => {
     const ffprobeProcess = spawn(ffprobePath, [
-      '-loglevel', 'error',  // Only show errors instead of -v error
-      '-select_streams', 'v:0',
-      '-count_packets',
-      '-show_entries', 'stream=nb_read_packets',
-      '-of', 'csv=p=0',
-      videoPath
+      '-v', 'error',
+      '-show_entries', 'format=format_name',
+      '-of', 'json',
+      filePath
     ]);
     
     let ffprobeOutput = '';
+    let ffprobeError = '';
     
     ffprobeProcess.stdout.on('data', (data) => {
       ffprobeOutput += data.toString();
     });
     
-    // Wait for the ffprobe process to complete
-    await new Promise<void>((resolve, reject) => {
-      ffprobeProcess.on('close', (code) => {
-        if (code === 0) {
-          resolve();
-        } else {
-          reject(new Error(`ffprobe process exited with code ${code}`));
-        }
-      });
-      
-      ffprobeProcess.stderr.on('data', (data) => {
-        console.error(`ffprobe stderr: ${data}`);
-      });
-      
-      ffprobeProcess.on('error', (err) => {
-        reject(err);
-      });
+    ffprobeProcess.stderr.on('data', (data) => {
+      ffprobeError += data.toString();
+      console.error(`ffprobe validation stderr: ${data}`);
     });
+    
+    ffprobeProcess.on('close', (code) => {
+      if (code === 0) {
+        try {
+          const result = JSON.parse(ffprobeOutput);
+          if (result.format && result.format.format_name) {
+            console.log(`Valid video format detected: ${result.format.format_name}, file: ${filePath}`);
+            resolve();
+          } else {
+            reject(new Error('Invalid video format structure'));
+          }
+        } catch (e) {
+          reject(new Error(`Failed to parse ffprobe output: ${e}`));
+        }
+      } else {
+        reject(new Error(`MP4 validation failed: ${ffprobeError || 'Unknown error'} (exit code ${code})`));
+      }
+    });
+    
+    ffprobeProcess.on('error', (err) => {
+      reject(new Error(`Failed to start ffprobe process: ${err}`));
+    });
+  });
+}
+
+// Extract frames from video using ffmpeg
+async function extractFramesFromVideo(videoPath: string, maxFrames: number = MAX_FRAMES): Promise<string[]> {
+  let tempDir: string | null = null;
+  
+  try {
+    // Re-verify that the video file exists and has content
+    if (!fs.existsSync(videoPath)) {
+      throw new Error(`Video file does not exist: ${videoPath}`);
+    }
+    
+    const stats = fs.statSync(videoPath);
+    if (stats.size === 0) {
+      throw new Error(`Video file is empty: ${videoPath}`);
+    }
+    
+    console.log(`Extracting frames from video: ${videoPath}, file size: ${stats.size} bytes`);
+    
+    // Create a temporary directory for the frames
+    tempDir = path.join(os.tmpdir(), `frames_${Date.now()}`);
+    fs.mkdirSync(tempDir, { recursive: true });
+    
+    // Define ffprobe and ffmpeg paths - they're included in the FFmpeg Lambda layer
+    const ffprobePath = process.env.LAMBDA_TASK_ROOT ? '/opt/bin/ffprobe' : 'ffprobe';
+    const ffmpegPath = process.env.LAMBDA_TASK_ROOT ? '/opt/bin/ffmpeg' : 'ffmpeg';
+    
+    // First, get video information with ffprobe to verify it's a valid video
+    let videoInfo: any;
+    try {
+      const infoOutput = await new Promise<string>((resolve, reject) => {
+        const infoProcess = spawn(ffprobePath, [
+          '-v', 'error',
+          '-show_entries', 'format=format_name,duration:stream=codec_type,codec_name',
+          '-of', 'json',
+          videoPath
+        ]);
+        
+        let output = '';
+        let errorOutput = '';
+        
+        infoProcess.stdout.on('data', (data) => {
+          output += data.toString();
+        });
+        
+        infoProcess.stderr.on('data', (data) => {
+          errorOutput += data.toString();
+          console.error(`ffprobe info stderr: ${data}`);
+        });
+        
+        infoProcess.on('close', (code) => {
+          if (code === 0) {
+            resolve(output);
+          } else {
+            reject(new Error(`ffprobe info process exited with code ${code}: ${errorOutput}`));
+          }
+        });
+        
+        infoProcess.on('error', (err) => {
+          reject(new Error(`Failed to start ffprobe info process: ${err}`));
+        });
+      });
+      
+      videoInfo = JSON.parse(infoOutput);
+      console.log(`Video info: ${JSON.stringify(videoInfo, null, 2)}`);
+    } catch (error) {
+      throw new Error(`Failed to get video information: ${error}`);
+    }
+    
+    // Retrieve frame count with ffprobe
+    let ffprobeOutput = '';
+    let ffprobeError = '';
+    
+    try {
+      ffprobeOutput = await new Promise<string>((resolve, reject) => {
+        const ffprobeProcess = spawn(ffprobePath, [
+          '-v', 'error',
+          '-select_streams', 'v:0',
+          '-count_packets',
+          '-show_entries', 'stream=nb_read_packets',
+          '-of', 'csv=p=0',
+          videoPath
+        ]);
+        
+        let output = '';
+        let errorOutput = '';
+        
+        ffprobeProcess.stdout.on('data', (data) => {
+          output += data.toString();
+        });
+        
+        ffprobeProcess.stderr.on('data', (data) => {
+          errorOutput += data.toString();
+          console.error(`ffprobe frame count stderr: ${data}`);
+        });
+        
+        ffprobeProcess.on('close', (code) => {
+          if (code === 0) {
+            resolve(output);
+          } else {
+            reject(new Error(`ffprobe frame count process exited with code ${code}: ${errorOutput}`));
+          }
+        });
+        
+        ffprobeProcess.on('error', (err) => {
+          reject(new Error(`Failed to start ffprobe frame count process: ${err}`));
+        });
+      });
+    } catch (error) {
+      throw new Error(`Failed to get frame count: ${error}`);
+    }
     
     // Calculate step based on total frames
     const totalFrames = parseInt(ffprobeOutput.trim()) || 1;
     const step = Math.max(1, Math.floor(totalFrames / maxFrames));
-        
-    // Use ffmpeg to extract frames
-    const ffmpegProcess = spawn(ffmpegPath, [
-      '-loglevel', 'error',  // Only show errors
-      '-i', videoPath,
-      '-vf', `select='not(mod(n,${step}))'`,
-      '-vsync', '0',
-      '-frame_pts', 'true',
-      '-vframes', maxFrames.toString(),
-      '-q:v', '1',
-      `${tempDir}/frame_%03d.jpg`
-    ]);
+    console.log(`Video has ${totalFrames} frames, extracting every ${step}th frame`);
     
-    // Wait for the ffmpeg process to complete
-    await new Promise<void>((resolve, reject) => {
-      ffmpegProcess.on('close', (code) => {
-        if (code === 0) {
-          resolve();
-        } else {
-          reject(new Error(`ffmpeg process exited with code ${code}`));
-        }
+    // Use ffmpeg to extract frames
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const ffmpegProcess = spawn(ffmpegPath, [
+          '-loglevel', 'warning',  // Show warnings and errors for better debugging
+          '-i', videoPath,
+          '-vf', `select='not(mod(n,${step}))'`,
+          '-vsync', '0',
+          '-frame_pts', 'true',
+          '-vframes', maxFrames.toString(),
+          '-q:v', '1',
+          `${tempDir}/frame_%03d.jpg`
+        ]);
+        
+        let errorOutput = '';
+        
+        ffmpegProcess.stderr.on('data', (data) => {
+          errorOutput += data.toString();
+          console.log(`ffmpeg frame extraction stderr: ${data}`);
+        });
+        
+        ffmpegProcess.on('close', (code) => {
+          if (code === 0) {
+            resolve();
+          } else {
+            reject(new Error(`ffmpeg frame extraction process exited with code ${code}: ${errorOutput}`));
+          }
+        });
+        
+        ffmpegProcess.on('error', (err) => {
+          reject(new Error(`Failed to start ffmpeg frame extraction process: ${err}`));
+        });
       });
+    } catch (error) {
+      throw new Error(`Failed to extract frames: ${error}`);
+    }
+    
+    // Check if any frames were extracted
+    const frameFiles = fs.existsSync(tempDir) 
+      ? fs.readdirSync(tempDir).filter(file => file.startsWith('frame_') && file.endsWith('.jpg')).sort()
+      : [];
       
-      ffmpegProcess.stderr.on('data', (data) => {
-        console.log(`ffmpeg stderr: ${data}`);
-      });
-      
-      ffmpegProcess.on('error', (err) => {
-        reject(err);
-      });
-    });
+    if (frameFiles.length === 0) {
+      throw new Error('No frames were extracted from the video');
+    }
+    
+    console.log(`Successfully extracted ${frameFiles.length} frames from video`);
     
     // Read the extracted frames and convert to base64
     const frames: string[] = [];
-    const frameFiles = fs.readdirSync(tempDir)
-      .filter((file: string) => file.startsWith('frame_') && file.endsWith('.jpg'))
-      .sort();
     
     for (const file of frameFiles) {
       const filePath = path.join(tempDir, file);
@@ -323,20 +454,48 @@ async function extractFramesFromVideo(videoPath: string, maxFrames: number = MAX
       frames.push(base64Image);
       
       // Clean up the frame file
-      fs.unlinkSync(filePath);
+      try {
+        fs.unlinkSync(filePath);
+      } catch (unlinkError) {
+        console.warn(`Failed to clean up frame file ${filePath}:`, unlinkError);
+      }
     }
     
     // Clean up the temporary directory
-    fs.rmdirSync(tempDir);
+    try {
+      if (tempDir && fs.existsSync(tempDir)) {
+        fs.rmdirSync(tempDir);
+      }
+    } catch (rmError) {
+      console.warn(`Failed to clean up temporary directory ${tempDir}:`, rmError);
+    }
     
     return frames;
   } catch (error) {
     console.error(`Error extracting frames: ${error}`);
+    
+    // Clean up the temporary directory if it exists
+    try {
+      if (tempDir && fs.existsSync(tempDir)) {
+        const files = fs.readdirSync(tempDir);
+        for (const file of files) {
+          try {
+            fs.unlinkSync(path.join(tempDir, file));
+          } catch (unlinkError) {
+            console.warn(`Failed to clean up file ${file}:`, unlinkError);
+          }
+        }
+        fs.rmdirSync(tempDir);
+      }
+    } catch (cleanupError) {
+      console.warn(`Failed to clean up after error: ${cleanupError}`);
+    }
+    
     throw error;
   }
 }
 
-// New function to analyze frames with SiliconFlow Qwen model
+// New function to analyze frames with SiliconFlow Qwen model, TODO, use English prompt to align with the search query language
 async function analyzeFramesWithQwen(frames: string[], textDescription: string): Promise<any> {
   
   if (!SILICONFLOW_API_KEY) {
@@ -450,7 +609,7 @@ ${textDescription}
     
     // 提高提取reason的鲁棒性，使用[\s\S]匹配包括换行符在内的所有字符
     const reasonMatch = analysisText.match(/<reason>([\s\S]*?)<\/reason>/);
-    
+
     // 添加多种回退模式，确保即使格式不标准也能尽可能提取到理由
     let explanation = '';
     if (reasonMatch) {
@@ -458,8 +617,7 @@ ${textDescription}
     } else {
       explanation = analysisText.replace(/<o>[\s\S]*?<\/o>/g, '').trim();
     }
-    
-    
+
     return {
       matches,
       score,
@@ -494,7 +652,12 @@ async function validateVideos(videosWithScores: [string, number][], textDescript
       const analysisResult = await analyzeFramesWithQwen(frames, textDescription);
       
       // Clean up temporary file
-      // fs.unlinkSync(tempVideoPath);
+      try {
+        fs.unlinkSync(tempVideoPath);
+        console.log(`Cleaned up temporary file: ${tempVideoPath}`);
+      } catch (cleanupError) {
+        console.warn(`Failed to clean up temporary file ${tempVideoPath}:`, cleanupError);
+      }
       
       return {
         videoPath: s3Path,
@@ -519,7 +682,7 @@ async function validateVideos(videosWithScores: [string, number][], textDescript
       };
     }
   });
-  
+
   // 等待所有处理完成并返回结果
   return await Promise.all(resultsPromises);
 }

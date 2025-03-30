@@ -26,6 +26,7 @@ interface VideoSearchStackProps extends cdk.StackProps {
   maxAzs: number;
   deploymentEnvironment?: string;
   externalVideoEmbeddingEndpoint?: string;
+  siliconflowApiKey?: string;
   appDomain?: string;
 }
 
@@ -42,6 +43,7 @@ export class VideoSearchStack extends cdk.Stack {
   private readonly dynamodbEndpoint: ec2.InterfaceVpcEndpoint;
   private readonly videoEmbeddingService: ecs.FargateService;
   private readonly externalVideoEmbeddingEndpoint: string;
+  private readonly siliconflowApiKey?: string;
   private readonly appDomain?: string;
   private readonly userPool: cognito.UserPool;
   private readonly userPoolClient: cognito.UserPoolClient;
@@ -50,6 +52,7 @@ export class VideoSearchStack extends cdk.Stack {
     super(scope, id, props);
 
     this.externalVideoEmbeddingEndpoint = props.externalVideoEmbeddingEndpoint || '';
+    this.siliconflowApiKey = props.siliconflowApiKey || '';
     this.appDomain = props.appDomain;
     const deploymentEnv = props.deploymentEnvironment || 'dev';
 
@@ -635,6 +638,7 @@ export class VideoSearchStack extends cdk.Stack {
         // Explicitly specify the DynamoDB endpoint since Private DNS can't be enabled because the service com.amazonaws.<region>.dynamodb does not provide a privateDNS name. Use Fn.select to properly extract the first DNS entry from the list
         INDEXES_TABLE_DYNAMODB_DNS_NAME: dynamoDbEndpointDnsHttp,
         EXTERNAL_EMBEDDING_ENDPOINT: this.externalVideoEmbeddingEndpoint || '',
+        SILICONFLOW_API_KEY: this.siliconflowApiKey || '',
       },
       bundling: {
         // Minify the code to reduce bundle size
