@@ -10,6 +10,14 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand } from '@aws-sdk/lib-dynamodb';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import * as os from 'os';
+import * as fs from 'fs-extra';
+import * as path from 'path';
+import * as stream from 'stream';
+import { promisify } from 'util';
+import axios from 'axios';
+import { execSync } from 'child_process';
+import { spawn } from 'child_process';
 
 // Update search query interface to match frontend
 interface SearchQuery {
@@ -26,6 +34,34 @@ interface SearchQuery {
   minConfidence: number;
   selectedIndex?: string;
   advancedSearch?: boolean; // Add the advanced search option
+  skipValidation?: boolean; // Flag to skip validation step (false by default, validation is performed)
+}
+
+interface ValidationResult {
+  videoPath: string;
+  originalScore: number;
+  framesAnalyzed: number;
+  matchesDescription: boolean;
+  matchScore: number;
+  matchConfidence: number;
+  explanation: string;
+  error?: string;
+}
+
+// Extend the VideoResult interface to include validation fields
+interface EnhancedVideoResult extends VideoResult {
+  validationScore?: number;
+  validationConfidence?: number;
+  validationExplanation?: string;
+  validationStatus?: string;
+}
+
+// Add an interface for enhanced segments with validation fields
+interface EnhancedVideoSegment extends VideoSegment {
+  validationScore?: number;
+  validationConfidence?: number;
+  validationExplanation?: string;
+  validationStatus?: string;
 }
 
 // OpenSearch query types
@@ -62,8 +98,11 @@ let redisClient: RedisClientType | null = null;
 const dynamoClient = new DynamoDBClient({endpoint: process.env.INDEXES_TABLE_DYNAMODB_DNS_NAME});
 const docClient = DynamoDBDocumentClient.from(dynamoClient);
 
-// Add a constant for the external embedding endpoint
+// Add constants for the external embedding endpoint and SiliconFlow API
 const EXTERNAL_EMBEDDING_ENDPOINT = process.env.EXTERNAL_EMBEDDING_ENDPOINT || '';
+const SILICONFLOW_API_KEY = process.env.SILICONFLOW_API_KEY || '';
+const SILICONFLOW_API_URL = 'https://api.siliconflow.cn/v1/chat/completions';
+const MAX_FRAMES = 5; // Maximum number of frames to extract from video
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -101,7 +140,7 @@ async function generateEmbedding(text: string): Promise<number[] | undefined> {
     //     "texts": ["text1", "text2", "text3"]
     // }
     // ```
-    
+
     // **Response**
     // ```json
     // {
@@ -132,6 +171,357 @@ async function generateEmbedding(text: string): Promise<number[] | undefined> {
     console.error('Error calling external embedding service:', error);
     return undefined;
   }
+}
+
+// New function to download video from S3
+async function downloadVideoFromS3(s3Path: string): Promise<string> {
+  
+  // Parse S3 path
+  let bucket = process.env.VIDEO_BUCKET;
+  let key = s3Path;
+  
+  // If s3Path is a full s3:// URL, parse it
+  if (s3Path.startsWith('s3://')) {
+    s3Path = s3Path.replace('s3://', '');
+    const parts = s3Path.split('/', 2);
+    bucket = parts[0];
+    key = parts.length > 1 ? parts.slice(1).join('/') : '';
+  }
+  
+  if (!bucket) {
+    throw new Error('No S3 bucket specified. Set VIDEO_BUCKET environment variable or use full s3:// path');
+  }
+  
+  // Create a temporary file
+  const tempDir = os.tmpdir();
+  const tempPath = path.join(tempDir, `temp_${Date.now()}.mp4`);
+  const fileStream = fs.createWriteStream(tempPath);
+  
+  try {
+    const command = new GetObjectCommand({
+      Bucket: bucket,
+      Key: key
+    });
+    
+    const response = await s3.send(command);
+    if (!response.Body) {
+      throw new Error('Empty response body');
+    }
+    
+    // Convert readable stream to Node.js stream
+    const responseBodyStream = response.Body as any;
+    
+    // Create a promise to track when the piping is complete
+    const finished = promisify(stream.finished);
+    
+    // Pipe the response to the file
+    responseBodyStream.pipe(fileStream);
+    
+    // Wait for the piping to complete
+    await finished(fileStream);
+    
+    return tempPath;
+  } catch (error) {
+    console.error(`Error downloading video from S3: ${error}`);
+    fs.unlinkSync(tempPath);
+    throw error;
+  }
+}
+
+// New function to extract frames from video using ffmpeg instead of opencv
+async function extractFramesFromVideo(videoPath: string, maxFrames: number = MAX_FRAMES): Promise<string[]> {
+  
+  try {
+    // Create a temporary directory for the frames
+    const tempDir = path.join(os.tmpdir(), `frames_${Date.now()}`);
+    fs.mkdirSync(tempDir, { recursive: true });
+    
+    // Define ffprobe path - it's included in the FFmpeg Lambda layer
+    const ffprobePath = process.env.LAMBDA_TASK_ROOT ? '/opt/bin/ffprobe' : 'ffprobe';
+    const ffmpegPath = process.env.LAMBDA_TASK_ROOT ? '/opt/bin/ffmpeg' : 'ffmpeg';
+    
+    // First, get total frames with ffprobe
+    const ffprobeProcess = spawn(ffprobePath, [
+      '-loglevel', 'error',  // Only show errors instead of -v error
+      '-select_streams', 'v:0',
+      '-count_packets',
+      '-show_entries', 'stream=nb_read_packets',
+      '-of', 'csv=p=0',
+      videoPath
+    ]);
+    
+    let ffprobeOutput = '';
+    
+    ffprobeProcess.stdout.on('data', (data) => {
+      ffprobeOutput += data.toString();
+    });
+    
+    // Wait for the ffprobe process to complete
+    await new Promise<void>((resolve, reject) => {
+      ffprobeProcess.on('close', (code) => {
+        if (code === 0) {
+          resolve();
+        } else {
+          reject(new Error(`ffprobe process exited with code ${code}`));
+        }
+      });
+      
+      ffprobeProcess.stderr.on('data', (data) => {
+        console.error(`ffprobe stderr: ${data}`);
+      });
+      
+      ffprobeProcess.on('error', (err) => {
+        reject(err);
+      });
+    });
+    
+    // Calculate step based on total frames
+    const totalFrames = parseInt(ffprobeOutput.trim()) || 1;
+    const step = Math.max(1, Math.floor(totalFrames / maxFrames));
+        
+    // Use ffmpeg to extract frames
+    const ffmpegProcess = spawn(ffmpegPath, [
+      '-loglevel', 'error',  // Only show errors
+      '-i', videoPath,
+      '-vf', `select='not(mod(n,${step}))'`,
+      '-vsync', '0',
+      '-frame_pts', 'true',
+      '-vframes', maxFrames.toString(),
+      '-q:v', '1',
+      `${tempDir}/frame_%03d.jpg`
+    ]);
+    
+    // Wait for the ffmpeg process to complete
+    await new Promise<void>((resolve, reject) => {
+      ffmpegProcess.on('close', (code) => {
+        if (code === 0) {
+          resolve();
+        } else {
+          reject(new Error(`ffmpeg process exited with code ${code}`));
+        }
+      });
+      
+      ffmpegProcess.stderr.on('data', (data) => {
+        console.log(`ffmpeg stderr: ${data}`);
+      });
+      
+      ffmpegProcess.on('error', (err) => {
+        reject(err);
+      });
+    });
+    
+    // Read the extracted frames and convert to base64
+    const frames: string[] = [];
+    const frameFiles = fs.readdirSync(tempDir)
+      .filter((file: string) => file.startsWith('frame_') && file.endsWith('.jpg'))
+      .sort();
+    
+    for (const file of frameFiles) {
+      const filePath = path.join(tempDir, file);
+      const fileData = fs.readFileSync(filePath);
+      const base64Image = fileData.toString('base64');
+      frames.push(base64Image);
+      
+      // Clean up the frame file
+      fs.unlinkSync(filePath);
+    }
+    
+    // Clean up the temporary directory
+    fs.rmdirSync(tempDir);
+    
+    return frames;
+  } catch (error) {
+    console.error(`Error extracting frames: ${error}`);
+    throw error;
+  }
+}
+
+// New function to analyze frames with SiliconFlow Qwen model
+async function analyzeFramesWithQwen(frames: string[], textDescription: string): Promise<any> {
+  
+  if (!SILICONFLOW_API_KEY) {
+    throw new Error('SiliconFlow API key not configured');
+  }
+  
+  try {
+    // Prepare the content for SiliconFlow API
+    const content: any[] = [];
+    
+    // Add each frame to the content
+    for (const frame of frames) {
+      content.push({
+        type: 'image_url',
+        image_url: {
+          url: `data:image/jpeg;base64,${frame}`
+        }
+      });
+    }
+    
+    // Add the prompt text
+    const promptText = `你的任务是判断一个视频镜头和描述是否相符。
+
+你拿到的描述是：
+\`\`\`
+${textDescription}
+\`\`\`
+
+我会给你展示 ${frames.length} 个视频帧（每秒一帧）。请评估这个视频镜头和描述的匹配程度，并给出0-5分的评分，其中：
+0分：完全不符合描述
+1分：基本不符合描述
+2分：略微符合描述
+3分：部分符合描述
+4分：大部分符合描述
+5分：完全符合描述
+
+你需要按下面的格式输出：
+<o>
+评分（0-5的整数）
+</o>
+<reason>
+评分理由
+</reason>
+
+输出示例：
+<o>
+4
+</o>
+<reason>
+视频帧展示了一个人在海滩上奔跑的场景，与描述中提到的"一个人在海边跑步"非常吻合。可以清晰看到海浪和沙滩，以及人物跑步的动作。唯一与描述不完全匹配的是视频中没有展示描述中提到的"日落时分"的场景，因此给出4分而非5分。
+</reason>`;
+
+    content.push({
+      type: 'text',
+      text: promptText
+    });
+    
+    // Prepare the request for SiliconFlow API
+    const headers = {
+      'Authorization': `Bearer ${SILICONFLOW_API_KEY}`,
+      'Content-Type': 'application/json'
+    };
+    
+    const payload = {
+      model: 'Pro/Qwen/Qwen2.5-VL-7B-Instruct',
+      messages: [
+        {
+          role: 'system',
+          content: 'You are an AI assistant that analyzes video frames to determine if they match text descriptions.'
+        },
+        {
+          role: 'user',
+          content: content
+        }
+      ],
+      max_tokens: 500
+    };
+    
+    // Call the SiliconFlow API
+    const response = await axios.post(SILICONFLOW_API_URL, payload, { headers });
+    
+    // Parse the response
+    const analysisText = response.data.choices[0].message.content;
+    
+    // 改进分数提取的正则表达式，使其更加健壮
+    // 查找<o>标签中的任何0-5的数字，忽略周围可能存在的额外文本
+    const outputMatch = analysisText.match(/<o>[\s\S]*?([0-5])[\s\S]*?<\/o>/);
+    // print outputMatch
+    // 如果第一种匹配方式失败，尝试寻找可能的替代格式
+    let score = 0;
+    let matches = false;
+    
+    if (outputMatch) {
+      score = parseInt(outputMatch[1].trim());
+      matches = (score >= 1); // 3+ is considered a match
+    } else {
+      // 备用匹配模式：寻找任何包含0-5数字的<o>标签
+      const fallbackMatch = analysisText.match(/<o>.*?([0-5])[\s分点].*?<\/o>/s);
+      if (fallbackMatch) {
+        score = parseInt(fallbackMatch[1].trim());
+        matches = (score >= 1);
+      } else {
+        // 最后的尝试：在整个回答中搜索评分相关的模式
+        const numberMatch = analysisText.match(/评分.*?([0-5])[\s分点]/);
+        if (numberMatch) {
+          score = parseInt(numberMatch[1].trim());
+          matches = (score >= 1);
+        }
+      }
+    }
+    
+    // 提高提取reason的鲁棒性，使用[\s\S]匹配包括换行符在内的所有字符
+    const reasonMatch = analysisText.match(/<reason>([\s\S]*?)<\/reason>/);
+    
+    // 添加多种回退模式，确保即使格式不标准也能尽可能提取到理由
+    let explanation = '';
+    if (reasonMatch) {
+      explanation = reasonMatch[1].trim();
+    } else {
+      explanation = analysisText.replace(/<o>[\s\S]*?<\/o>/g, '').trim();
+    }
+    
+    
+    return {
+      matches,
+      score,
+      confidence: score / 5.0, // Convert score to 0-1 confidence
+      explanation,
+      fullResponse: analysisText
+    };
+  } catch (error) {
+    console.error(`Error analyzing frames with Qwen: ${error}`);
+    return {
+      matches: false,
+      score: 0,
+      confidence: 0,
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
+// New function to validate videos against text description
+async function validateVideos(videosWithScores: [string, number][], textDescription: string): Promise<ValidationResult[]> {
+  
+  // 并行处理所有视频片段
+  const resultsPromises = videosWithScores.map(async ([s3Path, score]) => {
+    try {
+      // Download the video segment from S3
+      const tempVideoPath = await downloadVideoFromS3(s3Path);
+      
+      // Extract frames from the video segment
+      const frames = await extractFramesFromVideo(tempVideoPath);
+      
+      // Analyze the frames with Qwen
+      const analysisResult = await analyzeFramesWithQwen(frames, textDescription);
+      
+      // Clean up temporary file
+      // fs.unlinkSync(tempVideoPath);
+      
+      return {
+        videoPath: s3Path,
+        originalScore: score,
+        framesAnalyzed: frames.length,
+        matchesDescription: analysisResult.matches || false,
+        matchScore: analysisResult.score || 0,
+        matchConfidence: analysisResult.confidence || 0,
+        explanation: analysisResult.explanation || ''
+      };
+    } catch (error) {
+      console.error(`Error processing video segment ${s3Path}: ${error}`);
+      return {
+        videoPath: s3Path,
+        originalScore: score,
+        framesAnalyzed: 0,
+        matchesDescription: false,
+        matchScore: 0,
+        matchConfidence: 0,
+        explanation: '',
+        error: error instanceof Error ? error.message : String(error)
+      };
+    }
+  });
+  
+  // 等待所有处理完成并返回结果
+  return await Promise.all(resultsPromises);
 }
 
 // Update the transform function to normalize OpenSearch confidence scores, such score is relative and per index and per query, calculated using TF-IDF by default
@@ -290,12 +680,13 @@ const transformSearchResults = async (hits: any[]): Promise<VideoResult[]> => {
   }));
 };
 
-// Update the handler to use the dynamic index
+// Update the handler to use the dynamic index and include video validation
 export const handler = async (event: APIGatewayProxyEvent, _context: LambdaContext): Promise<LambdaResponse> => {
   try {
+    // Regular search request
     if (!event.body) {
       return {
-        statusCode: 400,
+        statusCode: STATUS_CODES.BAD_REQUEST,
         headers: corsHeaders,
         body: JSON.stringify({ error: 'Missing request body' })
       };
@@ -428,11 +819,9 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
               minimum_should_match: 1
             }
           },
-          // The top-level min_score operates on the overall document score and is often redundant when used in conjunction with a knn filter
           // min_score: searchQuery.minConfidence || 0
         };
 
-        // console.log("Generated k-NN search body: ", JSON.stringify(searchBody, null, 4));
         try {
           const { body } = await openSearch.search({
             index: searchQuery.selectedIndex,
@@ -459,6 +848,93 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
             filteredResults = filteredResults.filter(result => result.segments.length > 0);
           }
           
+          // Always perform validation as a secondary check unless explicitly skipped
+          if (!searchQuery.skipValidation && filteredResults.length > 0) {
+            console.log('Performing secondary validation of search results against query text');
+            
+            // Extract top segments with their scores for validation
+            const segmentsWithScores: [string, number][] = [];
+            
+            // Collect segments from all videos
+            filteredResults.forEach(video => {
+              // Only use segments with confidence scores
+              video.segments.forEach(segment => {
+                if (segment.segment_video_s3_path && typeof segment.confidence === 'number') {
+                  segmentsWithScores.push([segment.segment_video_s3_path, segment.confidence]);
+                }
+              });
+            });
+            
+            console.log(`Collected ${segmentsWithScores.length} segments for validation`);
+            
+            if (segmentsWithScores.length > 0) {
+              // Limit the number of segments to validate to avoid excessive processing
+              const maxSegmentsToValidate = 20;
+              const segmentsToValidate = segmentsWithScores
+                .sort((a, b) => b[1] - a[1]) // Sort by confidence, highest first
+                .slice(0, maxSegmentsToValidate);
+              // print segmentsToValidate
+              console.log('Segments to validate:', segmentsToValidate);
+              // Validate against the search query text
+              const validationResults = await validateVideos(
+                segmentsToValidate,
+                searchQuery.searchQuery
+              );
+              // print validationResults
+              console.log('Validation results:', validationResults);
+              // Create a map of segment paths to validation results for easier lookup
+              const validationMap = new Map<string, ValidationResult>();
+              validationResults.forEach(result => {
+                validationMap.set(result.videoPath, result);
+              });
+              
+              // Enhance results with validation data at the segment level
+              const enhancedResults: EnhancedVideoResult[] = filteredResults.map(video => {
+                // Enhance segments with validation data
+                const enhancedSegments: EnhancedVideoSegment[] = video.segments.map(segment => {
+                  const validation = validationMap.get(segment.segment_video_s3_path || '');
+                  
+                  if (validation) {
+                    return {
+                      ...segment,
+                      
+                      confidence: ((segment.confidence || 0) + validation.matchConfidence) / 2, // Average of original confidence and validation confidence
+                      validationScore: validation.matchScore,
+                      validationConfidence: validation.matchConfidence,
+                      validationExplanation: validation.explanation,
+                      validationStatus: validation.matchesDescription ? 'matches' : 'does_not_match'
+                    };
+                  }
+                  return segment;
+                });
+                
+                // Return the video with enhanced segments
+                return {
+                  ...video,
+                  segments: enhancedSegments
+                };
+              });
+              
+              // Filter by validation if needed
+              let finalResults = enhancedResults;
+              if (searchQuery.minConfidence > 0) {
+                // Keep only videos that have at least one segment with good validation confidence
+                finalResults = enhancedResults.filter(video => 
+                  video.segments.some(segment => 
+                    ((segment as EnhancedVideoSegment).validationConfidence || 0) >= searchQuery.minConfidence
+                  )
+                );
+              }
+              
+              return {
+                statusCode: STATUS_CODES.OK,
+                headers: corsHeaders,
+                body: JSON.stringify(finalResults)
+              };
+            }
+          }
+          
+          // Return unvalidated results if validation was skipped or no videos to validate
           return {
             statusCode: STATUS_CODES.OK,
             headers: corsHeaders,
@@ -466,6 +942,14 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
           };
         } catch (searchError) {
           console.error("k-NN search error:", searchError);
+          return {
+            statusCode: STATUS_CODES.INTERNAL_SERVER_ERROR,
+            headers: corsHeaders,
+            body: JSON.stringify({ 
+              error: 'OpenSearch query error',
+              details: searchError instanceof Error ? searchError.message : 'Unknown error'
+            })
+          };
         }
       } else {
         console.error('Failed to generate embedding for advanced search, falling back to basic search');
@@ -477,7 +961,7 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
       }
     }
     
-    // If we reach here, either advanced search is not enabled or embedding generation failed
+    // If we reach here, advanced search is not enabled or embedding generation failed
     return {
       statusCode: STATUS_CODES.INTERNAL_SERVER_ERROR,
       headers: corsHeaders,

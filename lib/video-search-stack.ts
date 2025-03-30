@@ -659,6 +659,8 @@ export class VideoSearchStack extends cdk.Stack {
       entry: 'src/lambdas/video-search/index.ts',
       handler: 'index.handler',
       memorySize: 2048,
+      // Add the FFmpeg layer
+      layers: [this.ffmpegLayer],
       depsLockFilePath: 'src/lambdas/video-search/package-lock.json'
     });
 

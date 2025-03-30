@@ -114,7 +114,8 @@ const initialSearchOptions: SearchOptions = {
   showConfidenceScores: true,
   selectedIndex: null,
   confidencePreset: 'medium',
-  confidenceAdjustment: 'default'
+  confidenceAdjustment: 'default',
+  skipValidation: false  // false means Exact Search is enabled
 }
 
 // Add API configuration
@@ -307,7 +308,8 @@ export default function HomePage() {
           ...searchOptions,
           searchType,
           searchQuery: query,
-          advancedSearch // Add the advanced search flag
+          advancedSearch, // Add the advanced search flag
+          skipValidation: searchOptions.skipValidation // skipValidation=true means Exact Search is disabled
         }))
         
         // Use appropriate endpoint based on file type
@@ -328,7 +330,8 @@ export default function HomePage() {
             searchType: 'text',
             searchQuery: query,
             selectedIndex: searchOptions.selectedIndex,
-            advancedSearch // Add the advanced search flag
+            advancedSearch, // Add the advanced search flag
+            skipValidation: searchOptions.skipValidation // skipValidation=true means Exact Search is disabled
           })
         })
       }

@@ -52,7 +52,9 @@ const CONFIDENCE_ADJUSTMENTS = {
 const TOOLTIP_DESCRIPTIONS = {
   minimumConfidence: `Confidence levels are relative grouping applied to the search results, in which High/Medium/Low is optimized for Precision, both Precision and Recall, and Recall respectively`,
   
-  adjustConfidence: `You can modify the overall confidence level by making it more strict (fewer search results) or less strict (more search results)`
+  adjustConfidence: `You can modify the overall confidence level by making it more strict (fewer search results) or less strict (more search results)`,
+
+  skipValidation: `Disabling exact search provides extremely fast search speed, but reduces search result quality.`
 } as const
 
 export default function SearchSidebar({
@@ -323,6 +325,30 @@ export default function SearchSidebar({
                   className={cn(
                     "inline-block h-4 w-4 transform rounded-full bg-white transition-transform",
                     options.showConfidenceScores ? "translate-x-6" : "translate-x-1"
+                  )}
+                />
+              </Switch>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-gray-700">Exact Search</span>
+                <Tooltip content={TOOLTIP_DESCRIPTIONS.skipValidation} position="right">
+                  <InformationCircleIcon className="h-4 w-4 text-gray-400 cursor-help" />
+                </Tooltip>
+              </div>
+              <Switch
+                checked={!(options.skipValidation ?? false)}
+                onChange={(checked) => onOptionsChange({ ...options, skipValidation: !checked })}
+                className={cn(
+                  "relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2",
+                  !(options.skipValidation ?? false) ? "bg-gradient-to-r from-indigo-600 to-purple-600" : "bg-gray-200"
+                )}
+              >
+                <span
+                  className={cn(
+                    "inline-block h-4 w-4 transform rounded-full bg-white transition-transform",
+                    !(options.skipValidation ?? false) ? "translate-x-6" : "translate-x-1"
                   )}
                 />
               </Switch>

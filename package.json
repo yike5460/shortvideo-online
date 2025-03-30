@@ -22,13 +22,16 @@
     "@aws-sdk/s3-request-presigner": "^3.750.0",
     "@opensearch-project/opensearch": "^2.4.0",
     "aws-cdk-lib": "^2.115.0",
+    "axios": "^1.8.4",
     "constructs": "^10.3.0",
+    "fs-extra": "^11.3.0",
     "redis": "^4.6.11",
     "uuid": "^9.0.1"
   },
   "devDependencies": {
     "@aws-sdk/types": "^3.709.0",
     "@types/aws-lambda": "^8.10.147",
+    "@types/fs-extra": "^11.0.4",
     "@types/jest": "^29.5.11",
     "@types/node": "^20.17.10",
     "@types/uuid": "^9.0.8",
