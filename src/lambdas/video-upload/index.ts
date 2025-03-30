@@ -396,7 +396,7 @@ async function formatSearchResults(body: any, page: number, pageSize: number, fr
   };
 
   // Helper function to process video_objects with filtering
-    const processVideoObjects = (videoObjects: any[] | undefined): any[] => {
+  const processVideoObjects = (videoObjects: any[] | undefined): any[] => {
     if (!videoObjects || !Array.isArray(videoObjects)) return [];
     
     return videoObjects.map(obj => {
