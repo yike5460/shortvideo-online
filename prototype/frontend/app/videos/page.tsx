@@ -276,6 +276,7 @@ export default function VideosPage() {
   // Add state for tag management and filtering
   const [allTags, setAllTags] = useState<{tag: string, count: number, type: 'category' | 'alias'}[]>([])
   const [selectedTags, setSelectedTags] = useState<string[]>([])
+  const [appliedTags, setAppliedTags] = useState<string[]>([])
   
   // Define sort options
   const sortOptions = [
@@ -524,13 +525,13 @@ export default function VideosPage() {
     fetchIndexes();
   }, [state.session, selectedIndexId]);
 
-  // Filter videos by selected tags and sort them
+  // Filter videos by applied tags and sort them
   const sortedVideos = useMemo(() => {
     if (!videos || !Array.isArray(videos)) return [];
     
-    // First filter by selected tags if any
+    // First filter by applied tags if any
     let filteredVideos = [...videos];
-    if (selectedTags.length > 0) {
+    if (appliedTags.length > 0) {
       filteredVideos = videos.filter(video => {
         // Cast to ExtendedVideoResult to access video_objects
         const extendedVideo = video as ExtendedVideoResult;
@@ -541,8 +542,8 @@ export default function VideosPage() {
         const aliases = extractAliases(extendedVideo.video_objects);
         const allVideoTags = [...categories, ...aliases];
         
-        // Check if any of the selected tags match this video's tags
-        return selectedTags.some(selectedTag => allVideoTags.includes(selectedTag));
+        // Check if any of the applied tags match this video's tags
+        return appliedTags.some(appliedTag => allVideoTags.includes(appliedTag));
       });
     }
     
@@ -840,13 +841,25 @@ export default function VideosPage() {
               Categories & Tags
             </label>
             {selectedTags.length > 0 && (
-              <button
-                type="button"
-                className="text-sm text-indigo-600 hover:text-indigo-800"
-                onClick={() => setSelectedTags([])}
-              >
-                Clear filters
-              </button>
+              <div className="flex space-x-4">
+                <button
+                  type="button"
+                  className="text-sm text-indigo-600 hover:text-indigo-800"
+                  onClick={() => setAppliedTags([...selectedTags])}
+                >
+                  Apply filters
+                </button>
+                <button
+                  type="button"
+                  className="text-sm text-indigo-600 hover:text-indigo-800"
+                  onClick={() => {
+                    setSelectedTags([]);
+                    setAppliedTags([]);
+                  }}
+                >
+                  Clear filters
+                </button>
+              </div>
             )}
           </div>
           
