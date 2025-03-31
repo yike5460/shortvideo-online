@@ -150,7 +150,32 @@ export default function IndexCreationStep({ onNext }: IndexCreationStepProps) {
               {selectedModels.includes(model.id) && !model.disabled && (
                 <CheckCircleIcon className="absolute top-4 right-4 h-6 w-6 text-primary-600" />
               )}
-              <h4 className="text-lg font-medium text-gray-900">{model.name}</h4>
+              <h4 className="text-lg font-medium text-gray-900 flex items-center">
+                {model.id === 'unified-video-text' ? (
+                  <span className="mr-2 inline-flex">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-primary-600">
+                      <circle cx="12" cy="12" r="10" stroke="currentColor" fill="none" opacity="0.2" />
+                      <path d="M6 12C6 12 8 8 12 8C16 8 18 12 18 12C18 12 16 16 12 16C8 16 6 12 6 12Z" stroke="currentColor" fill="none" />
+                      <circle cx="12" cy="12" r="3" stroke="currentColor" fill="none" />
+                      <line x1="5" y1="19" x2="19" y2="5" stroke="currentColor" strokeWidth="1" />
+                      <line x1="5" y1="5" x2="19" y2="19" stroke="currentColor" strokeWidth="1" />
+                    </svg>
+                  </span>
+                ) : (
+                  <span className="mr-2 inline-flex">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-gray-400">
+                      <circle cx="12" cy="12" r="10" stroke="currentColor" fill="none" opacity="0.2" />
+                      <path d="M6 12C6 12 8 8 12 8C16 8 18 12 18 12C18 12 16 16 12 16C8 16 6 12 6 12Z" stroke="currentColor" fill="none" />
+                      <circle cx="12" cy="12" r="3" stroke="currentColor" fill="none" />
+                      <path d="M3 10C4.5 11.5 4.5 12.5 3 14" stroke="currentColor" strokeWidth="1" />
+                      <path d="M21 10C19.5 11.5 19.5 12.5 21 14" stroke="currentColor" strokeWidth="1" />
+                      <path d="M8 8l8 8" strokeDasharray="1 1" stroke="currentColor" />
+                      <path d="M16 8l-8 8" strokeDasharray="1 1" stroke="currentColor" />
+                    </svg>
+                  </span>
+                )}
+                {model.name}
+              </h4>
               <p className="mt-2 text-sm text-gray-600">{model.description}</p>
               <ul className="mt-4 space-y-2">
                 {model.features.map((feature, index) => (

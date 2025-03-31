@@ -26,7 +26,7 @@ export default function Sidebar() {
   return (
     <div className="flex w-64 flex-col bg-white shadow-md">
       <div className="flex h-16 flex-shrink-0 items-center px-4 border-b border-gray-100">
-        <h1 className="text-xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-purple-600">Video Search</h1>
+        <h1 className="text-xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-purple-600">Know Your Video</h1>
       </div>
       <div className="flex flex-1 flex-col overflow-y-auto">
         <nav className="flex-1 space-y-1 px-2 py-4">
