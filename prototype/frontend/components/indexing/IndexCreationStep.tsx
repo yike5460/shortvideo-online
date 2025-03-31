@@ -10,6 +10,7 @@ interface Model {
   description: string
   features: string[]
   type: 'visual' | 'audio'
+  disabled?: boolean
 }
 
 interface IndexCreationStepProps {
@@ -18,28 +19,32 @@ interface IndexCreationStepProps {
 
 const AVAILABLE_MODELS: Model[] = [
   {
-    id: 'Amazon NOVA',
-    name: 'Amazon NOVA',
-    description: 'Advanced visual recognition model for detailed scene understanding',
+    id: 'unified-video-text',
+    name: 'OmniSpectra v1.0',
+    description: 'Advanced multimodal embedding model that unifies video and text in a shared embedding space',
     features: [
-      'Object detection',
-      'Scene classification',
-      'Action recognition',
-      'Text detection'
+      'Largest video embedding model (3B parameters)',
+      'Native video processing with temporal preservation', 
+      'Unified multimodal representation',
+      'Absolute time alignment for temporal information',
+      'Bidirectional cross-modal retrieval',
+      'Bilingual support (Chinese & English)'
     ],
     type: 'visual'
   },
   {
-    id: 'transcribe',
-    name: 'Transcribe',
-    description: 'High-accuracy audio transcription and analysis model',
+    id: 'unified-audio-video-text',
+    name: 'OmniSpectra v2.0 (Coming Soon)',
+    description: 'Enhanced multimodal model with audio support and improved retrieval capabilities',
     features: [
-      'Speech recognition',
-      'Speaker diarization',
-      'Language detection',
-      'Sentiment analysis'
+      'Audio embedding support',
+      'Second-level video retrieval precision',
+      'Optimized computation for real-time retrieval',
+      'Combined audio-visual content matching',
+      'Extended multimodal search capabilities'
     ],
-    type: 'audio'
+    type: 'visual',
+    disabled: true
   }
 ]
 
@@ -48,7 +53,9 @@ export default function IndexCreationStep({ onNext }: IndexCreationStepProps) {
   const [selectedModels, setSelectedModels] = useState<string[]>([])
   const [error, setError] = useState('')
 
-  const handleModelSelect = (modelId: string) => {
+  const handleModelSelect = (modelId: string, disabled?: boolean) => {
+    if (disabled) return
+    
     console.log('Selecting model:', modelId)
     setSelectedModels(prev => {
       const newModels = prev.includes(modelId)
@@ -92,9 +99,7 @@ export default function IndexCreationStep({ onNext }: IndexCreationStepProps) {
 
       {/* Index name input */}
       <div className="space-y-2">
-        <label htmlFor="indexName" className="block text-sm font-medium text-gray-700">
-          Index Name
-        </label>
+        <h3 className="text-lg font-medium text-gray-900">Index Name</h3>
         <input
           type="text"
           id="indexName"
@@ -104,7 +109,7 @@ export default function IndexCreationStep({ onNext }: IndexCreationStepProps) {
             setError('')
           }}
           className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
-          placeholder="Enter a name for your index"
+          placeholder="E.g., 'Documentary' - Name for organizing your searchable video collection"
         />
       </div>
 
@@ -123,16 +128,26 @@ export default function IndexCreationStep({ onNext }: IndexCreationStepProps) {
             <div
               key={model.id}
               className={cn(
-                "relative p-6 border rounded-lg cursor-pointer transition-colors",
-                selectedModels.includes(model.id)
+                "relative p-6 border rounded-lg transition-colors",
+                model.disabled 
+                  ? "border-gray-200 opacity-60 cursor-not-allowed" 
+                  : "cursor-pointer",
+                !model.disabled && selectedModels.includes(model.id)
                   ? "border-primary-500 bg-primary-50"
-                  : "border-gray-200 hover:border-primary-300"
+                  : "border-gray-200",
+                !model.disabled && !selectedModels.includes(model.id) && "hover:border-primary-300"
               )}
-              onClick={() => handleModelSelect(model.id)}
-              role="button"
-              tabIndex={0}
+              onClick={() => handleModelSelect(model.id, model.disabled)}
+              role={model.disabled ? "presentation" : "button"}
+              tabIndex={model.disabled ? -1 : 0}
             >
-              {selectedModels.includes(model.id) && (
+              {model.disabled && (
+                <div className="absolute top-0 right-0 bg-gray-500 text-white text-xs font-bold px-2 py-1 rounded-bl-lg rounded-tr-lg">
+                  Coming Soon
+                </div>
+              )}
+              
+              {selectedModels.includes(model.id) && !model.disabled && (
                 <CheckCircleIcon className="absolute top-4 right-4 h-6 w-6 text-primary-600" />
               )}
               <h4 className="text-lg font-medium text-gray-900">{model.name}</h4>
@@ -168,4 +183,4 @@ export default function IndexCreationStep({ onNext }: IndexCreationStepProps) {
       </div>
     </form>
   )
-} 
+}
