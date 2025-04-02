@@ -40,6 +40,7 @@ export default function UploadStep({
   const [youtubeUrl, setYoutubeUrl] = useState('')
   const [error, setError] = useState<string>('')
   const [uploadProgress, setUploadProgress] = useState<Record<string, UploadProgress>>({})
+  const [youtubeUploadProgress, setYoutubeUploadProgress] = useState<UploadProgress | null>(null)
   const [isUploading, setIsUploading] = useState(false)
   const router = useRouter()
 
@@ -180,6 +181,12 @@ export default function UploadStep({
 
   const uploadYouTubeVideo = async (youtubeUrl: string): Promise<string> => {
     try {
+      // Start with uploading status at 0%
+      setYoutubeUploadProgress({
+        progress: 0,
+        status: 'uploading'
+      })
+
       console.log('Uploading YouTube video:', youtubeUrl)
       const response = await axios.post(`${API_ENDPOINT}/videos/youtube`, {
         videoUrl: youtubeUrl,
@@ -197,9 +204,24 @@ export default function UploadStep({
       })
 
       console.log('YouTube upload response:', response.data)
+      
+      // Update progress to 100% when complete
+      setYoutubeUploadProgress({
+        progress: 100,
+        status: 'completed'
+      })
+
       return response.data.videoId
     } catch (err) {
       console.error('YouTube upload error:', err)
+      
+      // Update progress to show error
+      setYoutubeUploadProgress({
+        progress: 0,
+        status: 'error',
+        error: err instanceof Error ? err.message : 'YouTube upload failed'
+      })
+      
       throw err
     }
   }
@@ -317,6 +339,47 @@ export default function UploadStep({
           <li>• Formats: MP4, MOV, AVI</li>
         </ul>
       </div>
+
+      {/* YouTube upload progress */}
+      {youtubeUrl && youtubeUploadProgress && (
+        <div className="space-y-4">
+          <h3 className="text-lg font-medium text-gray-900">YouTube Upload</h3>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between bg-white p-4 rounded-lg border">
+              <div className="flex-1">
+                <p className="font-medium text-gray-900">YouTube Video</p>
+                <p className="text-sm text-gray-500 truncate">{youtubeUrl}</p>
+                <div className="mt-2">
+                  <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+                    <div 
+                      className={cn(
+                        "h-full transition-all duration-300",
+                        youtubeUploadProgress.status === 'completed' ? 'bg-green-500' :
+                        youtubeUploadProgress.status === 'error' ? 'bg-red-500' :
+                        'bg-primary-500'
+                      )}
+                      style={{ width: `${youtubeUploadProgress.progress}%` }}
+                    />
+                  </div>
+                  {youtubeUploadProgress.error && (
+                    <p className="text-sm text-red-500 mt-1">
+                      {youtubeUploadProgress.error}
+                    </p>
+                  )}
+                </div>
+              </div>
+              {!isUploading && (
+                <button
+                  onClick={() => setYoutubeUrl('')}
+                  className="p-2 text-gray-400 hover:text-gray-600"
+                >
+                  <XMarkIcon className="h-5 w-5" />
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Selected files */}
       {selectedFiles.length > 0 && (

@@ -32,6 +32,7 @@ export interface VideoMetadata {
 }
 
 export type VideoStatus = 
+  | 'downloading'       // Initial state when video is being downloaded from YouTube
   | 'awaiting_upload'   // Initial state when pre-signed URL is generated
   | 'uploading'         // File is being uploaded to S3
   | 'uploaded'          // File upload completed

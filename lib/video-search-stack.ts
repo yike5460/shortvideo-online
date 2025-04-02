@@ -1183,6 +1183,7 @@ export class VideoSearchStack extends cdk.Stack {
 
     // Add policies to Lambda roles
     lambdaFunctions.videoUploadFunction.videoUploadHandler.addToRolePolicy(openSearchPolicy);
+    lambdaFunctions.videoUploadFunction.youtubeUploadHandler.addToRolePolicy(openSearchPolicy);
     lambdaFunctions.videoSliceFunction.addToRolePolicy(openSearchPolicy);
     lambdaFunctions.videoSearchFunction.addToRolePolicy(openSearchPolicy);
     lambdaFunctions.indexCrudFunction.addToRolePolicy(openSearchPolicy);

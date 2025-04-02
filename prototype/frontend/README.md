@@ -474,3 +474,10 @@ npx serve out
 1. If images don't load, check the `remotePatterns` in `next.config.js`
 2. For routing issues, verify the `pages.config.js` configuration
 3. Environment variables must be prefixed with `NEXT_PUBLIC_` for client-side use
+
+## Deployment to AWS using CDK
+
+Execute the following command to deploy the application to AWS using CDK:
+```bash
+npx cdk deploy --require-approval never --context externalVideoEmbeddingEndpoint=http://<IP Address>:<Port> --context siliconflowApiKey=<Your Siliconflow API Key> --context appDomain=<example.com> --context deploymentEnvironment=dev
+```
