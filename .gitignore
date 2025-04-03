@@ -54,3 +54,4 @@ cdk.context.json
 .next/
 
 src/layers/ffmpeg/bin/
+src/layers/yt-dlp/bin/

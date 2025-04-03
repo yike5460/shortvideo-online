@@ -13,7 +13,7 @@ rm -rf "$NODEJS_DIR/node_modules"
 mkdir -p "$NODEJS_DIR/node_modules"
 
 # Download latest yt-dlp binary
-curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o "$LAYER_DIR/yt-dlp"
+curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux -o "$LAYER_DIR/yt-dlp"
 chmod +x "$LAYER_DIR/yt-dlp"
 
 # Create the layer structure
