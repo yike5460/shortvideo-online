@@ -12,9 +12,22 @@ echo "NODEJS_DIR: $NODEJS_DIR"
 rm -rf "$NODEJS_DIR/node_modules"
 mkdir -p "$NODEJS_DIR/node_modules"
 
-# Download latest yt-dlp binary
-curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux -o "$LAYER_DIR/yt-dlp"
+# Download a statically linked yt-dlp binary (with no external dependencies)
+echo "Downloading statically linked yt-dlp binary..."
+curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux.exe -o "$LAYER_DIR/yt-dlp"
 chmod +x "$LAYER_DIR/yt-dlp"
+
+# Create a wrapper script to properly set up the environment
+echo "Creating wrapper script..."
+cat > "$LAYER_DIR/bin/yt-dlp-wrapper" << 'EOL'
+#!/bin/bash
+# Wrapper script for yt-dlp in Lambda environment
+export PATH="/opt/bin:$PATH"
+export LD_LIBRARY_PATH="/opt/lib:$LD_LIBRARY_PATH"
+exec /opt/bin/yt-dlp "$@"
+EOL
+
+chmod +x "$LAYER_DIR/bin/yt-dlp-wrapper"
 
 # Create the layer structure
 mkdir -p "$LAYER_DIR/bin"
@@ -31,4 +44,4 @@ cat > "$NODEJS_DIR/package.json" << EOL
 }
 EOL
 
-echo "yt-dlp layer has been built successfully" 
+echo "yt-dlp layer has been built successfully"
