@@ -566,31 +566,22 @@ async function downloadFromYoutube(url: string, videoId: string, s3Key: string, 
   
   console.log(`[YouTube Download] Launching yt-dlp process for URL: ${url}`);
   
-  // Use the wrapper script that properly sets up the environment
-  const ytdlpWrapperPath = '/opt/bin/yt-dlp-wrapper';
+  // Directly use the yt-dlp binary path
+  const ytdlpPath = '/opt/bin/yt-dlp';
   
-  // Check if the wrapper script exists and is executable
+  // Check if the binary exists and is executable
   try {
-    await fs.access(ytdlpWrapperPath, fs.constants.X_OK);
-    console.log(`[YouTube Download] Found executable yt-dlp wrapper at ${ytdlpWrapperPath}`);
+    await fs.access(ytdlpPath, fs.constants.X_OK);
+    console.log(`[YouTube Download] Found executable yt-dlp binary at ${ytdlpPath}`);
   } catch (error: any) {
-    console.error(`[YouTube Download] Error accessing yt-dlp wrapper: ${error.message}`);
-    
-    // Fallback check for the actual binary
-    const ytdlpBinaryPath = '/opt/bin/yt-dlp';
-    try {
-      await fs.access(ytdlpBinaryPath, fs.constants.X_OK);
-      console.log(`[YouTube Download] Found fallback executable yt-dlp binary at ${ytdlpBinaryPath}`);
-    } catch (binaryError: any) {
-      console.error(`[YouTube Download] Error accessing yt-dlp binary: ${binaryError.message}`);
-    }
-    
-    // Continue to let the spawn call handle the error
+    console.error(`[YouTube Download] Error accessing yt-dlp binary: ${error.message}`);
+    // If we can't access it, the spawn call below will likely fail, which is okay.
+    // No need to reject here, let the spawn error handle it.
   }
   
   return new Promise<void>((resolve, reject) => {
-    // Launch YouTube downloader process using the wrapper script
-    const ytdl = spawn(ytdlpWrapperPath, [
+    // Launch YouTube downloader process using the direct binary path
+    const ytdl = spawn(ytdlpPath, [
       '--verbose',              // Added for more detailed logs
       '--format', 'best',       // Get best quality
       '--no-warnings',          // Suppress warnings
