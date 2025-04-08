@@ -19,7 +19,7 @@ export type VideoStatus =
   | 'deleted';          // Video was deleted
 
 export interface VideoSegment {
-  segment_id?: string;        // Segment ID, will be updated once in segment detection, in format of `${videoId}_segment_${segmentNumber}`,
+  segment_id: string;        // Segment ID, in format of `${videoId}_segment_${segmentNumber}`
   video_id: string;
   start_time: number;        // Milliseconds from start, align with StartTimestampMillis in Rekognition response
   end_time: number;          // Milliseconds from start, align with EndTimestampMillis in Rekognition response
@@ -90,7 +90,7 @@ export interface VideoResult {
   videoThumbnailS3Path: string;
   videoThumbnailUrl: string;
   videoDuration: string;
-  source: 'local' | 'youtube';
+  source?: 'local' | 'youtube';
   uploadDate: string;
   format: string;
   status: VideoStatus;
