@@ -1,0 +1,16 @@
+{
+  "name": "auth-lambdas",
+  "version": "1.0.0",
+  "description": "Authentication Lambda functions for Cognito triggers",
+  "main": "pre-signup.js",
+  "scripts": {
+    "build": "tsc"
+  },
+  "dependencies": {
+    "aws-sdk": "^2.1372.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.4.2",
+    "typescript": "^5.1.6"
+  }
+}

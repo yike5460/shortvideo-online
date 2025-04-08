@@ -1296,7 +1296,17 @@ export class VideoSearchStack extends cdk.Stack {
     userPoolClient: cognito.UserPoolClient; 
     identityPool: cognito.CfnIdentityPool;
   } {
-    // Create user pool with email verification
+    // Create the pre-signup Lambda function to validate email domains
+    const preSignUpFunction = new nodejslambda.NodejsFunction(this, 'PreSignUpTrigger', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: 'handler',
+      entry: 'src/lambdas/auth/pre-signup.ts', 
+      environment: {
+        ALLOWED_DOMAIN: 'amazon.com',
+      },
+    });
+
+    // Create user pool with email verification and domain restriction
     const userPool = new cognito.UserPool(this, 'VideoSearchUserPool', {
       userPoolName: `video-search-user-pool-${stage}`,
       selfSignUpEnabled: true,
@@ -1316,6 +1326,9 @@ export class VideoSearchStack extends cdk.Stack {
       },
       accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
       removalPolicy: cdk.RemovalPolicy.DESTROY, // For development
+      lambdaTriggers: {
+        preSignUp: preSignUpFunction,
+      },
     });
     
     // Determine the appropriate callback and logout URLs based on the deployment stage
