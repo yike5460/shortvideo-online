@@ -192,9 +192,10 @@ async function downloadVideoFromS3(s3Path: string): Promise<string> {
     throw new Error('No S3 bucket specified. Set VIDEO_BUCKET environment variable or use full s3:// path');
   }
   
-  // Create a temporary file
+  // Create a temporary file with a more unique name using timestamp and random string
   const tempDir = os.tmpdir();
-  const tempPath = path.join(tempDir, `temp_${Date.now()}.mp4`);
+  const randomString = Math.random().toString(36).substring(2, 8);
+  const tempPath = path.join(tempDir, `temp_${Date.now()}_${randomString}.mp4`);
   
   try {
     const command = new GetObjectCommand({
