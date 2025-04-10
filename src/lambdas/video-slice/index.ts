@@ -1268,11 +1268,16 @@ async function updateVideoLabels(videoIndex: string, videoId: string, labels: an
         categories: label.Label.Categories || [],
         aliases: label.Label.Aliases || [],
         parents: label.Label.Parents || [],
-        // Confidence is a float, convert to number
-        confidence: label.Label.Confidence,
+        // Confidence is a float, convert to integer for OpenSearch
+        confidence: Math.round(label.Label.Confidence),
         instances: label.Label.Instances?.map((instance: any) => ({
-          boundingBox: instance.BoundingBox,
-          confidence: instance.Confidence
+          boundingBox: {
+            Left: Math.round(instance.BoundingBox.Left || 0),
+            Top: Math.round(instance.BoundingBox.Top || 0),
+            Width: Math.round(instance.BoundingBox.Width || 0),
+            Height: Math.round(instance.BoundingBox.Height || 0)
+          },
+          confidence: Math.round(instance.Confidence)
         })) || []
       });
     });
