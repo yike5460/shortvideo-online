@@ -147,11 +147,13 @@ export default function SearchSidebar({
           className="w-full border border-gray-300 rounded-lg p-2 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
         >
           <option value="">Select an index</option>
-          {indexes.map((index) => (
-            <option key={index.id} value={index.id}>
-              {index.name}
-            </option>
-          ))}
+          {[...indexes]
+            .sort((a, b) => a.name.localeCompare(b.name))
+            .map((index) => (
+              <option key={index.id} value={index.id}>
+                {index.name}
+              </option>
+            ))}
         </select>
       </div>
 

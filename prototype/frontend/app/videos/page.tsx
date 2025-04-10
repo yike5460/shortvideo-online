@@ -801,11 +801,13 @@ export default function VideosPage() {
             >
               <option value="">All Indexes ({totalVideos})</option>
               {indexes.length > 0 ? (
-                indexes.map((index) => (
-                  <option key={index.id} value={index.id}>
-                    {index.name} ({index.videoCount} videos)
-                  </option>
-                ))
+                [...indexes]
+                  .sort((a, b) => a.name.localeCompare(b.name))
+                  .map((index) => (
+                    <option key={index.id} value={index.id}>
+                      {index.name} ({index.videoCount} videos)
+                    </option>
+                  ))
               ) : (
                 <option value="" disabled>
                   {isLoadingIndexes ? 'Loading indexes...' : 'No indexes available'}

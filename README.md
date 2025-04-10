@@ -302,6 +302,36 @@ The OpenSearch schema supports:
    - Combined search across visual, audio, and text modalities using respective embeddings
    - Weighted multi-modal search using combined embeddings from `video_metadata.semantic_vectors`
 
+Query Process:
+```mermaid
+flowchart LR
+    subgraph EmbeddingModels["Embedding Models"]
+        direction TB
+        VE[Video Embedding Model]
+        BCE[BCE]
+        Whisper[Whisper]
+    end
+
+    QT[Query Text] --> VE --> AOSS[Query AOSS]
+    QT --> BCE --> AOSS
+
+    AQ[Audio Query] --> Whisper --> QT
+```
+
+Indexing Process:
+```mermaid
+flowchart LR
+    subgraph EmbeddingModels["Embedding Models"]
+        direction TB
+        VE[Video Embedding Model]
+        BCE[BCE]
+        Whisper[Whisper]
+    end
+
+    VA[Video/Audio] --> VE --> AOSS1[AOSS Video Embedding]
+    VA --> Whisper --> BCE --> AOSS2[AOSS Audio Embedding]
+```
+
 Best practice for the selection between `segment_visual.segment_visual_embedding` and `video_metadata.semantic_vectors.visual_embedding` depends on your search requirements:
 - Start with `video_metadata.semantic_vectors.visual_embedding` to quickly filter relevant videos
 - Then use `segment_visual.segment_visual_embedding` to find specific matching segments within those videos
