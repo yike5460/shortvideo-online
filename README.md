@@ -305,17 +305,28 @@ The OpenSearch schema supports:
 Query Process:
 ```mermaid
 flowchart LR
-    subgraph EmbeddingModels["Embedding Models"]
+    subgraph EmbeddingModels["Embedding Models (Own Model)"]
         direction TB
-        VE[Video Embedding Model]
-        BCE[BCE]
-        Whisper[Whisper]
+        VE[Video Embedding Model] --> |Output: Video Embedding| AOSS
+        BCE[BCE] --> |Output: Text Embedding| AOSS
     end
 
-    QT[Query Text] --> VE --> AOSS[Query AOSS]
-    QT --> BCE --> AOSS
+    Whisper["Whisper<br>(External Vendor)"]
 
-    AQ[Audio Query] --> Whisper --> QT
+    %% Text Query Paths
+    TQ[Text Query] --> |Video Space| VE
+    TQ --> |Audio Space| BCE
+
+    %% Audio Query Paths
+    AQ[Audio Query] --> |Input: Audio| Whisper --> |Video Space| BCE
+    Whisper --> |Audio Space| VE
+
+    %% Image Query Paths
+    IQ[Image Query] --> |Input: Image| VE
+
+    %% Video Query Paths
+    VQ[Video Query] --> |Video Space| VE
+    VQ --> |Audio Space| BCE
 ```
 
 Indexing Process:
