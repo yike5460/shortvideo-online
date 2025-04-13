@@ -931,17 +931,30 @@ async function processSegmentDetection(
       // Check if the embedding service is running
       try {
         await ensureEmbeddingServiceRunning();
-        console.log('Embedding service is running, and generating embedding for the segment ', segmentVideoS3Path[0], ' in bucket ', bucketName);
-        // Generate embedding for the segment
-        const embedding = await generateEmbedding(bucketName, segmentVideoS3Path[0]);
-        if (embedding) {
-          console.log('Successfully generated embedding for the segment ', segmentVideoS3Path[0], ' in bucket ', bucketName);
-          slicedSegment.segment_visual.segment_visual_embedding = embedding;
+        console.log('Embedding service is running, and generating embeddings for the segment ', segmentVideoS3Path[0], ' in bucket ', bucketName);
+        
+        // Generate embeddings for the segment
+        const embeddings = await generateEmbedding(bucketName, segmentVideoS3Path[0]);
+
+        if (embeddings.vision_embedding) {
+          console.log(`Successfully generated vision embedding for segment ${segmentNumber}, length: ${embeddings.vision_embedding.length}`);
+          slicedSegment.segment_visual.segment_visual_embedding = embeddings.vision_embedding;
         } else {
-          console.error('Failed to generate embedding for the segment ', segmentVideoS3Path[0], ' in bucket ', bucketName);
+          console.warn(`No vision embedding generated for segment ${segmentNumber}`);
+        }
+        
+        // Add audio embedding if available
+        if (embeddings.audio_embedding) {
+          console.log(`Successfully generated audio embedding for segment ${segmentNumber}, length: ${embeddings.audio_embedding.length}`);
+          // Add segment_audio property to the segment
+          slicedSegment.segment_audio = {
+            segment_audio_embedding: embeddings.audio_embedding
+          };
+        } else {
+          console.warn(`No audio embedding generated for segment ${segmentNumber}`);
         }
       } catch (error) {
-        console.error('Error ensuring embedding service is running:', error);
+        console.error('Error generating embeddings:', error);
       }
 
       return slicedSegment;
@@ -981,9 +994,22 @@ async function ensureEmbeddingServiceRunning(): Promise<void> {
   }
 }
 
-// Function to generate embedding using the embedding service
-async function generateEmbedding(bucket: string, key: string): Promise<number[]> {
+/**
+ * Function to generate embeddings using the embedding service
+ * 
+ * Returns both vision and audio embeddings for a video
+ * 
+ * @param bucket S3 bucket containing the video
+ * @param key S3 key of the video
+ * @returns Object containing vision and audio embeddings
+ */
+async function generateEmbedding(bucket: string, key: string): Promise<{
+  vision_embedding: number[] | null;
+  audio_embedding: number[] | null;
+}> {
   console.log('Generating embedding for video in bucket ', bucket, ' and key ', key);
+  const defaultResponse = { vision_embedding: null, audio_embedding: null };
+
   // First try the external embedding endpoint if available
   if (EXTERNAL_EMBEDDING_ENDPOINT) {
     try {
@@ -993,33 +1019,53 @@ async function generateEmbedding(bucket: string, key: string): Promise<number[]>
         headers: {
           'Content-Type': 'application/json',
         },
-        // Follow the format of the internal embedding service, using schema below:
-        // ```json
-        // {
-        //   "bucket": "your-s3-bucket",
-        //   "key": "path/to/video.mp4"
-        // }
-        // ```
         body: JSON.stringify({ bucket, key }),
       });
 
-      // The response is a json object with the embedding field:
-      // ```json
-      // {
-      //   "embedding": [...]
-      // }
-      // ```
-      const data = await response.json() as { embedding: number[] };
-      console.log(`Successfully generated embedding using external service for ${key}`);
-      return data.embedding;
+      // The new response format includes both vision_embedding and audio_embedding
+      const rawData = await response.json();
+      console.log(`Raw response from external embedding service:`, rawData);
+      // Type check and validate the response data
+      if (rawData && typeof rawData === 'object') {
+        // Compatible with the legacy emebdding format
+        if ('embedding' in rawData && Array.isArray(rawData.embedding)) {
+          const embedding = rawData.embedding as number[];
+          console.log(`Successfully generated legacy embedding using external service for ${key}`);
+          console.log(`Legacy embedding length: ${embedding.length || 0}`);
+          
+          return {
+            vision_embedding: embedding,
+            audio_embedding: null
+          };
+        }
+
+        const visionEmbedding = 'vision_embedding' in rawData && 
+          Array.isArray(rawData.vision_embedding) ? 
+          rawData.vision_embedding as number[] : null;
+          
+        const audioEmbedding = 'audio_embedding' in rawData && 
+          Array.isArray(rawData.audio_embedding) ? 
+          rawData.audio_embedding as number[] : null;
+
+        console.log(`Successfully generated embeddings using external service for ${key}`);
+        console.log(`Vision embedding length: ${visionEmbedding?.length || 0}, Audio embedding length: ${audioEmbedding?.length || 0}`);
+
+        return {
+          vision_embedding: visionEmbedding,
+          audio_embedding: audioEmbedding
+        };
+      }
+      
+      console.warn(`Unexpected response format from external service for ${key}`);
+      return defaultResponse;
     } catch (error) {
       console.error('Error calling external embedding service:', error);
       // Fall back to internal service
-      return [];
+      return defaultResponse;
     }
   }
   
-  console.log('No external embedding service available, falling back to internal embedding service');
+  console.log('No external embedding service available or it failed, falling back to internal embedding service');
   // Fall back to internal embedding service
   try {
     const response = await fetch(`${EMBEDDING_SERVICE_URL}/embed-video`, {
@@ -1030,18 +1076,48 @@ async function generateEmbedding(bucket: string, key: string): Promise<number[]>
       body: JSON.stringify({ bucket, key }),
     });
 
-    // The response is a json object with the embedding field:
-    // ```json
-    // {
-    //   "embedding": [...]
-    // }
-    // ```
-    const data = await response.json() as { embedding: number[] };
-    console.log(`Successfully generated embedding using internal service for ${key}`);
-    return data.embedding;
+    // Check if the new embedding format is supported by the internal service
+    const rawData = await response.json();
+    if (!rawData || typeof rawData !== 'object') {
+      console.error('Invalid response from internal embedding service');
+      return defaultResponse;
+    }
+    
+    // Handle new dual embedding format
+    if ('vision_embedding' in rawData || 'audio_embedding' in rawData) {
+      const visionEmbedding = 'vision_embedding' in rawData && 
+        Array.isArray(rawData.vision_embedding) ? 
+        rawData.vision_embedding as number[] : null;
+        
+      const audioEmbedding = 'audio_embedding' in rawData && 
+        Array.isArray(rawData.audio_embedding) ? 
+        rawData.audio_embedding as number[] : null;
+      
+      console.log(`Successfully generated embeddings using internal service for ${key}`);
+      console.log(`Vision embedding length: ${visionEmbedding?.length || 0}, Audio embedding length: ${audioEmbedding?.length || 0}`);
+      
+      return {
+        vision_embedding: visionEmbedding,
+        audio_embedding: audioEmbedding
+      };
+    } 
+    // Handle legacy format with single embedding (backward compatibility)
+    else if ('embedding' in rawData && Array.isArray(rawData.embedding)) {
+      const embedding = rawData.embedding as number[];
+      console.log(`Successfully generated legacy embedding using internal service for ${key}`);
+      console.log(`Legacy embedding length: ${embedding.length || 0}`);
+      
+      return {
+        vision_embedding: embedding,
+        audio_embedding: null
+      };
+    }
+    
+    console.error('Unexpected response format from embedding service');
+    return defaultResponse;
   } catch (error) {
     console.error('Error calling internal embedding service:', error);
-    return [];
+    return defaultResponse;
   }
 }
 
@@ -1170,14 +1246,27 @@ async function updateVideoSegments(videoIndex: string, videoId: string, segments
               ctx._source.updated_at = params.updated_at;
             `,
             params: {
-              newSegments: segments.map(segment => ({
-                ...segment,
-                segment_id: segment.segment_id || `unassigned_segment_id`,
-                segment_visual: {
-                  ...segment.segment_visual,
-                  segment_visual_embedding: segment.segment_visual?.segment_visual_embedding || []
+              newSegments: segments.map(segment => {
+                // Create a clean segment object with all the required fields
+                const formattedSegment = {
+                  ...segment,
+                  segment_id: segment.segment_id || `unassigned_segment_id`,
+                  // Ensure the visual embedding is included
+                  segment_visual: {
+                    ...segment.segment_visual,
+                    segment_visual_embedding: segment.segment_visual?.segment_visual_embedding || []
+                  }
+                };
+                
+                // If there's an audio embedding, include it in the segment
+                if (segment.segment_audio && Array.isArray(segment.segment_audio.segment_audio_embedding)) {
+                  formattedSegment.segment_audio = {
+                    segment_audio_embedding: segment.segment_audio.segment_audio_embedding
+                  };
                 }
-              })),
+                
+                return formattedSegment;
+              }),
               video_status: 'ready_for_shots',
               updated_at: new Date().toISOString(),
             }
