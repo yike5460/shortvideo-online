@@ -1120,9 +1120,11 @@ export class VideoSearchStack extends cdk.Stack {
   ) {
     // S3 permissions
     this.videoBucket.grantReadWrite(lambdaFunctions.videoUploadFunction.videoUploadHandler);
+    this.videoBucket.grantReadWrite(lambdaFunctions.videoUploadFunction.youtubeUploadHandler);
     this.videoBucket.grantRead(lambdaFunctions.videoSearchFunction);
     this.videoBucket.grantReadWrite(lambdaFunctions.videoSliceFunction);
     this.videoBucket.grantReadWrite(lambdaFunctions.indexCrudFunction);
+
     // Grant permissions to embedding services to access S3
     this.videoBucket.grantRead(videoEmbeddingService.taskDefinition.taskRole);
  

@@ -422,6 +422,7 @@ async function extractAndUploadThumbnail(videoS3Path: string, thumbnailS3Path: s
     let duration = 0;
     try {
       // Use ffprobe to get video duration
+      const ffprobePath = '/opt/bin/ffprobe';
       const ffprobeCommand = [
         '-v', 'error',
         '-show_entries', 'format=duration',
@@ -429,9 +430,18 @@ async function extractAndUploadThumbnail(videoS3Path: string, thumbnailS3Path: s
         tempVideoPath
       ];
       
-      console.log(`Running ffprobe command: ffprobe ${ffprobeCommand.join(' ')}`);
+      console.log(`Running ffprobe command: ${ffprobePath} ${ffprobeCommand.join(' ')}`);
       
-      const ffprobeProcess = spawn('ffprobe', ffprobeCommand);
+      // Check if ffprobe exists and is executable
+      try {
+        await fs.access(ffprobePath, fs.constants.X_OK);
+        console.log(`Found executable ffprobe binary at ${ffprobePath}`);
+      } catch (error) {
+        console.error(`Error accessing ffprobe binary: ${error}`);
+        throw new Error('ffprobe binary not found or not executable in Lambda layer');
+      }
+      
+      const ffprobeProcess = spawn(ffprobePath, ffprobeCommand);
       let ffprobeOutput = '';
       
       ffprobeProcess.stdout.on('data', (data) => {
@@ -555,6 +565,30 @@ async function downloadFromYoutube(url: string, videoId: string, s3Key: string, 
   
   const tempDir = '/tmp';
   const tempPath = `${tempDir}/${videoId}`;
+  const cookiesSourcePath = '/opt/bin/yt-dlp-cookies.txt';
+  const cookiesTempPath = `${tempDir}/yt-dlp-cookies.txt`;
+  
+  // Set LD_LIBRARY_PATH to include our custom lib directory
+  process.env.LD_LIBRARY_PATH = '/opt/lib:' + (process.env.LD_LIBRARY_PATH || '');
+  
+  // Check if libz.so.1 exists in our custom path
+  try {
+    await fs.access('/opt/lib/libz.so.1');
+    console.log('[YouTube Download] Found libz.so.1 in custom path');
+  } catch (error) {
+    console.error('[YouTube Download] libz.so.1 not found in /opt/lib. Please ensure it is included in the Lambda layer.');
+    throw new Error('Required library libz.so.1 not found in Lambda layer');
+  }
+
+  // Copy cookies file to temp directory
+  try {
+    const cookiesContent = await fs.readFile(cookiesSourcePath, 'utf8');
+    await fs.writeFile(cookiesTempPath, cookiesContent);
+    console.log('[YouTube Download] Successfully copied cookies file to temp directory');
+  } catch (error) {
+    console.error('[YouTube Download] Failed to copy cookies file:', error);
+    throw new Error('Failed to copy cookies file to temp directory');
+  }
   
   // Check temp directory existence and permissions
   try {
@@ -575,8 +609,6 @@ async function downloadFromYoutube(url: string, videoId: string, s3Key: string, 
     console.log(`[YouTube Download] Found executable yt-dlp binary at ${ytdlpPath}`);
   } catch (error: any) {
     console.error(`[YouTube Download] Error accessing yt-dlp binary: ${error.message}`);
-    // If we can't access it, the spawn call below will likely fail, which is okay.
-    // No need to reject here, let the spawn error handle it.
   }
   
   return new Promise<void>((resolve, reject) => {
@@ -585,7 +617,7 @@ async function downloadFromYoutube(url: string, videoId: string, s3Key: string, 
       '--verbose',              // Added for more detailed logs
       '--format', 'best',       // Get best quality
       '--no-warnings',          // Suppress warnings
-      '--no-check-certificate', // Skip certificate validation (singular, not plural)
+      '--no-check-certificate', // Skip certificate validation
       '--prefer-insecure',      // Use HTTP instead of HTTPS if available
       '--ignore-errors',        // Skip unavailable videos in a playlist
       '--force-ipv4',           // Force IPv4 to avoid IPv6 issues
@@ -593,8 +625,14 @@ async function downloadFromYoutube(url: string, videoId: string, s3Key: string, 
       '--output', tempPath,     // Output path
       '--socket-timeout', '30', // Increase socket timeout
       '--retries', '10',        // Number of retries for HTTP requests
+      '--cookies', cookiesTempPath, // Use cookies file from temp directory
       url
-    ]);
+    ], {
+      env: {
+        ...process.env,
+        LD_LIBRARY_PATH: '/opt/lib:' + (process.env.LD_LIBRARY_PATH || '')
+      }
+    });
 
     let stdoutData = '';
     ytdl.stdout.on('data', (data) => {
