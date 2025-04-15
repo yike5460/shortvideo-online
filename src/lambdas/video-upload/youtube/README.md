@@ -2,6 +2,15 @@
 
 This Lambda function handles downloading videos from YouTube using yt-dlp and uploading them to Amazon S3.
 
+## Recent Changes
+
+### Chrome Dependencies for Headless Browser
+
+- Added required system libraries (libnss3.so and others) to the Lambda layer
+- Fixed "Failed to launch browser process" errors
+- Implemented fallback mechanism when cookie extraction fails
+- Created minimal default cookies file for non-age-restricted videos
+
 ## Key Components
 
 ### 1. Automated Cookie Management

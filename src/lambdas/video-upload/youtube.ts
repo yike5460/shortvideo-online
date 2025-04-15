@@ -587,7 +587,23 @@ async function downloadFromYoutube(url: string, videoId: string, s3Key: string, 
     console.log(`[YouTube Download] Successfully extracted cookies to ${cookiesTempPath}`);
   } catch (error) {
     console.error('[YouTube Download] Failed to extract cookies:', error);
-    throw new Error('Failed to extract YouTube cookies using headless Chrome');
+    
+    // Try to use the fallback cookies file if it exists
+    const fallbackCookiesPath = '/opt/bin/yt-dlp-cookies.txt';
+    try {
+      // Check if fallback cookie file exists
+      await fs.access(fallbackCookiesPath);
+      console.log(`[YouTube Download] Using fallback cookies from ${fallbackCookiesPath}`);
+      
+      // Copy the fallback cookies to temp folder
+      const fallbackContent = await fs.readFile(fallbackCookiesPath, 'utf8');
+      cookiesTempPath = path.join('/tmp', `youtube-fallback-cookies-${Date.now()}.txt`);
+      await fs.writeFile(cookiesTempPath, fallbackContent);
+      console.log(`[YouTube Download] Copied fallback cookies to ${cookiesTempPath}`);
+    } catch (fallbackError) {
+      console.error('[YouTube Download] No fallback cookies available:', fallbackError);
+      throw new Error('Failed to extract YouTube cookies and no fallback available');
+    }
   }
   
   // Check temp directory existence and permissions

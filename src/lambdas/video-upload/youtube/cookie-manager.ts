@@ -35,12 +35,29 @@ export class YouTubeCookieManager {
       
       console.log(`[CookieManager] Launching headless Chrome at path: ${executablePath}`);
       
+      // Set Chrome-specific environment variables to find our libraries
+      process.env.LD_LIBRARY_PATH = '/opt/lib:' + (process.env.LD_LIBRARY_PATH || '');
+      console.log(`[CookieManager] Using LD_LIBRARY_PATH: ${process.env.LD_LIBRARY_PATH}`);
+      
+      // List available libraries to help debug
+      try {
+        const libDir = '/opt/lib';
+        const libs = await fs.readdir(libDir);
+        console.log(`[CookieManager] Available libraries in ${libDir}: ${libs.join(', ')}`);
+      } catch (err) {
+        console.warn(`[CookieManager] Could not list libraries: ${err}`);
+      }
+      
       browser = await chromium.puppeteer.launch({
-        args: chromium.args,
+        args: [...chromium.args, '--no-sandbox', '--disable-setuid-sandbox'],
         defaultViewport: chromium.defaultViewport,
         executablePath,
         headless: chromium.headless,
-        ignoreHTTPSErrors: true
+        ignoreHTTPSErrors: true,
+        env: {
+          ...process.env,
+          LD_LIBRARY_PATH: process.env.LD_LIBRARY_PATH
+        }
       });
       
       console.log('[CookieManager] Browser launched successfully, creating new page');
