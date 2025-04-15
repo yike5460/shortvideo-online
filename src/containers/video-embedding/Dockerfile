@@ -32,9 +32,8 @@ RUN python -c "from huggingface_hub import snapshot_download; snapshot_download(
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Add NVIDIA cuDNN library path to LD_LIBRARY_PATH
-RUN CUDNN_PATH=$(pip show nvidia-cudnn-cu12 | grep Location | cut -d ' ' -f 2)/nvidia/cudnn/lib/ && \
-    echo "export LD_LIBRARY_PATH=\$LD_LIBRARY_PATH:${CUDNN_PATH}" >> /etc/bash.bashrc
+# Add NVIDIA library paths to LD_LIBRARY_PATH
+ENV LD_LIBRARY_PATH=${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}/opt/conda/lib/python3.11/site-packages/nvidia/cudnn/lib/
 
 # Copy application code
 COPY . .
