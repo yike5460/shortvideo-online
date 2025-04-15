@@ -12,6 +12,14 @@ echo "NODEJS_DIR: $NODEJS_DIR"
 rm -rf "$LAYER_DIR/bin"
 mkdir -p "$LAYER_DIR/bin"
 
+# Create a note file in the bin directory about cookie automation
+cat > "$LAYER_DIR/bin/COOKIE_NOTES.txt" << EOL
+The fixed yt-dlp-cookies.txt file is now used as a fallback only.
+Cookie extraction is automated via headless Chrome in the YouTube Lambda function.
+The automated cookies are stored securely in AWS Parameter Store.
+EOL
+
+
 # Download the correct Linux binary for yt-dlp
 echo "Downloading yt-dlp Linux binary..."
 curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux -o "$LAYER_DIR/bin/yt-dlp"
@@ -45,10 +53,38 @@ cat > "$NODEJS_DIR/package.json" << EOL
 {
   "name": "yt-dlp-layer",
   "version": "1.0.0",
-  "description": "Lambda layer containing yt-dlp and FFmpeg binaries",
+  "description": "Lambda layer containing yt-dlp, FFmpeg, and Chrome for cookie automation",
   "author": "Aaron Yi",
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "chrome-aws-lambda": "^10.1.0",
+    "puppeteer-core": "^10.1.0"
+  }
 }
 EOL
 
-echo "Layer has been built successfully with yt-dlp and FFmpeg binaries"
+# Install Node.js dependencies
+echo "Installing Node.js dependencies..."
+cd "$NODEJS_DIR"
+npm install --production
+
+echo "Layer has been built successfully with yt-dlp, FFmpeg, and Chrome dependencies"
+
+# Create a README for the layer
+cat > "$LAYER_DIR/README.md" << EOL
+# YouTube Download Lambda Layer
+
+This layer contains:
+- yt-dlp binary for video downloading
+- FFmpeg and ffprobe for video processing
+- chrome-aws-lambda for cookie automation
+- puppeteer-core for browser automation
+
+## Structure
+- /bin - Contains yt-dlp, ffmpeg, and ffprobe binaries
+- /nodejs - Contains Chrome and Puppeteer dependencies
+
+## Cookie Automation
+Cookies are now automatically extracted using headless Chrome and stored in AWS Parameter Store.
+The yt-dlp-cookies.txt file is kept as a fallback mechanism.
+EOL

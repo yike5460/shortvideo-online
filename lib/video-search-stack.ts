@@ -497,7 +497,16 @@ export class VideoSearchStack extends cdk.Stack {
         TEMP_PATH: '/tmp' // Temp directory for YouTube downloads
       },
       layers: [ytDlpLayer], // Add the yt-dlp layer
-      depsLockFilePath: 'src/lambdas/video-upload/package-lock.json'
+      depsLockFilePath: 'src/lambdas/video-upload/package-lock.json',
+      bundling: {
+        ...commonLambdaProps.bundling,
+        externalModules: [
+          // External modules to exclude from bundling
+          '@aws-sdk/*', // Default AWS SDK modules 
+          'chrome-aws-lambda',
+          'puppeteer-core'
+        ]
+      }
     });
 
     return { videoUploadHandler, youtubeUploadHandler };

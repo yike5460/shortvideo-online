@@ -13,6 +13,7 @@ import * as path from 'path';
 import { Readable } from 'stream';
 import { DynamoDBDocumentClient, PutCommand } from '@aws-sdk/lib-dynamodb';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import { YouTubeCookieManager } from './youtube/cookie-manager';
 
 // Initialize clients
 const s3 = new S3Client({});
@@ -565,8 +566,7 @@ async function downloadFromYoutube(url: string, videoId: string, s3Key: string, 
   
   const tempDir = '/tmp';
   const tempPath = `${tempDir}/${videoId}`;
-  const cookiesSourcePath = '/opt/bin/yt-dlp-cookies.txt';
-  const cookiesTempPath = `${tempDir}/yt-dlp-cookies.txt`;
+  let cookiesTempPath: string;
   
   // Set LD_LIBRARY_PATH to include our custom lib directory
   process.env.LD_LIBRARY_PATH = '/opt/lib:' + (process.env.LD_LIBRARY_PATH || '');
@@ -580,14 +580,14 @@ async function downloadFromYoutube(url: string, videoId: string, s3Key: string, 
     throw new Error('Required library libz.so.1 not found in Lambda layer');
   }
 
-  // Copy cookies file to temp directory
+  // Extract fresh YouTube cookies using the cookie manager
   try {
-    const cookiesContent = await fs.readFile(cookiesSourcePath, 'utf8');
-    await fs.writeFile(cookiesTempPath, cookiesContent);
-    console.log('[YouTube Download] Successfully copied cookies file to temp directory');
+    console.log('[YouTube Download] Extracting fresh YouTube cookies using headless Chrome');
+    cookiesTempPath = await YouTubeCookieManager.extractCookies();
+    console.log(`[YouTube Download] Successfully extracted cookies to ${cookiesTempPath}`);
   } catch (error) {
-    console.error('[YouTube Download] Failed to copy cookies file:', error);
-    throw new Error('Failed to copy cookies file to temp directory');
+    console.error('[YouTube Download] Failed to extract cookies:', error);
+    throw new Error('Failed to extract YouTube cookies using headless Chrome');
   }
   
   // Check temp directory existence and permissions
@@ -699,13 +699,14 @@ async function downloadFromYoutube(url: string, videoId: string, s3Key: string, 
         
         console.log(`[YouTube Download] Successfully uploaded video to S3: ${s3Key}`);
 
-        // Clean up temporary file after successful upload
+        // Clean up temporary files after successful upload
         try {
           await fs.unlink(tempPath);
-          console.log(`[YouTube Download] Cleaned up temporary file: ${tempPath}`);
+          await fs.unlink(cookiesTempPath);
+          console.log(`[YouTube Download] Cleaned up temporary files: ${tempPath} and cookies file`);
         } catch (error) {
           const unlinkError = error instanceof Error ? error : new Error('Unknown error');
-          console.warn(`[YouTube Download] Failed to clean up temporary file: ${unlinkError.message}`);
+          console.warn(`[YouTube Download] Failed to clean up temporary files: ${unlinkError.message}`);
         }
 
         resolve();
