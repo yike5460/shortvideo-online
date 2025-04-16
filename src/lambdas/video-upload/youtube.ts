@@ -571,7 +571,7 @@ async function downloadFromYoutube(url: string, videoId: string, s3Key: string, 
   // Set LD_LIBRARY_PATH to include our custom lib directory
   process.env.LD_LIBRARY_PATH = '/opt/lib:' + (process.env.LD_LIBRARY_PATH || '');
   
-  // Check if libz.so.1 exists in our custom path
+  // Check if libz.so.1 and libnss3.so exists in our custom path
   try {
     await fs.access('/opt/lib/libz.so.1');
     console.log('[YouTube Download] Found libz.so.1 in custom path');
