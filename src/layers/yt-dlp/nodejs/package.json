@@ -1,11 +1,7 @@
 {
-  "name": "yt-dlp-layer",
+  "name": "puppeteer-layer",
   "version": "1.0.0",
-  "description": "Lambda layer containing yt-dlp binary and browser automation tools",
-  "author": "Aaron Yi",
-  "license": "MIT",
   "dependencies": {
-    "chrome-aws-lambda": "^10.1.0",
-    "puppeteer-core": "^10.4.0"
+    "puppeteer-core": "24.6.1"
   }
 }

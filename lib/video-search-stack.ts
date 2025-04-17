@@ -512,10 +512,11 @@ export class VideoSearchStack extends cdk.Stack {
         ...commonLambdaProps.bundling,
         externalModules: [
           // External modules to exclude from bundling
-          '@aws-sdk/*', // Default AWS SDK modules 
+          // '@aws-sdk/*', // Default AWS SDK modules 
           // 'chrome-aws-lambda',
           // 'puppeteer-core',
-          '@sparticuz/chromium'
+          '@sparticuz/chromium',
+          'puppeteer-core'
         ]
       }
     });

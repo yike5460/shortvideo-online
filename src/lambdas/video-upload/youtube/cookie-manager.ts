@@ -1,7 +1,6 @@
 // Using require instead of import for modules without type definitions
-// const chromium = require('chrome-aws-lambda');
 const chromium = require('@sparticuz/chromium');
-// const puppeteer = require('puppeteer-core');
+const puppeteer = require('puppeteer-core');
 import * as fs from 'fs/promises';
 import * as path from 'path';
 
@@ -31,34 +30,36 @@ export class YouTubeCookieManager {
     
     let browser: any = null;
     try {
-      // Set up browser options for Lambda environment
-      const executablePath = await chromium.executablePath;
+      // Following the @sparticuz/chromium usage pattern
+      const executablePath = await chromium.executablePath();
       
-      console.log(`[CookieManager] Launching headless Chrome at path: ${executablePath}`);
+      console.log(`[CookieManager] Using Chrome at path: ${executablePath}`);
       
-      // Set Chrome-specific environment variables to find our libraries
-      process.env.LD_LIBRARY_PATH = '/opt/lib:' + (process.env.LD_LIBRARY_PATH || '');
-      console.log(`[CookieManager] Using LD_LIBRARY_PATH: ${process.env.LD_LIBRARY_PATH}`);
+      // Print environment for debugging
+      console.log(`[CookieManager] Node.js version: ${process.version}`);
+      console.log(`[CookieManager] LD_LIBRARY_PATH: ${process.env.LD_LIBRARY_PATH}`);
+      console.log(`[CookieManager] CHROME_PATH: ${process.env.CHROME_PATH}`);
       
-      // List available libraries to help debug
+      // Try to list the lib directory to verify libraries are available
       try {
         const libDir = '/opt/lib';
-        const libs = await fs.readdir(libDir);
-        console.log(`[CookieManager] Available libraries in ${libDir}: ${libs.join(', ')}`);
+        if (await fs.access(libDir).then(() => true).catch(() => false)) {
+          const libs = await fs.readdir(libDir);
+          console.log(`[CookieManager] Libraries in ${libDir}: ${libs.join(', ')}`);
+        } else {
+          console.log(`[CookieManager] Directory ${libDir} not accessible`);
+        }
       } catch (err) {
         console.warn(`[CookieManager] Could not list libraries: ${err}`);
       }
       
-      browser = await chromium.puppeteer.launch({
-        args: [...chromium.args, '--no-sandbox', '--disable-setuid-sandbox'],
+      // Launch browser using puppeteer-core with chromium settings
+      browser = await puppeteer.launch({
+        args: chromium.args,
         defaultViewport: chromium.defaultViewport,
-        executablePath: process.env.CHROME_PATH || await chromium.executablePath,
+        executablePath: executablePath,
         headless: chromium.headless,
         ignoreHTTPSErrors: true,
-        env: {
-          ...process.env,
-          LD_LIBRARY_PATH: process.env.LD_LIBRARY_PATH
-        }
       });
       
       console.log('[CookieManager] Browser launched successfully, creating new page');
@@ -66,9 +67,16 @@ export class YouTubeCookieManager {
       // Create a new page
       const page = await browser.newPage();
       
+      // Set a reasonable timeout for operations
+      page.setDefaultNavigationTimeout(30000);
+      page.setDefaultTimeout(30000);
+      
       // Visit YouTube to get cookies
       console.log('[CookieManager] Navigating to YouTube');
-      await page.goto('https://www.youtube.com', { waitUntil: 'networkidle2' });
+      await page.goto('https://www.youtube.com', { 
+        waitUntil: 'networkidle2',
+        timeout: 30000
+      });
       
       // Wait a bit for cookies to be fully set
       await page.waitForTimeout(2000);
@@ -76,6 +84,8 @@ export class YouTubeCookieManager {
       // Extract cookies from the page
       console.log('[CookieManager] Extracting cookies');
       const cookies = await page.cookies();
+      
+      console.log(`[CookieManager] Extracted ${cookies.length} cookies`);
       
       // Convert cookies to the format required by yt-dlp
       const cookieStr = this.formatCookiesForYtDlp(cookies);
@@ -86,14 +96,33 @@ export class YouTubeCookieManager {
       console.log(`[CookieManager] Cookies written to ${tempPath}`);
       
       return tempPath;
-    } catch (error) {
+    } catch (error: any) {
       console.error('[CookieManager] Error extracting YouTube cookies:', error);
+      
+      // More specific error handling
+      if (error.message && error.message.includes('Failed to launch')) {
+        console.error('[CookieManager] Chrome launch failed - check if chrome binary and libraries exist.');
+        
+        // Check if the Chrome executable exists
+        try {
+          const chromePath = process.env.CHROME_PATH || '/opt/chromium/chrome';
+          await fs.access(chromePath);
+          console.log(`[CookieManager] Chrome binary exists at ${chromePath}`);
+        } catch (accessErr) {
+          console.error(`[CookieManager] Chrome binary not found: ${accessErr}`);
+        }
+      }
+      
       throw error;
     } finally {
       // Clean up the browser
       if (browser) {
         console.log('[CookieManager] Closing browser');
-        await browser.close();
+        try {
+          await browser.close();
+        } catch (closeErr) {
+          console.warn('[CookieManager] Error closing browser:', closeErr);
+        }
       }
     }
   }
@@ -116,7 +145,7 @@ export class YouTubeCookieManager {
         includeSubdomains: 'TRUE',
         path: cookie.path,
         secure: cookie.secure ? 'TRUE' : 'FALSE',
-        expiration: Math.floor(cookie.expires),
+        expiration: Math.floor(cookie.expires) || Math.floor(Date.now() / 1000) + 86400, // Default to 24h if no expiry
         name: cookie.name,
         value: cookie.value
       };
