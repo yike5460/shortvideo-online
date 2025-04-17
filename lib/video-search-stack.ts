@@ -494,17 +494,28 @@ export class VideoSearchStack extends cdk.Stack {
       timeout: cdk.Duration.minutes(15), // Longer timeout for YouTube downloads
       environment: {
         ...commonLambdaProps.environment,
-        TEMP_PATH: '/tmp' // Temp directory for YouTube downloads
+        TEMP_PATH: '/tmp',
+        // Add environment variable to tell Puppeteer where to find Chrome
+        CHROME_PATH: '/opt/chromium/chrome',
+        // Make sure Chrome can find the required shared libraries
+        LD_LIBRARY_PATH: '/opt/lib:/opt/lib64:/var/task/lib:/var/task/lib64:/var/runtime/lib:/var/runtime/lib64'
       },
-      layers: [ytDlpLayer], // Add the yt-dlp layer
+      // Add a layer with the required shared libraries
+      layers: [
+        ytDlpLayer,
+        // Use public ARN for chrome-aws-lambda layer (make sure to use the correct region and version)
+        lambda.LayerVersion.fromLayerVersionArn(this, 'ChromeAwsLambdaLayer', 
+          `arn:aws:lambda:${this.region}:764866452798:layer:chrome-aws-lambda:50`) // Check for latest version
+      ],
       depsLockFilePath: 'src/lambdas/video-upload/package-lock.json',
       bundling: {
         ...commonLambdaProps.bundling,
         externalModules: [
           // External modules to exclude from bundling
           '@aws-sdk/*', // Default AWS SDK modules 
-          'chrome-aws-lambda',
-          'puppeteer-core'
+          // 'chrome-aws-lambda',
+          // 'puppeteer-core',
+          '@sparticuz/chromium'
         ]
       }
     });

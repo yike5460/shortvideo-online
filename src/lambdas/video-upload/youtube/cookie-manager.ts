@@ -1,6 +1,7 @@
 // Using require instead of import for modules without type definitions
-const chromium = require('chrome-aws-lambda');
-const puppeteer = require('puppeteer-core');
+// const chromium = require('chrome-aws-lambda');
+const chromium = require('@sparticuz/chromium');
+// const puppeteer = require('puppeteer-core');
 import * as fs from 'fs/promises';
 import * as path from 'path';
 
@@ -51,7 +52,7 @@ export class YouTubeCookieManager {
       browser = await chromium.puppeteer.launch({
         args: [...chromium.args, '--no-sandbox', '--disable-setuid-sandbox'],
         defaultViewport: chromium.defaultViewport,
-        executablePath,
+        executablePath: process.env.CHROME_PATH || await chromium.executablePath,
         headless: chromium.headless,
         ignoreHTTPSErrors: true,
         env: {

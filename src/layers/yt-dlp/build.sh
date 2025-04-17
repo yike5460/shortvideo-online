@@ -74,8 +74,8 @@ mkdir -p chrome-deps
 cd chrome-deps
 
 # Download required .deb packages for Chrome dependencies
-wget http://ftp.de.debian.org/debian/pool/main/n/nss/libnss3_3.87.1-1+deb12u1_amd64.deb
-# wget http://archive.ubuntu.com/ubuntu/pool/main/n/nspr/libnspr4_4.25-1_amd64.deb
+wget http://archive.ubuntu.com/ubuntu/pool/main/n/nss/libnss3_3.108-1ubuntu1_amd64.deb
+wget http://archive.ubuntu.com/ubuntu/pool/main/n/nspr/libnspr4_4.35-0ubuntu0.20.04.1_amd64.deb
 # wget http://archive.ubuntu.com/ubuntu/pool/main/a/atk1.0/libatk1.0-0_2.35.1-1ubuntu2_amd64.deb
 # wget http://archive.ubuntu.com/ubuntu/pool/main/a/at-spi2-atk/libatk-bridge2.0-0_2.34.2-0ubuntu2~20.04.1_amd64.deb
 # wget http://archive.ubuntu.com/ubuntu/pool/main/c/cups/libcups2_2.3.1-9ubuntu1.1_amd64.deb
@@ -95,7 +95,7 @@ mkdir -p ./extract
 for deb in *.deb; do
   echo "Extracting $deb"
   # Extract the data.tar.xz or data.tar.gz from the .deb file
-  ar -x "$deb" data.tar.*
+  ar -x "$deb"
   # Extract the data archive to our extract directory
   if [ -f data.tar.xz ]; then
     tar -xf data.tar.xz -C ./extract
