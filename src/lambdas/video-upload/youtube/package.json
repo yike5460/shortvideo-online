@@ -10,6 +10,7 @@
     "@opensearch-project/opensearch": "^2.0.0",
     "@sparticuz/chromium": "133.0.0",
     "puppeteer-core": "24.6.1",
+    "lambda-multipart-parser": "^1.0.1",
     "uuid": "^9.0.0"
   },
   "devDependencies": {

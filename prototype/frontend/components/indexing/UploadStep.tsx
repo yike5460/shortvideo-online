@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import { useDropzone } from 'react-dropzone'
 import { CloudArrowUpIcon, XMarkIcon, InformationCircleIcon } from '@heroicons/react/24/outline'
 import { cn } from '@/lib/utils'
@@ -42,6 +42,10 @@ export default function UploadStep({
   const [uploadProgress, setUploadProgress] = useState<Record<string, UploadProgress>>({})
   const [youtubeUploadProgress, setYoutubeUploadProgress] = useState<UploadProgress | null>(null)
   const [isUploading, setIsUploading] = useState(false)
+  const [cookieFile, setCookieFile] = useState<File | null>(null)
+  const [cookieFileName, setCookieFileName] = useState<string>('')
+  const [cookieUploadProgress, setCookieUploadProgress] = useState<UploadProgress | null>(null)
+  const cookieInputRef = useRef<HTMLInputElement>(null)
   const router = useRouter()
 
   const validateFile = (file: File) => {
@@ -180,49 +184,97 @@ export default function UploadStep({
   }
 
   const uploadYouTubeVideo = async (youtubeUrl: string): Promise<string> => {
+    if (!cookieFile) {
+      setError('A YouTube cookie file (.txt) is required for YouTube downloads.');
+      throw new Error('Cookie file required');
+    }
     try {
-      // Start with uploading status at 0%
       setYoutubeUploadProgress({
         progress: 0,
         status: 'uploading'
       })
 
       console.log('Uploading YouTube video:', youtubeUrl)
-      const response = await axios.post(`${API_ENDPOINT}/videos/youtube`, {
-        videoUrl: youtubeUrl,
-        metadata: {
-          title: '',
-          description: '',
-          tags: []
-        },
-        // Include the index information for YouTube uploads
-        indexId: indexId
-      }, {
-        headers: {
-          'Content-Type': 'application/json'
+      // Always use multipart/form-data for YouTube upload
+      const formData = new FormData()
+      formData.append('videoUrl', youtubeUrl)
+      formData.append('indexId', indexId)
+      formData.append('cookieFile', cookieFile)
+      formData.append('metadata', JSON.stringify({ title: '', description: '', tags: [] }))
+      const response = await axios.post(`${API_ENDPOINT}/videos/youtube`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        onUploadProgress: (progressEvent) => {
+          const progress = progressEvent.loaded / (progressEvent.total || 1) * 100
+          setYoutubeUploadProgress({ progress, status: 'uploading' })
         }
       })
-
-      console.log('YouTube upload response:', response.data)
-      
-      // Update progress to 100% when complete
       setYoutubeUploadProgress({
         progress: 100,
         status: 'completed'
       })
-
       return response.data.videoId
     } catch (err) {
       console.error('YouTube upload error:', err)
-      
-      // Update progress to show error
       setYoutubeUploadProgress({
         progress: 0,
         status: 'error',
         error: err instanceof Error ? err.message : 'YouTube upload failed'
       })
-      
       throw err
+    }
+  }
+
+  // Cookie file validation
+  const validateCookieFile = (file: File) => {
+    if (!file.name.endsWith('.txt')) {
+      throw new Error('Cookie file must be a .txt file (Netscape format)')
+    }
+    if (file.size > 1024 * 1024) {
+      throw new Error('Cookie file must be less than 1MB')
+    }
+  }
+
+  const handleCookieFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    try {
+      validateCookieFile(file)
+      setCookieFile(file)
+      setCookieFileName(file.name)
+      setError('')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Invalid cookie file')
+      setCookieFile(null)
+      setCookieFileName('')
+    }
+  }
+
+  const removeCookieFile = () => {
+    setCookieFile(null)
+    setCookieFileName('')
+    setCookieUploadProgress(null)
+    if (cookieInputRef.current) cookieInputRef.current.value = ''
+  }
+
+  const uploadCookieFile = async () => {
+    if (!cookieFile) return
+    setCookieUploadProgress({ progress: 0, status: 'uploading' })
+    try {
+      const formData = new FormData()
+      formData.append('cookieFile', cookieFile)
+      formData.append('indexId', indexId)
+      const response = await axios.post(`${API_ENDPOINT}/videos/youtube/cookie-upload`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        onUploadProgress: (progressEvent) => {
+          const progress = progressEvent.loaded / (progressEvent.total || 1) * 100
+          setCookieUploadProgress({ progress, status: 'uploading' })
+        }
+      })
+      setCookieUploadProgress({ progress: 100, status: 'completed' })
+      setError('')
+    } catch (err) {
+      setCookieUploadProgress({ progress: 0, status: 'error', error: err instanceof Error ? err.message : 'Cookie upload failed' })
+      setError('Failed to upload cookie file. Please try again.')
     }
   }
 
@@ -304,6 +356,33 @@ export default function UploadStep({
             className="flex-1 rounded-lg border border-gray-300 px-4 py-2 focus:border-primary-500 focus:ring-primary-500"
             disabled={isUploading}
           />
+        </div>
+        {/* Cookie file upload UI (no upload button, mandatory) */}
+        <div className="mt-2">
+          <label className="block text-sm font-medium text-gray-700 mb-1">Upload a YouTube cookie file (.txt, Netscape format, required)</label>
+          <div className="flex items-center gap-2">
+            <input
+              type="file"
+              accept=".txt"
+              ref={cookieInputRef}
+              onChange={handleCookieFileChange}
+              disabled={isUploading || !!cookieFile}
+              className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100"
+            />
+            {cookieFile && (
+              <button
+                type="button"
+                onClick={removeCookieFile}
+                className="p-2 text-gray-400 hover:text-gray-600"
+                disabled={isUploading}
+              >
+                <XMarkIcon className="h-5 w-5" />
+              </button>
+            )}
+          </div>
+          {cookieFileName && (
+            <div className="text-xs text-gray-600 mt-1">Selected: {cookieFileName}</div>
+          )}
         </div>
       </div>
 
@@ -449,7 +528,7 @@ export default function UploadStep({
         </button>
         <button
           onClick={handleUpload}
-          disabled={(selectedFiles.length === 0 && !youtubeUrl) || isUploading}
+          disabled={(selectedFiles.length === 0 && (!youtubeUrl || !cookieFile)) || isUploading}
           className={cn(
             "px-6 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed",
             isUploading && "bg-primary-400"

@@ -14,6 +14,8 @@ import { Readable } from 'stream';
 import { DynamoDBDocumentClient, PutCommand } from '@aws-sdk/lib-dynamodb';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { YouTubeCookieManager } from './youtube/cookie-manager';
+// @ts-ignore
+import * as multipart from 'lambda-multipart-parser';
 
 // Initialize clients
 const s3 = new S3Client({});
@@ -173,49 +175,78 @@ async function withRetry<T>(
 
 export const handler = async (event: APIGatewayProxyEvent, _context: LambdaContext): Promise<LambdaResponse> => {
   try {
-    if (!event.body) {
+    // Only handle POST /videos/youtube
+    if (event.httpMethod !== 'POST') {
       return {
-        statusCode: 400,
+        statusCode: 405,
         headers: corsHeaders,
-        body: JSON.stringify({ error: 'Missing request body' })
+        body: JSON.stringify({ error: 'Method not allowed' })
       };
     }
 
-    const request: YouTubeUploadRequest = JSON.parse(event.body);
-    const videoUrl = request.videoUrl;
-    // Use the provided indexId or default to 'videos'
-    const videoIndex = (request.indexId || 'videos').toLowerCase();
+    // Parse multipart form using lambda-multipart-parser
+    const result = await multipart.parse(event);
+    const videoUrl = result.videoUrl;
+    const indexId = (result.indexId || 'videos').toLowerCase();
+    const metadata = result.metadata ? JSON.parse(result.metadata) : {};
+    const cookieFile = result.files.find((f: any) => f.fieldname === 'cookieFile');
+    if (!videoUrl || !cookieFile) {
+      return {
+        statusCode: 400,
+        headers: corsHeaders,
+        body: JSON.stringify({ error: 'Missing videoUrl or cookieFile' })
+      };
+    }
+    const cookieFilePath = `/tmp/${cookieFile.filename}`;
+    await fs.writeFile(cookieFilePath, cookieFile.content);
+    // Debug: print out the uploaded cookie file content (first 20 lines, masked)
+    try {
+      const cookieContent = await fs.readFile(cookieFilePath, 'utf8');
+      const cookieLines = cookieContent.split('\n').slice(0, 20).map(line => {
+        if (line.startsWith('#') || line.trim() === '') return line;
+        const parts = line.split('\t');
+        if (parts.length >= 7) {
+          return parts.slice(0, 6).join('\t') + '\t[MASKED]';
+        }
+        return line;
+      });
+      console.log(`[YouTube Download] Uploaded cookie file content (first 20 lines, masked):\n${cookieLines.join('\n')}`);
+    } catch (err) {
+      console.error('[YouTube Download] Failed to read uploaded cookie file for debug:', err);
+    }
+
+    // Generate videoId, s3Key, etc. as before
     const videoId = uuidv4();
     const timestamp = new Date().toISOString().split('T')[0];
     const videoFileName = `youtube_${Date.now()}.mp4`;
-    const s3Key = `RawVideos/${timestamp}/${videoIndex}/${videoId}/${videoFileName}`;
+    const s3Key = `RawVideos/${timestamp}/${indexId}/${videoId}/${videoFileName}`;
     const createdAt = new Date().toISOString();
     
     // Check if the index exists and create if it doesn't
     try {
-      const indexExists = await openSearch.indices.exists({ index: videoIndex });
+      const indexExists = await openSearch.indices.exists({ index: indexId });
       if (!indexExists.body) {
-        console.log(`Index ${videoIndex} does not exist, creating it`);
+        console.log(`Index ${indexId} does not exist, creating it`);
         await openSearch.indices.create({ 
-          index: videoIndex, 
+          index: indexId, 
           body: indexSettings 
         });
       }
     } catch (error) {
-      console.error(`Error checking/creating index ${videoIndex}:`, error);
+      console.error(`Error checking/creating index ${indexId}:`, error);
       // Continue anyway as the error might be that the index already exists
     }
 
     // Create initial metadata for both OpenSearch and DynamoDB
     const aossInitialBody: VideoMetadata = {
-      video_index: videoIndex,
+      video_index: indexId,
       video_id: videoId,
       video_s3_path: s3Key,
       video_name: videoFileName,
       video_source: 'youtube',
-      video_title: request.metadata?.title || 'YouTube Video',
-      video_description: request.metadata?.description || '',
-      video_tags: request.metadata?.tags || [],
+      video_title: metadata?.title || 'YouTube Video',
+      video_description: metadata?.description || '',
+      video_tags: metadata?.tags || [],
       video_status: 'downloading' as VideoStatus,
       created_at: createdAt,
       updated_at: createdAt
@@ -224,11 +255,11 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
     // Create initial entry in OpenSearch
     const indexResult = await withRetry(
       async () => openSearch.index({
-        index: videoIndex,
+        index: indexId,
         body: aossInitialBody
       }),
       3,
-      `Index initial document for YouTube video ${videoId} in index ${videoIndex}`
+      `Index initial document for YouTube video ${videoId} in index ${indexId}`
     );
     
     // Record the indexId and videoId in DynamoDB
@@ -236,13 +267,13 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
       async () => docClient.send(new PutCommand({
         TableName: process.env.INDEXES_TABLE,
         Item: {
-          indexId: videoIndex,
+          indexId,
           videoId,
           video_name: videoFileName,
           video_source: 'youtube',
-          video_title: request.metadata?.title || 'YouTube Video',
-          video_description: request.metadata?.description || '',
-          video_tags: request.metadata?.tags || [],
+          video_title: metadata?.title || 'YouTube Video',
+          video_description: metadata?.description || '',
+          video_tags: metadata?.tags || [],
           video_status: 'downloading' as VideoStatus,
           created_at: createdAt,
           updated_at: createdAt
@@ -255,8 +286,8 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
     try {
       console.log(`[YouTube Download] Processing YouTube download synchronously`);
       
-      // Download the YouTube video and wait for it to complete
-      await downloadFromYoutube(videoUrl, videoId, s3Key, videoIndex);
+      // Download the YouTube video using the provided cookie file
+      await downloadFromYoutube(videoUrl, videoId, s3Key, indexId, cookieFilePath);
       
       // Process the video after download
       const thumbnailS3Path = s3Key.replace(/\.[^/.]+$/, '.jpg');
@@ -264,7 +295,7 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
       
       // Find the document ID from the search
       const { body: searchResult } = await openSearch.search({
-        index: videoIndex,
+        index: indexId,
         body: {
           query: {
             term: {
@@ -293,7 +324,7 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
 
         // Update both OpenSearch and DynamoDB with the processed info
         await openSearch.update({
-          index: videoIndex,
+          index: indexId,
           id: documentId,
           body: {
             doc: {
@@ -323,7 +354,7 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
       try {
         // Find the document ID from the search
         const { body: searchResult } = await openSearch.search({
-          index: videoIndex,
+          index: indexId,
           body: {
             query: {
               term: {
@@ -338,7 +369,7 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
           
           // Update status to error
           await openSearch.update({
-            index: videoIndex,
+            index: indexId,
             id: documentId,
             body: {
               doc: {
@@ -353,7 +384,7 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
           await docClient.send(new PutCommand({
             TableName: process.env.INDEXES_TABLE,
             Item: {
-              indexId: videoIndex,
+              indexId,
               videoId,
               video_status: 'failed' as VideoStatus,
               error: error instanceof Error ? error.message : 'Unknown error',
@@ -422,54 +453,41 @@ async function extractAndUploadThumbnail(videoS3Path: string, thumbnailS3Path: s
     // Probe the video to get its duration
     let duration = 0;
     try {
-      // Use ffprobe to get video duration
-      const ffprobePath = '/opt/bin/ffprobe';
-      const ffprobeCommand = [
-        '-v', 'error',
-        '-show_entries', 'format=duration',
-        '-of', 'default=noprint_wrappers=1:nokey=1',
-        tempVideoPath
-      ];
-      
-      console.log(`Running ffprobe command: ${ffprobePath} ${ffprobeCommand.join(' ')}`);
-      
-      // Check if ffprobe exists and is executable
-      try {
-        await fs.access(ffprobePath, fs.constants.X_OK);
-        console.log(`Found executable ffprobe binary at ${ffprobePath}`);
-      } catch (error) {
-        console.error(`Error accessing ffprobe binary: ${error}`);
-        throw new Error('ffprobe binary not found or not executable in Lambda layer');
-      }
-      
-      const ffprobeProcess = spawn(ffprobePath, ffprobeCommand);
-      let ffprobeOutput = '';
-      
-      ffprobeProcess.stdout.on('data', (data) => {
-        ffprobeOutput += data.toString();
+      // Use ffmpeg to get video duration by parsing stderr
+      const ffmpegPath = 'ffmpeg';
+      const ffmpegCommand = ['-i', tempVideoPath];
+      console.log(`Running ffmpeg command for duration: ${ffmpegPath} ${ffmpegCommand.join(' ')}`);
+      const ffmpegProcess = spawn(ffmpegPath, ffmpegCommand);
+      let ffmpegOutput = '';
+      let ffmpegError = '';
+      ffmpegProcess.stdout.on('data', (data) => {
+        ffmpegOutput += data.toString();
       });
-      
-      // Wait for the process to complete
+      ffmpegProcess.stderr.on('data', (data) => {
+        ffmpegError += data.toString();
+      });
       await new Promise<void>((resolve, reject) => {
-        ffprobeProcess.on('close', (code) => {
-          if (code === 0) {
-            console.log('Successfully probed video duration');
+        ffmpegProcess.on('close', (code) => {
+          if (code === 0 || code === 1) { // ffmpeg returns 1 for info-only
             resolve();
           } else {
-            reject(new Error(`ffprobe process exited with code ${code}`));
+            reject(new Error(`ffmpeg process exited with code ${code}`));
           }
         });
-        
-        ffprobeProcess.stderr.on('data', (data) => {
-          console.log(`ffprobe stderr: ${data}`);
-        });
       });
-      
-      // Parse the duration (in seconds) and convert to milliseconds
-      duration = parseFloat(ffprobeOutput.trim()) * 1000;
-      console.log(`Video duration: ${duration}ms`);
+      // Parse duration from ffmpegError (ffmpeg prints info to stderr)
+      const durationMatch = ffmpegError.match(/Duration: (\d+):(\d+):(\d+\.\d+)/);
+      if (durationMatch) {
+        const hours = parseInt(durationMatch[1], 10);
+        const minutes = parseInt(durationMatch[2], 10);
+        const seconds = parseFloat(durationMatch[3]);
+        duration = ((hours * 60 + minutes) * 60 + seconds) * 1000; // ms
+        console.log(`Video duration: ${duration}ms`);
+      } else {
+        console.warn('Could not parse duration from ffmpeg output');
+      }
     } catch (probeError) {
-      console.error('Error probing video duration:', probeError);
+      console.error('Error probing video duration with ffmpeg:', probeError);
       // Continue with thumbnail extraction even if duration probe fails
     }
     
@@ -558,7 +576,7 @@ async function extractAndUploadThumbnail(videoS3Path: string, thumbnailS3Path: s
   }
 }
 
-async function downloadFromYoutube(url: string, videoId: string, s3Key: string, videoIndex: string): Promise<void> {
+async function downloadFromYoutube(url: string, videoId: string, s3Key: string, videoIndex: string, cookieFilePath: string): Promise<void> {
   console.log(`[YouTube Download] Starting download of video ${videoId} from URL: ${url}`);
   console.log(`[YouTube Download] Environment variables check:
     VIDEO_BUCKET: ${process.env.VIDEO_BUCKET ? 'Set' : 'MISSING!'}
@@ -566,7 +584,7 @@ async function downloadFromYoutube(url: string, videoId: string, s3Key: string, 
   
   const tempDir = '/tmp';
   const tempPath = `${tempDir}/${videoId}`;
-  let cookiesTempPath: string;
+  const cookiesTempPath = cookieFilePath;
   
   // Set LD_LIBRARY_PATH to include our custom lib directory
   process.env.LD_LIBRARY_PATH = '/opt/lib:' + (process.env.LD_LIBRARY_PATH || '');
@@ -580,40 +598,39 @@ async function downloadFromYoutube(url: string, videoId: string, s3Key: string, 
     throw new Error('Required library libz.so.1 not found in Lambda layer');
   }
 
-  // Extract fresh YouTube cookies using the cookie manager
-  try {
-    console.log('[YouTube Download] Extracting fresh YouTube cookies using headless Chrome');
-    cookiesTempPath = await YouTubeCookieManager.extractCookies();
-    console.log(`[YouTube Download] Successfully extracted cookies to ${cookiesTempPath}`);
-  } catch (error) {
-    console.error('[YouTube Download] Failed to extract cookies:', error);
-    
-    // Try to use the fallback cookies file if it exists
-    const fallbackCookiesPath = '/opt/bin/yt-dlp-cookies.txt';
-    try {
-      // Check if fallback cookie file exists
-      await fs.access(fallbackCookiesPath);
-      console.log(`[YouTube Download] Using fallback cookies from ${fallbackCookiesPath}`);
+  // Extract fresh YouTube cookies using the cookie manager, obsoleted by using the actual cookies file uploaded from the user
+  // try {
+  //   console.log('[YouTube Download] Extracting fresh YouTube cookies using headless Chrome');
+  //   cookiesTempPath = await YouTubeCookieManager.extractCookies();
+  //   console.log(`[YouTube Download] Successfully extracted cookies to ${cookiesTempPath}`);
+  // } catch (error) {
+  //   console.error('[YouTube Download] Failed to extract cookies:', error);
+  //   // Try to use the fallback cookies file if it exists
+  //   const fallbackCookiesPath = '/opt/bin/yt-dlp-cookies.txt';
+  //   try {
+  //     // Check if fallback cookie file exists
+  //     await fs.access(fallbackCookiesPath);
+  //     console.log(`[YouTube Download] Using fallback cookies from ${fallbackCookiesPath}`);
       
-      // Copy the fallback cookies to temp folder
-      const fallbackContent = await fs.readFile(fallbackCookiesPath, 'utf8');
-      cookiesTempPath = path.join('/tmp', `youtube-fallback-cookies-${Date.now()}.txt`);
-      await fs.writeFile(cookiesTempPath, fallbackContent);
-      console.log(`[YouTube Download] Copied fallback cookies to ${cookiesTempPath}`);
-    } catch (fallbackError) {
-      console.error('[YouTube Download] No fallback cookies available:', fallbackError);
-      throw new Error('Failed to extract YouTube cookies and no fallback available');
-    }
-  }
+  //     // Copy the fallback cookies to temp folder
+  //     const fallbackContent = await fs.readFile(fallbackCookiesPath, 'utf8');
+  //     cookiesTempPath = path.join('/tmp', `youtube-fallback-cookies-${Date.now()}.txt`);
+  //     await fs.writeFile(cookiesTempPath, fallbackContent);
+  //     console.log(`[YouTube Download] Copied fallback cookies to ${cookiesTempPath}`);
+  //   } catch (fallbackError) {
+  //     console.error('[YouTube Download] No fallback cookies available:', fallbackError);
+  //     throw new Error('Failed to extract YouTube cookies and no fallback available');
+  //   }
+  // }
   
-  // Check temp directory existence and permissions
-  try {
-    const stats = await fs.stat(tempDir);
-    console.log(`[YouTube Download] Temp directory exists: ${stats.isDirectory()}, Mode: ${stats.mode.toString(8)}`);
-  } catch (error: any) {
-    console.error(`[YouTube Download] Temp directory check failed: ${error.message}`);
-  }
-  
+  // // Check temp directory existence and permissions
+  // try {
+  //   const stats = await fs.stat(tempDir);
+  //   console.log(`[YouTube Download] Temp directory exists: ${stats.isDirectory()}, Mode: ${stats.mode.toString(8)}`);
+  // } catch (error: any) {
+  //   console.error(`[YouTube Download] Temp directory check failed: ${error.message}`);
+  // }
+
   console.log(`[YouTube Download] Launching yt-dlp process for URL: ${url}`);
   
   // Directly use the yt-dlp binary path
