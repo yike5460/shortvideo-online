@@ -1023,8 +1023,7 @@ async function generateEmbedding(bucket: string, key: string): Promise<{
       });
 
       // The new response format includes both vision_embedding and audio_embedding
-      const rawData = await response.json();
-      console.log(`Raw response from external embedding service:`, rawData);
+      const rawData = await response.json();      
       // Type check and validate the response data
       if (rawData && typeof rawData === 'object') {
         // Compatible with the legacy emebdding format

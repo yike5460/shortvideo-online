@@ -291,55 +291,112 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
       
       // Process the video after download
       const thumbnailS3Path = s3Key.replace(/\.[^/.]+$/, '.jpg');
-      await extractAndUploadThumbnail(s3Key, thumbnailS3Path);
+      let thumbnailUrl: string | null = null;
+      let duration: number = 0;
+      let thumbnailError: string | null = null;
+      try {
+        const result = await extractAndUploadThumbnail(s3Key, thumbnailS3Path);
+        thumbnailUrl = result.thumbnailUrl;
+        duration = result.duration;
+      } catch (thumbErr) {
+        thumbnailError = thumbErr instanceof Error ? thumbErr.message : String(thumbErr);
+        console.error('[YouTube Download] Thumbnail extraction/upload failed:', thumbnailError);
+      }
       
       // Find the document ID from the search
-      const { body: searchResult } = await openSearch.search({
-        index: indexId,
-        body: {
-          query: {
-            term: {
-              video_id: videoId
+      let documentId: string | null = null;
+      let searchRetries = 0;
+      // Maximum retries for searching the document ID since the index is not updated immediately and the search result might be stale
+      const maxSearchRetries = 100;
+      while (searchRetries < maxSearchRetries) {
+        const { body: searchResult } = await openSearch.search({
+          index: indexId,
+          body: {
+            query: {
+              term: {
+                video_id: videoId
+              }
             }
           }
+        });
+        if (searchResult.hits && searchResult.hits.hits && searchResult.hits.hits.length > 0) {
+          documentId = searchResult.hits.hits[0]._id;
+          break;
+        } else {
+          searchRetries++;
+          if (searchRetries < maxSearchRetries) {
+            await new Promise(resolve => setTimeout(resolve, 3000));
+            console.log(`Waiting for the index to be updated then retry the search for YouTube video ${videoId} in index ${indexId} (retry ${searchRetries})`);
+          }
+        }
+      }
+      if (!documentId) {
+        console.error(`Failed to find OpenSearch document for YouTube video ${videoId} in index ${indexId} after ${maxSearchRetries} retries.`);
+        return {
+          statusCode: 500,
+          headers: corsHeaders,
+          body: JSON.stringify({
+            error: 'Failed to find OpenSearch document for YouTube video after upload',
+            videoId,
+            indexId
+          })
+        };
+      }
+      
+      // Generate a video preview URL
+      const getCommand = new GetObjectCommand({
+        Bucket: process.env.VIDEO_BUCKET,
+        Key: s3Key,
+      });
+      const videoPreviewUrl = await getSignedUrl(s3 as any, getCommand as any, { expiresIn: 3600 });
+      
+      // Format the duration as a human-readable string (HH:MM:SS)
+      const formatDuration = (ms: number): string => {
+        if (!ms) return '00:00:00';
+        const totalSeconds = Math.floor(ms / 1000);
+        const hours = Math.floor(totalSeconds / 3600);
+        const minutes = Math.floor((totalSeconds % 3600) / 60);
+        const seconds = totalSeconds % 60;
+        return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+      };
+      
+      // Prepare update doc
+      let updateDoc: any = {
+        video_status: 'uploaded',
+        video_preview_url: videoPreviewUrl,
+        updated_at: new Date().toISOString()
+      };
+      if (thumbnailUrl) {
+        updateDoc.video_thumbnail_s3_path = thumbnailS3Path;
+        updateDoc.video_thumbnail_url = thumbnailUrl;
+        updateDoc.video_duration = formatDuration(duration);
+      } else if (thumbnailError) {
+        updateDoc.thumbnail_error = thumbnailError;
+      }
+      
+      // Update OpenSearch
+      await openSearch.update({
+        index: indexId,
+        id: documentId,
+        body: {
+          doc: updateDoc
         }
       });
       
-      if (searchResult.hits && searchResult.hits.hits && searchResult.hits.hits.length > 0) {
-        const documentId = searchResult.hits.hits[0]._id;
-        
-        // Generate a video preview URL
-        const getCommand = new GetObjectCommand({
-          Bucket: process.env.VIDEO_BUCKET,
-          Key: s3Key,
-        });
-        const videoPreviewUrl = await getSignedUrl(s3 as any, getCommand as any, { expiresIn: 3600 });
-        
-        // Generate thumbnail URL
-        const getThumbnailCommand = new GetObjectCommand({
-          Bucket: process.env.VIDEO_BUCKET,
-          Key: thumbnailS3Path,
-        });
-        const thumbnailUrl = await getSignedUrl(s3 as any, getThumbnailCommand as any, { expiresIn: 3600 });
-
-        // Update both OpenSearch and DynamoDB with the processed info
-        await openSearch.update({
-          index: indexId,
-          id: documentId,
-          body: {
-            doc: {
-              video_status: 'uploaded',
-              video_preview_url: videoPreviewUrl,
-              video_thumbnail_s3_path: thumbnailS3Path,
-              video_thumbnail_url: thumbnailUrl,
-              updated_at: new Date().toISOString()
-            }
-          }
-        });
-        
-        console.log(`[YouTube Download] Video successfully processed - S3 event will trigger slicing: ${s3Key}`);
-      }
+      // Update DynamoDB with status and updated_at
+      await docClient.send(new PutCommand({
+        TableName: process.env.INDEXES_TABLE,
+        Item: {
+          indexId,
+          videoId,
+          video_status: 'uploaded',
+          updated_at: new Date().toISOString(),
+          ...(thumbnailError ? { thumbnail_error: thumbnailError } : {})
+        }
+      }));
       
+      console.log(`[YouTube Download] Video successfully processed - S3 event will trigger slicing: ${s3Key}`);
+
       return {
         statusCode: 200,
         headers: corsHeaders,
@@ -416,163 +473,74 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
 async function extractAndUploadThumbnail(videoS3Path: string, thumbnailS3Path: string): Promise<{ thumbnailUrl: string; duration: number }> {
   try {
     console.log(`Extracting thumbnail from video: ${videoS3Path} to ${thumbnailS3Path}`);
-    
-    // Create temporary file paths for processing
     const tempDir = '/tmp';
     const tempVideoPath = `${tempDir}/${Date.now()}-video.mp4`;
     const tempThumbnailPath = `${tempDir}/${Date.now()}-thumbnail.jpg`;
-    
-    // Download the video from S3
     const bucketName = process.env.VIDEO_BUCKET;
-    if (!bucketName) {
-      throw new Error('VIDEO_BUCKET environment variable is not set');
-    }
-    
-    // Download the video file
-    const getObjectCommand = new GetObjectCommand({
-      Bucket: bucketName,
-      Key: videoS3Path
-    });
-    
+    if (!bucketName) throw new Error('VIDEO_BUCKET environment variable is not set');
+    const getObjectCommand = new GetObjectCommand({ Bucket: bucketName, Key: videoS3Path });
     const videoResponse = await s3.send(getObjectCommand);
-    
-    // Write the video to a temporary file
-    if (!videoResponse.Body) {
-      throw new Error('Failed to get video content from S3');
-    }
-    
-    // Create the temp directory if it doesn't exist
+    if (!videoResponse.Body) throw new Error('Failed to get video content from S3');
     await fs.mkdir(tempDir, { recursive: true });
-    
-    // Write the video data to the temp file
     const videoData = await streamToBuffer(videoResponse.Body as Readable);
     await fs.writeFile(tempVideoPath, videoData);
-    
     console.log(`Downloaded video to ${tempVideoPath}`);
-    
-    // Probe the video to get its duration
+    // Use ffmpeg to get video duration by parsing stderr
     let duration = 0;
     try {
-      // Use ffmpeg to get video duration by parsing stderr
       const ffmpegPath = 'ffmpeg';
       const ffmpegCommand = ['-i', tempVideoPath];
       console.log(`Running ffmpeg command for duration: ${ffmpegPath} ${ffmpegCommand.join(' ')}`);
       const ffmpegProcess = spawn(ffmpegPath, ffmpegCommand);
-      let ffmpegOutput = '';
       let ffmpegError = '';
-      ffmpegProcess.stdout.on('data', (data) => {
-        ffmpegOutput += data.toString();
-      });
-      ffmpegProcess.stderr.on('data', (data) => {
-        ffmpegError += data.toString();
-      });
+      ffmpegProcess.stderr.on('data', (data) => { ffmpegError += data.toString(); });
       await new Promise<void>((resolve, reject) => {
         ffmpegProcess.on('close', (code) => {
-          if (code === 0 || code === 1) { // ffmpeg returns 1 for info-only
-            resolve();
-          } else {
-            reject(new Error(`ffmpeg process exited with code ${code}`));
-          }
+          if (code === 0 || code === 1) { resolve(); } else { reject(new Error(`ffmpeg process exited with code ${code}`)); }
         });
       });
-      // Parse duration from ffmpegError (ffmpeg prints info to stderr)
       const durationMatch = ffmpegError.match(/Duration: (\d+):(\d+):(\d+\.\d+)/);
       if (durationMatch) {
         const hours = parseInt(durationMatch[1], 10);
         const minutes = parseInt(durationMatch[2], 10);
         const seconds = parseFloat(durationMatch[3]);
-        duration = ((hours * 60 + minutes) * 60 + seconds) * 1000; // ms
+        duration = ((hours * 60 + minutes) * 60 + seconds) * 1000;
         console.log(`Video duration: ${duration}ms`);
       } else {
         console.warn('Could not parse duration from ffmpeg output');
       }
     } catch (probeError) {
       console.error('Error probing video duration with ffmpeg:', probeError);
-      // Continue with thumbnail extraction even if duration probe fails
     }
-    
     // Use ffmpeg to extract a thumbnail from the video
     const ffmpegCommand = [
       '-i', tempVideoPath,
-      '-ss', '00:00:06', // Take frame at 6 seconds instead of 1 second to avoid black frames
-      '-vframes', '1',   // Extract 1 frame
-      '-q:v', '2',       // High quality
+      '-ss', '00:00:06',
+      '-vframes', '1',
+      '-q:v', '2',
       tempThumbnailPath
     ];
-    
     console.log(`Running ffmpeg command: ffmpeg ${ffmpegCommand.join(' ')}`);
-    
-    // Execute ffmpeg command
     const ffmpegProcess = spawn('ffmpeg', ffmpegCommand);
-    
-    // Wait for the process to complete
     await new Promise<void>((resolve, reject) => {
       ffmpegProcess.on('close', (code) => {
-        if (code === 0) {
-          console.log('Successfully extracted thumbnail');
-          resolve();
-        } else {
-          reject(new Error(`ffmpeg process exited with code ${code}`));
-        }
+        if (code === 0) { console.log('Successfully extracted thumbnail'); resolve(); }
+        else { reject(new Error(`ffmpeg process exited with code ${code}`)); }
       });
-      
-      ffmpegProcess.stderr.on('data', (data) => {
-        console.log(`ffmpeg stderr: ${data}`);
-      });
+      ffmpegProcess.stderr.on('data', (data) => { console.log(`ffmpeg stderr: ${data}`); });
     });
-    
-    // Check if thumbnail was created
-    try {
-      await fs.access(tempThumbnailPath);
-    } catch (error) {
-      console.error('Thumbnail file was not created:', error);
-      throw new Error('Failed to create thumbnail');
-    }
-    
-    // Upload the thumbnail to S3
+    try { await fs.access(tempThumbnailPath); } catch (error) { console.error('Thumbnail file was not created:', error); throw new Error('Failed to create thumbnail'); }
     const thumbnailData = await fs.readFile(tempThumbnailPath);
-    
-    const putObjectCommand = new PutObjectCommand({
-      Bucket: bucketName,
-      Key: thumbnailS3Path,
-      Body: thumbnailData,
-      ContentType: 'image/jpeg'
-    });
-    
+    const putObjectCommand = new PutObjectCommand({ Bucket: bucketName, Key: thumbnailS3Path, Body: thumbnailData, ContentType: 'image/jpeg' });
     await s3.send(putObjectCommand);
     console.log(`Uploaded thumbnail to S3: ${thumbnailS3Path}`);
-    
-    // Generate a signed URL for the thumbnail
-    const getSignedUrlCommand = new GetObjectCommand({
-      Bucket: bucketName,
-      Key: thumbnailS3Path
-    });
-    
+    const getSignedUrlCommand = new GetObjectCommand({ Bucket: bucketName, Key: thumbnailS3Path });
     const thumbnailUrl = await getSignedUrl(s3 as any, getSignedUrlCommand as any, { expiresIn: 3600 });
-    
-    // Clean up temporary files
-    try {
-      await fs.unlink(tempVideoPath);
-      await fs.unlink(tempThumbnailPath);
-      console.log('Cleaned up temporary files');
-    } catch (cleanupError) {
-      console.warn('Failed to clean up temporary files:', cleanupError);
-    }
-    
+    try { await fs.unlink(tempVideoPath); await fs.unlink(tempThumbnailPath); console.log('Cleaned up temporary files'); } catch (cleanupError) { console.warn('Failed to clean up temporary files:', cleanupError); }
     return { thumbnailUrl, duration };
   } catch (error) {
     console.error('Error extracting and uploading thumbnail:', error);
-    
-    // If thumbnail extraction fails, create a default signed URL without the thumbnail
-    const getSignedUrlCommand = new GetObjectCommand({
-      Bucket: process.env.VIDEO_BUCKET,
-      Key: thumbnailS3Path
-    });
-    
-    // Return a signed URL even if the thumbnail doesn't exist yet
-    // The client can handle missing thumbnails gracefully
-    const thumbnailUrl = await getSignedUrl(s3 as any, getSignedUrlCommand as any, { expiresIn: 3600 });
-    return { thumbnailUrl, duration: 0 };
+    throw error;
   }
 }
 

@@ -213,7 +213,18 @@ export default function UploadStep({
         status: 'completed'
       })
       return response.data.videoId
-    } catch (err) {
+    } catch (err: any) {
+      // Special handling for 504 Gateway Timeout
+      if (axios.isAxiosError(err) && err.response && err.response.status === 504) {
+        setYoutubeUploadProgress({
+          progress: 100,
+          status: 'completed',
+          error: 'Upload is processing in the background due to a long YouTube download. Please check the video list or status page in a few minutes.'
+        })
+        console.warn('YouTube upload received 504 Gateway Timeout. Backend is likely still processing.');
+        // Optionally return a placeholder or throw to continue flow
+        return '';
+      }
       console.error('YouTube upload error:', err)
       setYoutubeUploadProgress({
         progress: 0,
