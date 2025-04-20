@@ -395,35 +395,81 @@ async function formatSearchResults(body: any, page: number, pageSize: number, fr
     return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
   };
 
-  // Helper function to process video_objects with filtering
-  const processVideoObjects = (videoObjects: any[] | undefined): any[] => {
+  // Helper function to process video_objects with optimized filtering and dynamic timestamp sampling
+  const processVideoObjects = (
+    videoObjects: any[] | undefined,
+    confidenceThreshold = 95,
+    labelsPerTimestampLimit = 3, // Limit to top 3 labels per timestamp by default
+    maxTimestamps = 100 // Max number of timestamp groups to return
+  ): any[] => {
     if (!videoObjects || !Array.isArray(videoObjects)) return [];
     
-    return videoObjects.map(obj => {
-      // Filter labels with confidence >= 90, align with the MinConfidence setting in Rekognition
-      const filteredLabels = (obj.labels || []).filter((label: { confidence?: number }) => 
-        (label.confidence || 0) >= 90
+    // First, process all timestamps with their labels
+    const processedTimestamps = videoObjects.map(obj => {
+      // Filter labels with confidence >= threshold (default 95)
+      let filteredLabels = (obj.labels || []).filter((label: { confidence?: number }) => 
+        (label.confidence || 0) >= confidenceThreshold
       );
       
-      // Keep only categories and aliases
+      // Sort by confidence (highest first) and limit to top N most confident labels
+      filteredLabels = filteredLabels
+        .sort((a: { confidence?: number }, b: { confidence?: number }) => (b.confidence || 0) - (a.confidence || 0))
+        .slice(0, labelsPerTimestampLimit);
+      
+      // Optimize labels to reduce payload size while maintaining essential data
       const simplifiedLabels = filteredLabels.map((label: { 
         name?: string; 
         confidence?: number; 
         categories?: any[]; 
         aliases?: any[];
-      }) => ({
-        name: label.name,
-        confidence: label.confidence,
-        categories: label.categories || [],
-        aliases: label.aliases || []
-        // Note: Specifically excluding parents and instances
-      }));
+      }) => {
+        // Extract just category names - this is what the frontend uses
+        const categoryNames = (label.categories || [])
+          .map(cat => cat.Name)
+          .filter(Boolean);
+        
+        // Extract just alias names - this is what the frontend uses
+        const aliasNames = (label.aliases || [])
+          .map(alias => alias.Name)
+          .filter(Boolean);
+        
+        return {
+          n: label.name, // Shortened: name → n
+          c: Math.round(label.confidence || 0), // Shortened & rounded: confidence → c
+          cat: categoryNames.length > 0 ? categoryNames : undefined, // Only include if present
+          ali: aliasNames.length > 0 ? aliasNames : undefined // Only include if present
+        };
+      });
+      
+      if (simplifiedLabels.length === 0) return null;
       
       return {
-        timestamp: obj.timestamp,
-        labels: simplifiedLabels
+        t: obj.timestamp, // Shortened: timestamp → t
+        l: simplifiedLabels // Shortened: labels → l
       };
-    }).filter(obj => obj.labels.length > 0); // Only include timestamps that have at least one label
+    }).filter(Boolean); // Remove null entries (timestamps with no labels)
+    
+    // If we have more timestamps than our limit, apply dynamic sampling
+    if (processedTimestamps.length > maxTimestamps) {
+      console.log(`Sampling ${processedTimestamps.length} timestamps down to ~${maxTimestamps} timestamps`);
+      
+      // Calculate sampling interval to get approximately maxTimestamps
+      const interval = Math.max(1, Math.floor(processedTimestamps.length / maxTimestamps));
+      
+      // Apply the calculated interval to select timestamps
+      // This ensures we get an even distribution across the entire video
+      const sampledTimestamps = processedTimestamps.filter((_, index) => index % interval === 0);
+      
+      // If we still have too many timestamps (due to rounding), trim the excess
+      if (sampledTimestamps.length > maxTimestamps) {
+        return sampledTimestamps.slice(0, maxTimestamps);
+      }
+      
+      return sampledTimestamps;
+    }
+    
+    // If under the limit, return all processed timestamps
+    return processedTimestamps;
   };
 
   // Process regular videos
@@ -432,8 +478,9 @@ async function formatSearchResults(body: any, page: number, pageSize: number, fr
     const videoPreviewUrlValue = await refreshvideoPreviewUrl(hit._source.video_s3_path || 'dummy_s3_path');
     const thumbnailUrlValue = await refreshvideoPreviewUrl(hit._source.video_thumbnail_s3_path || 'dummy_s3_path');
     
-    // Process video_objects with filtering
-    const filteredVideoObjects = processVideoObjects(hit._source.video_objects);
+    // Process video_objects with optimized filtering
+    // Use default confidence threshold (95) and limit to top 3 labels per timestamp
+    const filteredVideoObjects = processVideoObjects(hit._source.video_objects, 95, 3);
     
     return {
       id: hit._id,

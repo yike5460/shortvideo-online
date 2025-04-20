@@ -117,22 +117,29 @@ const isMergedVideo = (video: VideoResult): boolean => {
 };
 
 // Helper function to extract unique categories from video objects
-const extractCategories = (videoObjects?: TimestampedLabel[]): string[] => {
+// Updated to handle optimized backend response format with shortened property names
+const extractCategories = (videoObjects?: any[]): string[] => {
   if (!videoObjects || !Array.isArray(videoObjects)) return [];
   
   // Create a Set to store unique category names
   const uniqueCategories = new Set<string>();
   
-  // Process each timestamped label
+  // Process each timestamped label (t = timestamp, l = labels)
   videoObjects.forEach(timestamped => {
-    // Process each label within the timestamped label
-    timestamped.labels?.forEach(label => {
-      // Process each category within the label
-      label.categories?.forEach(category => {
-        if (category.Name) {
-          uniqueCategories.add(category.Name);
-        }
-      });
+    // Process each label within the timestamped label (l = labels)
+    (timestamped.l || timestamped.labels || []).forEach((label: any) => {
+      // Process each category within the label (cat = categories)
+      const categories = label.cat || label.categories || [];
+      
+      if (Array.isArray(categories)) {
+        // Handle both direct string arrays and object arrays with Name property
+        categories.forEach((category: any) => {
+          const categoryName = typeof category === 'string' ? category : category?.Name;
+          if (categoryName) {
+            uniqueCategories.add(categoryName);
+          }
+        });
+      }
     });
   });
   
@@ -141,18 +148,27 @@ const extractCategories = (videoObjects?: TimestampedLabel[]): string[] => {
 };
 
 // Helper function to extract unique aliases from video objects
-const extractAliases = (videoObjects?: TimestampedLabel[]): string[] => {
+// Updated to handle optimized backend response format with shortened property names
+const extractAliases = (videoObjects?: any[]): string[] => {
   if (!videoObjects || !Array.isArray(videoObjects)) return [];
   
   const uniqueAliases = new Set<string>();
   
   videoObjects.forEach(timestamped => {
-    timestamped.labels?.forEach(label => {
-      label.aliases?.forEach(alias => {
-        if (alias.Name) {
-          uniqueAliases.add(alias.Name);
-        }
-      });
+    // Support both shortened (l) and full (labels) property names
+    (timestamped.l || timestamped.labels || []).forEach((label: any) => {
+      // Process aliases (ali = aliases)
+      const aliases = label.ali || label.aliases || [];
+      
+      if (Array.isArray(aliases)) {
+        // Handle both direct string arrays and object arrays with Name property
+        aliases.forEach((alias: any) => {
+          const aliasName = typeof alias === 'string' ? alias : alias?.Name;
+          if (aliasName) {
+            uniqueAliases.add(aliasName);
+          }
+        });
+      }
     });
   });
   
