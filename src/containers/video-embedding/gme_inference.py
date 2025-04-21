@@ -145,9 +145,6 @@ class GmeQwen2VL:
                 ]
             messages.append(message)
             text = self.processor.apply_chat_template(message, tokenize=False, add_generation_prompt=False) + "<|endoftext|>"
-            #print(image_inputs, video_inputs)
-            #f'<|im_start|>system\n{instruction}<|im_end|>\n<|im_start|>user\n{input_str}<|im_end|>\n<|im_start|>assistant\n<|endoftext|>'
-            #print(text)
             input_texts.append(text)
         image_inputs, video_inputs = process_vision_info(messages)
         inputs = self.processor(
