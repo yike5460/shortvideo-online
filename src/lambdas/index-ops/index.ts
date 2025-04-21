@@ -406,7 +406,7 @@ async function handleCreateIndex(event: APIGatewayProxyEvent): Promise<APIGatewa
                 segment_audio_description: { type: 'text' },
                 segment_audio_embedding: { 
                   type: 'knn_vector',
-                  dimension: 2048,
+                  dimension: 768,
                   method: {
                     name: "hnsw",
                     space_type: "cosinesimil"

@@ -1217,6 +1217,9 @@ async function updateVideoSegments(videoIndex: string, videoId: string, segments
         segment_visual: {
           ...segment.segment_visual,
           segment_visual_embedding: segment.segment_visual?.segment_visual_embedding || []
+        },
+        segment_audio: {
+          segment_audio_embedding: segment.segment_audio?.segment_audio_embedding || []
         }
       });
     }
@@ -1245,7 +1248,7 @@ async function updateVideoSegments(videoIndex: string, videoId: string, segments
               ctx._source.updated_at = params.updated_at;
             `,
             params: {
-              newSegments: segments.map(segment => {
+              newSegments: updatedSegments.map(segment => {
                 // Create a clean segment object with all the required fields
                 const formattedSegment = {
                   ...segment,
