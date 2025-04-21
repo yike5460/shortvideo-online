@@ -7,6 +7,12 @@ import { cn } from '@/lib/utils'
 import axios from 'axios'
 import { useRouter } from 'next/navigation'
 
+// Import our new components
+import SourceSelector, { SourceType } from './sources/SourceSelector'
+import S3ConnectorSelector from './connectors/S3ConnectorSelector'
+import S3ConnectorForm from './connectors/S3ConnectorForm'
+import S3FileBrowser from './sources/S3FileBrowser'
+
 // Update API configuration
 const API_ENDPOINT = process.env.NEXT_PUBLIC_API_URL
 
@@ -30,22 +36,43 @@ interface YouTubeUpload {
   tags?: string[]
 }
 
-export default function UploadStep({ 
-  onNext, 
-  onBack, 
+interface S3File {
+  name: string
+  size: number
+  key: string
+  bucket: string
+}
+
+export default function UploadStep({
+  onNext,
+  onBack,
   indexId = 'videos',
-  skipRedirect = false 
+  skipRedirect = false
 }: UploadStepProps) {
+  // Source selection state
+  const [selectedSource, setSelectedSource] = useState<SourceType>('local')
+  
+  // Local upload state
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
-  const [youtubeUrl, setYoutubeUrl] = useState('')
-  const [error, setError] = useState<string>('')
   const [uploadProgress, setUploadProgress] = useState<Record<string, UploadProgress>>({})
+  
+  // YouTube upload state
+  const [youtubeUrl, setYoutubeUrl] = useState('')
   const [youtubeUploadProgress, setYoutubeUploadProgress] = useState<UploadProgress | null>(null)
-  const [isUploading, setIsUploading] = useState(false)
   const [cookieFile, setCookieFile] = useState<File | null>(null)
   const [cookieFileName, setCookieFileName] = useState<string>('')
   const [cookieUploadProgress, setCookieUploadProgress] = useState<UploadProgress | null>(null)
   const cookieInputRef = useRef<HTMLInputElement>(null)
+  
+  // S3 connector state
+  const [selectedConnectorId, setSelectedConnectorId] = useState<string | null>(null)
+  const [showConnectorForm, setShowConnectorForm] = useState(false)
+  const [selectedS3Files, setSelectedS3Files] = useState<S3File[]>([])
+  const [s3UploadProgress, setS3UploadProgress] = useState<Record<string, UploadProgress>>({})
+  
+  // Common state
+  const [error, setError] = useState<string>('')
+  const [isUploading, setIsUploading] = useState(false)
   const router = useRouter()
 
   const validateFile = (file: File) => {
@@ -289,6 +316,105 @@ export default function UploadStep({
     }
   }
 
+  // Handle S3 connector creation
+  const handleCreateConnector = async (connectorData: { name: string; roleArn: string }) => {
+    try {
+      const response = await fetch(`${API_ENDPOINT}/connectors/s3`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(connectorData)
+      })
+      
+      if (!response.ok) {
+        throw new Error(`Failed to create connector: ${response.statusText}`)
+      }
+      
+      const data = await response.json()
+      setSelectedConnectorId(data.id)
+      setShowConnectorForm(false)
+    } catch (err) {
+      throw err
+    }
+  }
+
+  // Handle S3 file selection
+  const handleS3FileSelect = (files: S3File[]) => {
+    setSelectedS3Files(files)
+    
+    // Initialize progress for each file
+    const newProgress: Record<string, UploadProgress> = {}
+    files.forEach(file => {
+      newProgress[`${file.bucket}/${file.key}`] = {
+        progress: 0,
+        status: 'pending'
+      }
+    })
+    setS3UploadProgress(newProgress)
+  }
+
+  // Import file from S3
+  const importS3File = async (file: S3File): Promise<string> => {
+    try {
+      console.log('Importing S3 file:', file)
+      const fileId = `${file.bucket}/${file.key}`
+      
+      // Update progress state for this file to "uploading"
+      setS3UploadProgress(prev => ({
+        ...prev,
+        [fileId]: {
+          ...prev[fileId],
+          progress: 10,
+          status: 'uploading'
+        }
+      }))
+      
+      // Call the import API
+      const response = await fetch(`${API_ENDPOINT}/videos/import/s3`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          connectorId: selectedConnectorId,
+          files: [{ bucket: file.bucket, key: file.key }],
+          indexId: indexId
+        })
+      })
+      
+      if (!response.ok) {
+        throw new Error(`Failed to import file: ${response.statusText}`)
+      }
+      
+      const data = await response.json()
+      
+      // Update progress to completed
+      setS3UploadProgress(prev => ({
+        ...prev,
+        [fileId]: {
+          ...prev[fileId],
+          progress: 100,
+          status: 'completed'
+        }
+      }))
+      
+      return data.videoId
+    } catch (err) {
+      console.error('Import error:', err)
+      const fileId = `${file.bucket}/${file.key}`
+      setS3UploadProgress(prev => ({
+        ...prev,
+        [fileId]: {
+          ...prev[fileId],
+          status: 'error',
+          error: err instanceof Error ? err.message : 'Import failed'
+        }
+      }))
+      throw err
+    }
+  }
+
   const handleUpload = async () => {
     setIsUploading(true)
     setError('')
@@ -296,29 +422,43 @@ export default function UploadStep({
     try {
       const uploadPromises: Promise<string>[] = []
 
-      // Handle local file uploads
-      if (selectedFiles.length > 0) {
-        // Determine if this is a multiple upload
-        const isMultipleUpload = selectedFiles.length > 1
-        
-        // Upload all files in parallel
-        uploadPromises.push(...selectedFiles.map(file => {
-          // Update progress state for this file to "uploading"
-          setUploadProgress(prev => ({
-            ...prev,
-            [file.name]: { 
-              ...prev[file.name],
-              progress: 0,
-              status: 'uploading'
-            }
-          }))
-          return uploadFile(file, isMultipleUpload)
-        }))
-      }
-
-      // Handle YouTube upload
-      if (youtubeUrl) {
-        uploadPromises.push(uploadYouTubeVideo(youtubeUrl))
+      // Handle based on selected source
+      switch (selectedSource) {
+        case 'local':
+          // Handle local file uploads
+          if (selectedFiles.length > 0) {
+            // Determine if this is a multiple upload
+            const isMultipleUpload = selectedFiles.length > 1
+            
+            // Upload all files in parallel
+            uploadPromises.push(...selectedFiles.map(file => {
+              // Update progress state for this file to "uploading"
+              setUploadProgress(prev => ({
+                ...prev,
+                [file.name]: {
+                  ...prev[file.name],
+                  progress: 0,
+                  status: 'uploading'
+                }
+              }))
+              return uploadFile(file, isMultipleUpload)
+            }))
+          }
+          break;
+          
+        case 'youtube':
+          // Handle YouTube upload
+          if (youtubeUrl) {
+            uploadPromises.push(uploadYouTubeVideo(youtubeUrl))
+          }
+          break;
+          
+        case 's3':
+          // Handle S3 import
+          if (selectedS3Files.length > 0) {
+            uploadPromises.push(...selectedS3Files.map(file => importS3File(file)))
+          }
+          break;
       }
 
       // Wait for all uploads to complete in parallel
@@ -334,13 +474,28 @@ export default function UploadStep({
       }
       
       // Always call onNext with the files and uploadIds
-      onNext(selectedFiles, uploadIds)
+      // For S3 files, we don't have actual File objects, so we pass an empty array
+      onNext(selectedSource === 'local' ? selectedFiles : [], uploadIds)
     } catch (err) {
       setError('Failed to upload one or more files. Please try again.')
     } finally {
       setIsUploading(false)
     }
   }
+
+  // Determine if the upload button should be disabled
+  const isUploadDisabled = () => {
+    switch (selectedSource) {
+      case 'local':
+        return selectedFiles.length === 0 || isUploading;
+      case 'youtube':
+        return (!youtubeUrl || !cookieFile) || isUploading;
+      case 's3':
+        return selectedS3Files.length === 0 || isUploading;
+      default:
+        return true;
+    }
+  };
 
   return (
     <div className="space-y-8">
@@ -355,69 +510,110 @@ export default function UploadStep({
         )}
       </div>
 
-      {/* YouTube URL input */}
-      <div className="space-y-4">
-        <h3 className="text-lg font-medium text-gray-900">Upload from YouTube</h3>
-        <div className="flex gap-4">
-          <input
-            type="text"
-            value={youtubeUrl}
-            onChange={(e) => setYoutubeUrl(e.target.value)}
-            placeholder="Enter YouTube URL"
-            className="flex-1 rounded-lg border border-gray-300 px-4 py-2 focus:border-primary-500 focus:ring-primary-500"
-            disabled={isUploading}
-          />
-        </div>
-        {/* Cookie file upload UI (no upload button, mandatory) */}
-        <div className="mt-2">
-          <label className="block text-sm font-medium text-gray-700 mb-1">Upload a YouTube cookie file (.txt, Netscape format, required)</label>
-          <div className="flex items-center gap-2">
+      {/* Source selector */}
+      <SourceSelector
+        selectedSource={selectedSource}
+        onSourceChange={setSelectedSource}
+        disabled={isUploading}
+      />
+
+      {/* Source-specific content */}
+      {selectedSource === 'youtube' && (
+        <div className="space-y-4">
+          <h3 className="text-lg font-medium text-gray-900">Upload from YouTube</h3>
+          <div className="flex gap-4">
             <input
-              type="file"
-              accept=".txt"
-              ref={cookieInputRef}
-              onChange={handleCookieFileChange}
-              disabled={isUploading || !!cookieFile}
-              className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100"
+              type="text"
+              value={youtubeUrl}
+              onChange={(e) => setYoutubeUrl(e.target.value)}
+              placeholder="Enter YouTube URL"
+              className="flex-1 rounded-lg border border-gray-300 px-4 py-2 focus:border-primary-500 focus:ring-primary-500"
+              disabled={isUploading}
             />
-            {cookieFile && (
-              <button
-                type="button"
-                onClick={removeCookieFile}
-                className="p-2 text-gray-400 hover:text-gray-600"
-                disabled={isUploading}
-              >
-                <XMarkIcon className="h-5 w-5" />
-              </button>
+          </div>
+          {/* Cookie file upload UI (no upload button, mandatory) */}
+          <div className="mt-2">
+            <label className="block text-sm font-medium text-gray-700 mb-1">Upload a YouTube cookie file (.txt, Netscape format, required)</label>
+            <div className="flex items-center gap-2">
+              <input
+                type="file"
+                accept=".txt"
+                ref={cookieInputRef}
+                onChange={handleCookieFileChange}
+                disabled={isUploading || !!cookieFile}
+                className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100"
+              />
+              {cookieFile && (
+                <button
+                  type="button"
+                  onClick={removeCookieFile}
+                  className="p-2 text-gray-400 hover:text-gray-600"
+                  disabled={isUploading}
+                >
+                  <XMarkIcon className="h-5 w-5" />
+                </button>
+              )}
+            </div>
+            {cookieFileName && (
+              <div className="text-xs text-gray-600 mt-1">Selected: {cookieFileName}</div>
             )}
           </div>
-          {cookieFileName && (
-            <div className="text-xs text-gray-600 mt-1">Selected: {cookieFileName}</div>
-          )}
         </div>
-      </div>
+      )}
 
-      {/* Upload zone */}
-      <div className="space-y-4">
-        <h3 className="text-lg font-medium text-gray-900">Or Upload Local Files</h3>
-        <div
-          {...getRootProps()}
-          className={cn(
-            "border-2 border-dashed rounded-lg p-12 text-center cursor-pointer transition-colors",
-            isDragActive ? "border-primary-500 bg-primary-50" : "border-gray-300 hover:border-primary-400",
-            isUploading && "opacity-50 cursor-not-allowed"
-          )}
-        >
-          <input {...getInputProps()} />
-          <CloudArrowUpIcon className="mx-auto h-12 w-12 text-gray-400" />
-          <p className="mt-4 text-lg font-medium text-gray-900">
-            {isUploading ? "Upload in progress..." : "Drag and drop your videos here"}
-          </p>
-          <p className="mt-2 text-sm text-gray-500">
-            {isUploading ? "Please wait while we upload your videos" : "or click to browse files"}
-          </p>
+      {selectedSource === 'local' && (
+        <div className="space-y-4">
+          <h3 className="text-lg font-medium text-gray-900">Upload Local Files</h3>
+          <div
+            {...getRootProps()}
+            className={cn(
+              "border-2 border-dashed rounded-lg p-12 text-center cursor-pointer transition-colors",
+              isDragActive ? "border-primary-500 bg-primary-50" : "border-gray-300 hover:border-primary-400",
+              isUploading && "opacity-50 cursor-not-allowed"
+            )}
+          >
+            <input {...getInputProps()} />
+            <CloudArrowUpIcon className="mx-auto h-12 w-12 text-gray-400" />
+            <p className="mt-4 text-lg font-medium text-gray-900">
+              {isUploading ? "Upload in progress..." : "Drag and drop your videos here"}
+            </p>
+            <p className="mt-2 text-sm text-gray-500">
+              {isUploading ? "Please wait while we upload your videos" : "or click to browse files"}
+            </p>
+          </div>
         </div>
-      </div>
+      )}
+
+      {selectedSource === 's3' && (
+        <div className="space-y-4">
+          <h3 className="text-lg font-medium text-gray-900">Import from Amazon S3</h3>
+          
+          {/* S3 Connector Selector */}
+          <S3ConnectorSelector
+            selectedConnectorId={selectedConnectorId}
+            onConnectorChange={setSelectedConnectorId}
+            onCreateConnector={() => setShowConnectorForm(true)}
+            disabled={isUploading}
+          />
+          
+          {/* S3 File Browser */}
+          {selectedConnectorId && (
+            <S3FileBrowser
+              connectorId={selectedConnectorId}
+              onFileSelect={handleS3FileSelect}
+              disabled={isUploading}
+            />
+          )}
+          
+          {/* S3 Connector Form Modal */}
+          {showConnectorForm && (
+            <S3ConnectorForm
+              onSubmit={handleCreateConnector}
+              onCancel={() => setShowConnectorForm(false)}
+            />
+          )}
+        </div>
+      )}
 
       {/* Requirements */}
       <div className="bg-gray-50 rounded-lg p-4">
@@ -471,8 +667,8 @@ export default function UploadStep({
         </div>
       )}
 
-      {/* Selected files */}
-      {selectedFiles.length > 0 && (
+      {/* Selected files - Local */}
+      {selectedSource === 'local' && selectedFiles.length > 0 && (
         <div className="space-y-4">
           <h3 className="text-lg font-medium text-gray-900">Selected Files</h3>
           <div className="space-y-2">
@@ -489,7 +685,7 @@ export default function UploadStep({
                   {uploadProgress[file.name] && (
                     <div className="mt-2">
                       <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
-                        <div 
+                        <div
                           className={cn(
                             "h-full transition-all duration-300",
                             uploadProgress[file.name].status === 'completed' ? 'bg-green-500' :
@@ -521,6 +717,62 @@ export default function UploadStep({
         </div>
       )}
 
+      {/* Selected files - S3 */}
+      {selectedSource === 's3' && selectedS3Files.length > 0 && (
+        <div className="space-y-4">
+          <h3 className="text-lg font-medium text-gray-900">Selected S3 Files</h3>
+          <div className="space-y-2">
+            {selectedS3Files.map((file, index) => {
+              const fileId = `${file.bucket}/${file.key}`;
+              return (
+                <div
+                  key={index}
+                  className="flex items-center justify-between bg-white p-4 rounded-lg border"
+                >
+                  <div className="flex-1">
+                    <p className="font-medium text-gray-900">{file.name}</p>
+                    <p className="text-sm text-gray-500">
+                      {(file.size / (1024 * 1024)).toFixed(2)} MB
+                    </p>
+                    <p className="text-xs text-gray-400">
+                      {file.bucket}/{file.key}
+                    </p>
+                    {s3UploadProgress[fileId] && (
+                      <div className="mt-2">
+                        <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+                          <div
+                            className={cn(
+                              "h-full transition-all duration-300",
+                              s3UploadProgress[fileId].status === 'completed' ? 'bg-green-500' :
+                              s3UploadProgress[fileId].status === 'error' ? 'bg-red-500' :
+                              'bg-primary-500'
+                            )}
+                            style={{ width: `${s3UploadProgress[fileId].progress}%` }}
+                          />
+                        </div>
+                        {s3UploadProgress[fileId].error && (
+                          <p className="text-sm text-red-500 mt-1">
+                            {s3UploadProgress[fileId].error}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  {!isUploading && (
+                    <button
+                      onClick={() => setSelectedS3Files(prev => prev.filter((_, i) => i !== index))}
+                      className="p-2 text-gray-400 hover:text-gray-600"
+                    >
+                      <XMarkIcon className="h-5 w-5" />
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Error message */}
       {error && (
         <div className="p-4 bg-red-50 text-red-700 rounded-lg">
@@ -539,7 +791,7 @@ export default function UploadStep({
         </button>
         <button
           onClick={handleUpload}
-          disabled={(selectedFiles.length === 0 && (!youtubeUrl || !cookieFile)) || isUploading}
+          disabled={isUploadDisabled()}
           className={cn(
             "px-6 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed",
             isUploading && "bg-primary-400"
