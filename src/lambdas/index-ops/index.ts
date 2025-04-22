@@ -153,61 +153,99 @@ async function handleGetIndex(event: APIGatewayProxyEvent): Promise<APIGatewayPr
         }
       });
 
-      // Initialize structure to store embeddings - each videoId will have an array of embeddings
+      // Initialize structures to store embeddings - each videoId will have arrays for both visual and audio embeddings
       const videoIdToSegmentVisualEmbedding: Record<string, number[][]> = {};
+      const videoIdToSegmentAudioEmbedding: Record<string, number[][]> = {};
+
+      // Process all videos and their segments
       searchResult.hits.hits.forEach((hit: OpenSearchHit) => {
         const videoId = hit._source.video_id;
         
-        // Initialize array for this videoId if it doesn't exist
+        // Initialize arrays for this videoId if they don't exist
         if (!videoIdToSegmentVisualEmbedding[videoId]) {
           videoIdToSegmentVisualEmbedding[videoId] = [];
         }
+        if (!videoIdToSegmentAudioEmbedding[videoId]) {
+          videoIdToSegmentAudioEmbedding[videoId] = [];
+        }
         
-        // Iterate the video_segments and add proper null checks with optional chaining
+        // Iterate through video_segments and extract both visual and audio embeddings
         hit._source.video_segments.forEach((segment: any) => {
+          // Process visual embeddings
           if (segment.segment_visual?.segment_visual_embedding && 
             segment.segment_visual.segment_visual_embedding.length === 2048) {
-            // Push the embedding to the array instead of overwriting
             videoIdToSegmentVisualEmbedding[videoId].push(
               segment.segment_visual.segment_visual_embedding
+            );
+          }
+          
+          // Process audio embeddings
+          if (segment.segment_audio?.segment_audio_embedding && 
+            segment.segment_audio.segment_audio_embedding.length === 768) {
+            videoIdToSegmentAudioEmbedding[videoId].push(
+              segment.segment_audio.segment_audio_embedding
             );
           }
         });
       });
 
-      // Count valid and invalid segments
+      // Count valid and invalid segments for visual embeddings
       const segmentVisualEmbeddingCount = {
         validEmbedding: 0,
         invalidEmbedding: 0,
         totalSegments: 0
       };
 
-      // Count total segments and valid embeddings
+      // Count valid and invalid segments for audio embeddings
+      const segmentAudioEmbeddingCount = {
+        validEmbedding: 0,
+        invalidEmbedding: 0,
+        totalSegments: 0
+      };
+
+      // Calculate visual embedding statistics
       Object.entries(videoIdToSegmentVisualEmbedding).forEach(([videoId, embeddings]) => {
-        // Track the total number of segments
         segmentVisualEmbeddingCount.totalSegments += embeddings.length;
         
-        // Check each embedding
         if (embeddings.length > 0) {
           segmentVisualEmbeddingCount.validEmbedding += embeddings.length;
         } else {
           segmentVisualEmbeddingCount.invalidEmbedding++;
         }
       });
+      
+      // Calculate audio embedding statistics
+      Object.entries(videoIdToSegmentAudioEmbedding).forEach(([videoId, embeddings]) => {
+        segmentAudioEmbeddingCount.totalSegments += embeddings.length;
+        
+        if (embeddings.length > 0) {
+          segmentAudioEmbeddingCount.validEmbedding += embeddings.length;
+        } else {
+          segmentAudioEmbeddingCount.invalidEmbedding++;
+        }
+      });
 
-      // Summarize the detailed information of the index
+      // Summarize the detailed information of the index including both visual and audio embeddings
       const indexSummary = {
         indexId,
         videoCount: searchResult.hits.total.value,
         segmentVisualEmbeddingCount,
-        videoIdToSegmentVisualEmbedding: {}
+        segmentAudioEmbeddingCount,
+        videoIdToSegmentVisualEmbedding: {},
+        videoIdToSegmentAudioEmbedding: {}
       };
 
-      // Parse the option to display detailed vector, curl https://url/indexes/<indexId> -H "displayDetailedVector: true"
+      // Include detailed vectors if requested via query parameter
       const displayDetailedVector = event.queryStringParameters?.displayDetailedVector;
       if (displayDetailedVector === 'true') {
-        console.log('videoIdToSegmentVisualEmbedding: ', videoIdToSegmentVisualEmbedding);
+        console.log('Visual embeddings summary:', 
+          Object.keys(videoIdToSegmentVisualEmbedding).length, 'videos with visual embeddings');
+        console.log('Audio embeddings summary:',
+          Object.keys(videoIdToSegmentAudioEmbedding).length, 'videos with audio embeddings');
+        
+        // Add both embedding types to the response
         indexSummary.videoIdToSegmentVisualEmbedding = videoIdToSegmentVisualEmbedding;
+        indexSummary.videoIdToSegmentAudioEmbedding = videoIdToSegmentAudioEmbedding;
       }
 
       return {
