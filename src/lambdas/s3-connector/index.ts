@@ -6,7 +6,8 @@ import {
   ListObjectsV2Command,
   GetObjectCommand,
   CopyObjectCommand,
-  PutObjectCommand
+  PutObjectCommand,
+  GetBucketLocationCommand
 } from '@aws-sdk/client-s3';
 import { 
   STSClient, 
@@ -156,12 +157,58 @@ async function importS3File(
   const timestamp = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
   const destinationKey = `RawVideos/${timestamp}/${indexId}/${videoId}/${fileName}`;
   
-  // Use CopyObject directly
-  await s3.send(new CopyObjectCommand({
-    Bucket: VIDEO_BUCKET,
-    Key: destinationKey,
-    CopySource: `${sourceBucket}/${encodeURIComponent(sourceKey)}`
-  }));
+  try {
+    // Try to use CopyObject directly
+    await s3.send(new CopyObjectCommand({
+      Bucket: VIDEO_BUCKET,
+      Key: destinationKey,
+      CopySource: `${sourceBucket}/${encodeURIComponent(sourceKey)}`
+    }));
+  } catch (error: any) {
+    // If we get a region error, try to get bucket location and create a region-specific client
+    if (error.name === 'PermanentRedirect' || (error.message && error.message.includes('endpoint'))) {
+      console.error('Region error when copying S3 object:', error);
+      
+      // Try to determine the bucket region
+      try {
+        const getBucketLocationCommand = new GetBucketLocationCommand({ Bucket: sourceBucket });
+        const locationResponse = await s3Client.send(getBucketLocationCommand);
+        const bucketRegion = locationResponse.LocationConstraint || 'us-east-1';
+        
+        console.log(`Source bucket ${sourceBucket} is in region ${bucketRegion}`);
+        
+        // Create a region-specific client
+        const regionS3Client = new S3Client({
+          credentials: (s3Client as any).config.credentials,
+          region: bucketRegion
+        });
+        
+        // First get the object using the region-specific client
+        const getObjectCommand = new GetObjectCommand({
+          Bucket: sourceBucket,
+          Key: sourceKey
+        });
+        
+        const getObjectResponse = await regionS3Client.send(getObjectCommand);
+        
+        if (!getObjectResponse.Body) {
+          throw new Error('Failed to get object from source bucket');
+        }
+        
+        // Then upload it to the destination bucket
+        await s3.send(new PutObjectCommand({
+          Bucket: VIDEO_BUCKET,
+          Key: destinationKey,
+          Body: getObjectResponse.Body
+        }));
+      } catch (regionError) {
+        console.error('Error handling cross-region copy:', regionError);
+        throw regionError;
+      }
+    } else {
+      throw error;
+    }
+  }
 }
 
 // Main handler
@@ -569,8 +616,14 @@ async function listBuckets(connectorId: string, userId: string): Promise<LambdaR
       };
     }
 
+    // Use the service role ARN from environment variables instead of connector's roleArn
+    const roleArn = SERVICE_ROLE_ARN;
+    
+    // Log the role being used
+    console.log(`Assuming role: ${roleArn}`);
+    
     // Assume the role to get temporary credentials
-    const credentials = await assumeRole(getResult.Item.roleArn, getResult.Item.externalId);
+    const credentials = await assumeRole(roleArn, getResult.Item.externalId);
 
     // Create an S3 client with the temporary credentials
     const s3Client = new S3Client({
@@ -579,20 +632,65 @@ async function listBuckets(connectorId: string, userId: string): Promise<LambdaR
         secretAccessKey: credentials.secretAccessKey,
         sessionToken: credentials.sessionToken
       }
+      // Note: For listing buckets, we don't need to specify a region
+      // The ListBuckets operation is global and works from any region
     });
 
-    // List buckets
-    const listBucketsCommand = new ListBucketsCommand({});
-    const listBucketsResponse = await s3Client.send(listBucketsCommand);
+    try {
+      // List buckets
+      const listBucketsCommand = new ListBucketsCommand({});
+      const listBucketsResponse = await s3Client.send(listBucketsCommand);
 
-    // Extract bucket names
-    const buckets = (listBucketsResponse.Buckets || []).map(bucket => bucket.Name);
+      // Extract bucket names
+      const buckets = (listBucketsResponse.Buckets || []).map(bucket => bucket.Name);
 
-    return {
-      statusCode: STATUS_CODES.OK,
-      headers: corsHeaders,
-      body: JSON.stringify(buckets)
-    };
+      return {
+        statusCode: STATUS_CODES.OK,
+        headers: corsHeaders,
+        body: JSON.stringify(buckets)
+      };
+    } catch (error: any) {
+      // If we get a cross-region error (unlikely for ListBuckets, but just in case)
+      if (error.name === 'PermanentRedirect' || (error.message && error.message.includes('endpoint'))) {
+        console.error('Region error when listing buckets:', error);
+        
+        // Try to extract region from error message
+        const regionMatch = error.message && error.message.match(/endpoint: "(.+?)\.amazonaws\.com/);
+        let extractedRegion = '';
+        
+        if (regionMatch && regionMatch[1]) {
+          extractedRegion = regionMatch[1].replace('s3.', '').replace('s3-', '');
+          console.log(`Using explicit region for bucket listing: ${extractedRegion}`);
+          
+          // Create a new S3 client with the extracted region
+          const regionS3Client = new S3Client({
+            credentials: {
+              accessKeyId: credentials.accessKeyId,
+              secretAccessKey: credentials.secretAccessKey,
+              sessionToken: credentials.sessionToken
+            },
+            region: extractedRegion
+          });
+          
+          // Retry with the region-specific client
+          const listBucketsCommand = new ListBucketsCommand({});
+          const listBucketsResponse = await regionS3Client.send(listBucketsCommand);
+          
+          // Extract bucket names
+          const buckets = (listBucketsResponse.Buckets || []).map(bucket => bucket.Name);
+          
+          return {
+            statusCode: STATUS_CODES.OK,
+            headers: corsHeaders,
+            body: JSON.stringify(buckets)
+          };
+        } else {
+          throw error; // Re-throw if we can't extract region
+        }
+      } else {
+        throw error; // Re-throw other errors
+      }
+    }
   } catch (error) {
     console.error('Error listing buckets:', error);
     return {
@@ -638,8 +736,14 @@ async function listObjects(event: APIGatewayProxyEvent, connectorId: string, buc
     const continuationToken = queryParams.continuationToken;
     const maxKeys = parseInt(queryParams.maxKeys || '100', 10);
 
+    // Use the service role ARN from environment variables
+    const roleArn = SERVICE_ROLE_ARN;
+    
+    // Log the role being used
+    console.log(`Assuming role: ${roleArn}`);
+
     // Assume the role to get temporary credentials
-    const credentials = await assumeRole(getResult.Item.roleArn, getResult.Item.externalId);
+    const credentials = await assumeRole(roleArn, getResult.Item.externalId);
 
     // Create an S3 client with the temporary credentials
     const s3Client = new S3Client({
@@ -650,33 +754,115 @@ async function listObjects(event: APIGatewayProxyEvent, connectorId: string, buc
       }
     });
 
-    // List objects
-    const listObjectsCommand = new ListObjectsV2Command({
-      Bucket: bucket,
-      Prefix: prefix,
-      ContinuationToken: continuationToken,
-      MaxKeys: maxKeys
+    // First try to get the bucket location to determine its region
+    let bucketRegion = 'us-east-1'; // Default to US East 1
+    try {
+      const getBucketLocationCommand = new GetBucketLocationCommand({ Bucket: bucket });
+      const locationResponse = await s3Client.send(getBucketLocationCommand);
+      // S3 returns null or empty string for us-east-1
+      bucketRegion = locationResponse.LocationConstraint || 'us-east-1';
+      console.log(`Bucket ${bucket} is in region ${bucketRegion}`);
+    } catch (error) {
+      console.error('Error getting bucket location:', error);
+      // If we can't determine the region, we'll try with the default client
+      // and handle any redirect errors below
+    }
+
+    // Create a region-specific client if we determined the region
+    const regionS3Client = new S3Client({
+      credentials: {
+        accessKeyId: credentials.accessKeyId,
+        secretAccessKey: credentials.secretAccessKey,
+        sessionToken: credentials.sessionToken
+      },
+      region: bucketRegion
     });
 
-    const listObjectsResponse = await s3Client.send(listObjectsCommand);
+    try {
+      // List objects with the region-specific client
+      const listObjectsCommand = new ListObjectsV2Command({
+        Bucket: bucket,
+        Prefix: prefix,
+        ContinuationToken: continuationToken,
+        MaxKeys: maxKeys
+      });
 
-    // Format the response
-    const response: S3ListResponse = {
-      files: (listObjectsResponse.Contents || []).map(item => ({
-        key: item.Key || '',
-        name: item.Key?.split('/').pop() || '',
-        size: item.Size || 0,
-        lastModified: item.LastModified?.toISOString() || '',
-        type: item.Key?.split('.').pop() || ''
-      })),
-      nextContinuationToken: listObjectsResponse.NextContinuationToken
-    };
+      const listObjectsResponse = await regionS3Client.send(listObjectsCommand);
 
-    return {
-      statusCode: STATUS_CODES.OK,
-      headers: corsHeaders,
-      body: JSON.stringify(response)
-    };
+      // Format the response
+      const response: S3ListResponse = {
+        files: (listObjectsResponse.Contents || []).map(item => ({
+          key: item.Key || '',
+          name: item.Key?.split('/').pop() || '',
+          size: item.Size || 0,
+          lastModified: item.LastModified?.toISOString() || '',
+          type: item.Key?.split('.').pop() || ''
+        })),
+        nextContinuationToken: listObjectsResponse.NextContinuationToken
+      };
+
+      return {
+        statusCode: STATUS_CODES.OK,
+        headers: corsHeaders,
+        body: JSON.stringify(response)
+      };
+    } catch (error: any) {
+      // Handle PermanentRedirect error - this occurs when the bucket is in a different region
+      if (error.name === 'PermanentRedirect' || (error.message && error.message.includes('endpoint'))) {
+        // Try to extract region from error message
+        const regionMatch = error.message && error.message.match(/endpoint: "(.+?)\.amazonaws\.com/);
+        let extractedRegion = '';
+        
+        if (regionMatch && regionMatch[1]) {
+          extractedRegion = regionMatch[1].replace('s3.', '').replace('s3-', '');
+          console.log(`Extracted region from error: ${extractedRegion}`);
+        } else {
+          console.error('Could not extract region from error:', error);
+          throw error; // Re-throw if we can't extract region
+        }
+        
+        // Create a new S3 client with the extracted region
+        const redirectS3Client = new S3Client({
+          credentials: {
+            accessKeyId: credentials.accessKeyId,
+            secretAccessKey: credentials.secretAccessKey,
+            sessionToken: credentials.sessionToken
+          },
+          region: extractedRegion
+        });
+        
+        // Retry with the new region-specific client
+        const listObjectsCommand = new ListObjectsV2Command({
+          Bucket: bucket,
+          Prefix: prefix,
+          ContinuationToken: continuationToken,
+          MaxKeys: maxKeys
+        });
+        
+        const listObjectsResponse = await redirectS3Client.send(listObjectsCommand);
+        
+        // Format the response
+        const response: S3ListResponse = {
+          files: (listObjectsResponse.Contents || []).map(item => ({
+            key: item.Key || '',
+            name: item.Key?.split('/').pop() || '',
+            size: item.Size || 0,
+            lastModified: item.LastModified?.toISOString() || '',
+            type: item.Key?.split('.').pop() || ''
+          })),
+          nextContinuationToken: listObjectsResponse.NextContinuationToken
+        };
+        
+        return {
+          statusCode: STATUS_CODES.OK,
+          headers: corsHeaders,
+          body: JSON.stringify(response)
+        };
+      } else {
+        // Re-throw other errors
+        throw error;
+      }
+    }
   } catch (error) {
     console.error('Error listing objects:', error);
     return {
@@ -731,8 +917,14 @@ async function searchObjects(event: APIGatewayProxyEvent, connectorId: string, u
       };
     }
 
+    // Use the service role ARN from environment variables
+    const roleArn = SERVICE_ROLE_ARN;
+    
+    // Log the role being used
+    console.log(`Assuming role: ${roleArn}`);
+
     // Assume the role to get temporary credentials
-    const credentials = await assumeRole(getResult.Item.roleArn, getResult.Item.externalId);
+    const credentials = await assumeRole(roleArn, getResult.Item.externalId);
 
     // Create an S3 client with the temporary credentials
     const s3Client = new S3Client({
@@ -743,33 +935,115 @@ async function searchObjects(event: APIGatewayProxyEvent, connectorId: string, u
       }
     });
 
-    // List objects with the query as prefix
-    const listObjectsCommand = new ListObjectsV2Command({
-      Bucket: bucket,
-      Prefix: query,
-      ContinuationToken: continuationToken,
-      MaxKeys: maxKeys
+    // First try to get the bucket location to determine its region
+    let bucketRegion = 'us-east-1'; // Default to US East 1
+    try {
+      const getBucketLocationCommand = new GetBucketLocationCommand({ Bucket: bucket });
+      const locationResponse = await s3Client.send(getBucketLocationCommand);
+      // S3 returns null or empty string for us-east-1
+      bucketRegion = locationResponse.LocationConstraint || 'us-east-1';
+      console.log(`Bucket ${bucket} is in region ${bucketRegion}`);
+    } catch (error) {
+      console.error('Error getting bucket location:', error);
+      // If we can't determine the region, we'll try with the default client
+      // and handle any redirect errors below
+    }
+
+    // Create a region-specific client if we determined the region
+    const regionS3Client = new S3Client({
+      credentials: {
+        accessKeyId: credentials.accessKeyId,
+        secretAccessKey: credentials.secretAccessKey,
+        sessionToken: credentials.sessionToken
+      },
+      region: bucketRegion
     });
 
-    const listObjectsResponse = await s3Client.send(listObjectsCommand);
+    try {
+      // List objects with the query as prefix using the region-specific client
+      const listObjectsCommand = new ListObjectsV2Command({
+        Bucket: bucket,
+        Prefix: query,
+        ContinuationToken: continuationToken,
+        MaxKeys: maxKeys
+      });
 
-    // Format the response
-    const response: S3ListResponse = {
-      files: (listObjectsResponse.Contents || []).map(item => ({
-        key: item.Key || '',
-        name: item.Key?.split('/').pop() || '',
-        size: item.Size || 0,
-        lastModified: item.LastModified?.toISOString() || '',
-        type: item.Key?.split('.').pop() || ''
-      })),
-      nextContinuationToken: listObjectsResponse.NextContinuationToken
-    };
+      const listObjectsResponse = await regionS3Client.send(listObjectsCommand);
 
-    return {
-      statusCode: STATUS_CODES.OK,
-      headers: corsHeaders,
-      body: JSON.stringify(response)
-    };
+      // Format the response
+      const response: S3ListResponse = {
+        files: (listObjectsResponse.Contents || []).map(item => ({
+          key: item.Key || '',
+          name: item.Key?.split('/').pop() || '',
+          size: item.Size || 0,
+          lastModified: item.LastModified?.toISOString() || '',
+          type: item.Key?.split('.').pop() || ''
+        })),
+        nextContinuationToken: listObjectsResponse.NextContinuationToken
+      };
+
+      return {
+        statusCode: STATUS_CODES.OK,
+        headers: corsHeaders,
+        body: JSON.stringify(response)
+      };
+    } catch (error: any) {
+      // Handle PermanentRedirect error - this occurs when the bucket is in a different region
+      if (error.name === 'PermanentRedirect' || (error.message && error.message.includes('endpoint'))) {
+        // Try to extract region from error message
+        const regionMatch = error.message && error.message.match(/endpoint: "(.+?)\.amazonaws\.com/);
+        let extractedRegion = '';
+        
+        if (regionMatch && regionMatch[1]) {
+          extractedRegion = regionMatch[1].replace('s3.', '').replace('s3-', '');
+          console.log(`Extracted region from error: ${extractedRegion}`);
+        } else {
+          console.error('Could not extract region from error:', error);
+          throw error; // Re-throw if we can't extract region
+        }
+        
+        // Create a new S3 client with the extracted region
+        const redirectS3Client = new S3Client({
+          credentials: {
+            accessKeyId: credentials.accessKeyId,
+            secretAccessKey: credentials.secretAccessKey,
+            sessionToken: credentials.sessionToken
+          },
+          region: extractedRegion
+        });
+        
+        // Retry with the new region-specific client
+        const listObjectsCommand = new ListObjectsV2Command({
+          Bucket: bucket,
+          Prefix: query,
+          ContinuationToken: continuationToken,
+          MaxKeys: maxKeys
+        });
+        
+        const listObjectsResponse = await redirectS3Client.send(listObjectsCommand);
+        
+        // Format the response
+        const response: S3ListResponse = {
+          files: (listObjectsResponse.Contents || []).map(item => ({
+            key: item.Key || '',
+            name: item.Key?.split('/').pop() || '',
+            size: item.Size || 0,
+            lastModified: item.LastModified?.toISOString() || '',
+            type: item.Key?.split('.').pop() || ''
+          })),
+          nextContinuationToken: listObjectsResponse.NextContinuationToken
+        };
+        
+        return {
+          statusCode: STATUS_CODES.OK,
+          headers: corsHeaders,
+          body: JSON.stringify(response)
+        };
+      } else {
+        // Re-throw other errors
+        throw error;
+      }
+    }
   } catch (error) {
     console.error('Error searching objects:', error);
     return {
@@ -828,8 +1102,14 @@ async function importFromS3(event: APIGatewayProxyEvent, userId: string): Promis
       };
     }
 
+    // Use the service role ARN from environment variables
+    const roleArn = SERVICE_ROLE_ARN;
+    
+    // Log the role being used
+    console.log(`Assuming role: ${roleArn}`);
+
     // Assume the role to get temporary credentials
-    const credentials = await assumeRole(getResult.Item.roleArn, getResult.Item.externalId);
+    const credentials = await assumeRole(roleArn, getResult.Item.externalId);
 
     // Create an S3 client with the temporary credentials
     const s3Client = new S3Client({
@@ -838,6 +1118,7 @@ async function importFromS3(event: APIGatewayProxyEvent, userId: string): Promis
         secretAccessKey: credentials.secretAccessKey,
         sessionToken: credentials.sessionToken
       }
+      // Note: We'll handle region-specific operations in the importS3File function
     });
 
     // Process each file
@@ -847,17 +1128,57 @@ async function importFromS3(event: APIGatewayProxyEvent, userId: string): Promis
         const fileName = key.split('/').pop() || key;
         const videoId = uuidv4();
         
+        // Get file size information first
+        let fileSize = 0;
+        try {
+          // Try to get the file size using a HEAD request
+          const headObjectCommand = new GetObjectCommand({
+            Bucket: bucket,
+            Key: key,
+            Range: 'bytes=0-0' // Just get the first byte to check if file exists and get metadata
+          });
+          
+          try {
+            const headObjectResponse = await s3Client.send(headObjectCommand);
+            fileSize = headObjectResponse.ContentLength || 0;
+          } catch (error: any) {
+            // If we get a region error, try to determine the bucket region
+            if (error.name === 'PermanentRedirect' || (error.message && error.message.includes('endpoint'))) {
+              // Try to extract region from error message
+              const regionMatch = error.message && error.message.match(/endpoint: "(.+?)\.amazonaws\.com/);
+              let extractedRegion = '';
+              
+              if (regionMatch && regionMatch[1]) {
+                extractedRegion = regionMatch[1].replace('s3.', '').replace('s3-', '');
+                console.log(`Using region ${extractedRegion} for bucket ${bucket}`);
+                
+                // Create a region-specific client
+                const regionS3Client = new S3Client({
+                  credentials: {
+                    accessKeyId: credentials.accessKeyId,
+                    secretAccessKey: credentials.secretAccessKey,
+                    sessionToken: credentials.sessionToken
+                  },
+                  region: extractedRegion
+                });
+                
+                // Retry with the region-specific client
+                const retryHeadObjectResponse = await regionS3Client.send(headObjectCommand);
+                fileSize = retryHeadObjectResponse.ContentLength || 0;
+              } else {
+                console.error('Could not extract region from error:', error);
+              }
+            } else {
+              console.error('Error getting file size:', error);
+            }
+          }
+        } catch (sizeError) {
+          console.error('Failed to get file size:', sizeError);
+          // Continue with import even if we couldn't get the size
+        }
+        
         // Import the file
         await importS3File(s3Client, bucket, key, videoId, body.indexId);
-        
-        // Get the file size (if needed)
-        const headObjectCommand = new GetObjectCommand({
-          Bucket: bucket,
-          Key: key
-        });
-        
-        const headObjectResponse = await s3Client.send(headObjectCommand);
-        const fileSize = headObjectResponse.ContentLength || 0;
         
         return {
           videoId,

@@ -21,6 +21,7 @@ import * as cr from 'aws-cdk-lib/custom-resources';
 import * as nodejslambda from 'aws-cdk-lib/aws-lambda-nodejs';
 import { S3EventSource, SnsEventSource, SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import { S3ConnectorStack } from './s3-connector-stack';
 
 interface VideoSearchStackProps extends cdk.StackProps {
   maxAzs: number;
@@ -48,6 +49,7 @@ export class VideoSearchStack extends cdk.Stack {
   private readonly userPool: cognito.UserPool;
   private readonly userPoolClient: cognito.UserPoolClient;
   private readonly identityPool: cognito.CfnIdentityPool;
+  private readonly s3ConnectorStack?: S3ConnectorStack;
   constructor(scope: Construct, id: string, props: VideoSearchStackProps) {
     super(scope, id, props);
 
@@ -108,6 +110,9 @@ export class VideoSearchStack extends cdk.Stack {
 
     // Initialize API Gateway
     const api = this.createApiGateway(lambdaFunctions);
+
+    // Create S3 connector stack
+    this.s3ConnectorStack = this.createS3ConnectorStack(api, deploymentEnv);
 
     // Set up permissions
     this.setupPermissions(lambdaFunctions, this.videoEmbeddingService, this.rekognitionTopic, this.indexesTable);
@@ -1505,5 +1510,15 @@ export class VideoSearchStack extends cdk.Stack {
     topic.grantPublish(rekognitionRole);
 
     return { topic, rekognitionRole };
+  }
+
+  private createS3ConnectorStack(api: apigateway.RestApi, deploymentEnv: string): S3ConnectorStack {
+    return new S3ConnectorStack(this, 'S3ConnectorStack', {
+      vpc: this.vpc,
+      api: api,
+      videoBucket: this.videoBucket.bucketName,
+      dynamodbEndpoint: this.dynamodbEndpoint,
+      deploymentEnvironment: deploymentEnv
+    });
   }
 }

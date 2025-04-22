@@ -6,7 +6,7 @@ import { XMarkIcon, ClipboardDocumentIcon } from '@heroicons/react/24/outline'
 const API_ENDPOINT = process.env.NEXT_PUBLIC_API_URL
 
 interface S3ConnectorFormProps {
-  onSubmit: (connectorData: { name: string; roleArn: string }) => Promise<void>
+  onSubmit: (connectorData: { name: string; roleArn: string; externalId: string }) => Promise<void>
   onCancel: () => void
 }
 
@@ -48,7 +48,7 @@ export default function S3ConnectorForm({ onSubmit, onCancel }: S3ConnectorFormP
     setError(null)
     
     try {
-      await onSubmit({ name, roleArn })
+      await onSubmit({ name, roleArn, externalId })
     } catch (err) {
       console.error('Error creating S3 connector:', err)
       setError(err instanceof Error ? err.message : 'Failed to create S3 connector')
@@ -75,7 +75,7 @@ export default function S3ConnectorForm({ onSubmit, onCancel }: S3ConnectorFormP
       {
         Effect: 'Allow',
         Principal: {
-          AWS: 'arn:aws:iam::ACCOUNT_ID:role/video-search-service-role'
+          AWS: 'SERVICE_ROLE_ARN' // This will be replaced by the S3ConnectorRole ARN from the backend
         },
         Action: 'sts:AssumeRole',
         Condition: {
@@ -94,18 +94,14 @@ export default function S3ConnectorForm({ onSubmit, onCancel }: S3ConnectorFormP
       {
         Effect: 'Allow',
         Action: [
-          's3:ListBucket'
+          's3:ListBucket',
+          's3:GetObject',
+          's3:GetObjectVersion',
+          's3:ListAllMyBuckets',
+          's3:GetBucketLocation'
         ],
         Resource: [
-          'arn:aws:s3:::your-bucket-name'
-        ]
-      },
-      {
-        Effect: 'Allow',
-        Action: [
-          's3:GetObject'
-        ],
-        Resource: [
+          'arn:aws:s3:::your-bucket-name',
           'arn:aws:s3:::your-bucket-name/*'
         ]
       }
@@ -210,6 +206,7 @@ export default function S3ConnectorForm({ onSubmit, onCancel }: S3ConnectorFormP
                       <ClipboardDocumentIcon className="h-4 w-4 text-gray-500" />
                     </button>
                   </div>
+                  <p className="text-xs text-gray-600 mt-1">Note: Replace 'SERVICE_ROLE_ARN' with the actual role ARN from your administrator.</p>
                 </li>
                 <li>
                   Attach a policy with these permissions (update bucket name):
