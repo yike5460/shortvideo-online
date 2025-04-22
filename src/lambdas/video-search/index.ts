@@ -120,10 +120,15 @@ const STATUS_CODES = {
 };
 
 // Add a function to generate embeddings using the external endpoint
-async function generateEmbedding(text: string): Promise<number[] | undefined> {
+async function generateEmbedding(text: string): Promise<{
+  vision_embedding: number[] | undefined;
+  audio_embedding: number[] | undefined;
+}> {
+  const defaultResponse = { vision_embedding: undefined, audio_embedding: undefined };
+  
   if (!EXTERNAL_EMBEDDING_ENDPOINT) {
     console.warn('External embedding endpoint not configured');
-    return undefined;
+    return defaultResponse;
   }
 
   try {
@@ -141,16 +146,17 @@ async function generateEmbedding(text: string): Promise<number[] | undefined> {
     // }
     // ```
 
-    // **Response**
+    // **Response (Updated format)**
     // ```json
     // {
-    //     "embedding": [...]  // For single text input
+    //     "vision_embedding": [...],  // For vision modality
+    //     "audio_embedding": [...]    // For audio modality
     // }
     // ```
-    // or
+    // or legacy format:
     // ```json
     // {
-    //     "embedding": [[...], [...], [...]]  // For multiple text inputs
+    //     "embedding": [...]  // For single text input (treated as vision embedding)
     // }
     // ```
     const response = await fetch(`${EXTERNAL_EMBEDDING_ENDPOINT}/embed-text`, {
@@ -165,11 +171,44 @@ async function generateEmbedding(text: string): Promise<number[] | undefined> {
       throw new Error(`Error from embedding service: ${response.statusText}`);
     }
     
-    const data = await response.json() as { embedding: number[] };
-    return data.embedding;
+    const rawData = await response.json();
+    
+    // Handle both the new dual-embedding format and legacy single embedding format
+    if (rawData && typeof rawData === 'object') {
+      // New format with separate vision and audio embeddings
+      if ('vision_embedding' in rawData || 'audio_embedding' in rawData) {
+        const visionEmbedding = 'vision_embedding' in rawData && 
+          Array.isArray(rawData.vision_embedding) ? 
+          rawData.vision_embedding as number[] : undefined;
+          
+        const audioEmbedding = 'audio_embedding' in rawData && 
+          Array.isArray(rawData.audio_embedding) ? 
+          rawData.audio_embedding as number[] : undefined;
+        
+        console.log(`Successfully generated embeddings: Vision embedding length: ${visionEmbedding?.length || 0}, Audio embedding length: ${audioEmbedding?.length || 0}`);
+        
+        return {
+          vision_embedding: visionEmbedding,
+          audio_embedding: audioEmbedding
+        };
+      } 
+      // Legacy format with single embedding (treat as vision embedding)
+      else if ('embedding' in rawData && Array.isArray(rawData.embedding)) {
+        const embedding = rawData.embedding as number[];
+        console.log(`Successfully generated legacy embedding, length: ${embedding.length || 0}`);
+        
+        return {
+          vision_embedding: embedding,
+          audio_embedding: undefined
+        };
+      }
+    }
+    
+    console.warn('Unexpected response format from embedding service');
+    return defaultResponse;
   } catch (error) {
     console.error('Error calling external embedding service:', error);
-    return undefined;
+    return defaultResponse;
   }
 }
 
@@ -690,8 +729,7 @@ async function validateVideos(videosWithScores: [string, number][], textDescript
 
 // Update the transform function to normalize OpenSearch confidence scores, such score is relative and per index and per query, calculated using TF-IDF by default
 const transformSearchResults = async (hits: any[]): Promise<VideoResult[]> => {
-  console.log('Transforming search results:', JSON.stringify(hits, null, 2));
-  
+
   // Find the max video score for normalization across all videos
   const maxVideoScore = Math.max(...hits.map(hit => hit._score || 0));
   
@@ -705,6 +743,7 @@ const transformSearchResults = async (hits: any[]): Promise<VideoResult[]> => {
     const segmentScores = new Map<string, number>();
     const segmentOffsetMap = new Map<number, any>();
     const matchedSegments: any[] = [];
+    const processedSegmentIds = new Set<string>(); // Track processed segment IDs to avoid duplicates
     
     // First, create a mapping between offsets and segment objects
     if (hit._source.video_segments) {
@@ -730,7 +769,19 @@ const transformSearchResults = async (hits: any[]): Promise<VideoResult[]> => {
         
         if (offset !== undefined) {
           const segment = segmentOffsetMap.get(offset);
-          if (segment) {
+          // Deduplicate segments by segment_id due to the nature of the OpenSearch k-NN search below:
+          // 1. Each function evaluates segments independently:
+          // - Vision embedding function evaluates all segments
+          // - Audio embedding function evaluates all segments again
+          // 2. Segments that score highly in both functions can be counted multiple times when OpenSearch:
+          // - Ranks segments by each function's score
+          // - Returns the top N (in your case, 5) inner hits
+          // 3. Doesn't natively deduplicate these inner hits
+          // If one particular segment is by far the best match for your query from both visual and audio perspectives, it could fill all 5 slots of your inner_hits result set.
+          if (segment && !processedSegmentIds.has(segment.segment_id)) {
+            // Add to processed set to avoid duplicates
+            processedSegmentIds.add(segment.segment_id);
+            
             // Normalize the score relative to the highest score within this video, not used for now
             const normalizedScore = maxInnerScore > 0 ? score / maxInnerScore : 0;
             // segmentScores.set(segment.segment_id, normalizedScore);
@@ -855,12 +906,27 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
     if (searchQuery.advancedSearch && EXTERNAL_EMBEDDING_ENDPOINT) {
       console.log('Using advanced search with external embedding endpoint:', EXTERNAL_EMBEDDING_ENDPOINT);
 
-      // Generate an embedding for the search query
-      const embedding = await generateEmbedding(searchQuery.searchQuery);
+      // Generate embeddings for the search query
+      const embeddings = await generateEmbedding(searchQuery.searchQuery);
       
-      if (embedding) {
-        // Build a k-NN search query for OpenSearch based on documentation
-        const searchBody = {
+      // Check if we have at least one valid embedding type
+      if (embeddings.vision_embedding || embeddings.audio_embedding) {
+        // Add default weights if not provided
+        const weights = searchQuery.weights || { video: 0.5, audio: 0.5, text: 0, image: 0 };
+        
+        // Normalize weights to add up to 1.0
+        const videoWeight = weights.video || 0.5;
+        const audioWeight = weights.audio || 0.5;
+        
+        // Calculate normalized weights
+        const totalWeight = videoWeight + audioWeight;
+        const normalizedVideoWeight = videoWeight / totalWeight;
+        const normalizedAudioWeight = audioWeight / totalWeight;
+        
+        console.log(`Search weights - Video: ${normalizedVideoWeight}, Audio: ${normalizedAudioWeight}`);
+
+        // Build a weighted search query for OpenSearch that combines visual and audio embeddings
+        const searchBody: any = {
           size: searchQuery.topK || 3,
           _source: [
             'video_id',
@@ -883,42 +949,53 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
             'video_segments.segment_video_s3_path',
             'video_segments.segment_video_preview_url',
             'video_segments.segment_video_thumbnail_s3_path',
-            'video_segments.segment_video_thumbnail_url'
-            // Removed video_objects fields - not needed in search results page
+            'video_segments.segment_video_thumbnail_url',
+            'video_segments.segment_visual',
+            'video_segments.segment_audio'
           ],
           query: {
             nested: {
               path: "video_segments",
               query: {
-                "script_score": {
-                  "query": {
-                    "match_all": {}
+                function_score: {
+                  query: {
+                    match_all: {} // Match all documents initially
                   },
-                  "script": {
-                    "source": "knn_score",
-                    "lang": "knn",
-                    "params": {
-                      "field": "video_segments.segment_visual.segment_visual_embedding",
-                      "query_value": embedding,
-                      "space_type": "cosinesimil"
-                    }
-                  }
+                  functions: [
+                    // Add visual embedding function if available with appropriate weight
+                    ...(embeddings.vision_embedding ? [{
+                      script_score: {
+                        script: {
+                          source: "knn_score",
+                          lang: "knn",
+                          params: {
+                            field: "video_segments.segment_visual.segment_visual_embedding",
+                            query_value: embeddings.vision_embedding,
+                            space_type: "cosinesimil"
+                          }
+                        }
+                      },
+                      weight: normalizedVideoWeight
+                    }] : []),
+                    // Add audio embedding function if available with appropriate weight
+                    ...(embeddings.audio_embedding ? [{
+                      script_score: {
+                        script: {
+                          source: "knn_score",
+                          lang: "knn",
+                          params: {
+                            field: "video_segments.segment_audio.segment_audio_embedding",
+                            query_value: embeddings.audio_embedding,
+                            space_type: "cosinesimil"
+                          }
+                        }
+                      },
+                      weight: normalizedAudioWeight
+                    }] : [])
+                  ],
+                  score_mode: "sum", // Sum the scores from different embedding searches
+                  boost_mode: "replace" // Replace the original score with our weighted score
                 }
-                // knn: {
-                //   "video_segments.segment_visual.segment_visual_embedding": {
-                //     vector: embedding,
-                //     // Number of nearest neighbors to find
-                //     k: 20,
-                //     // Filter's Preemptive Effect: acts before the k-NN algorithm even selects the top k neighbors
-                //     // filter: {
-                //     //   range: {
-                //     //     _score: {
-                //     //       gte: searchQuery.minConfidence || 0 // Apply minConfidence filter
-                //     //     }
-                //     //   }
-                //     // }
-                //   }
-                // }
               },
               inner_hits: {
                 _source: [
@@ -931,7 +1008,7 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
                   "segment_video_thumbnail_s3_path",
                   "segment_video_thumbnail_url"
                 ],
-                size: 10,
+                size: 5,
                 name: "matched_segments"
               }
             }
