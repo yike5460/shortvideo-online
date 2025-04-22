@@ -730,6 +730,8 @@ async function validateVideos(videosWithScores: [string, number][], textDescript
 // Update the transform function to normalize OpenSearch confidence scores, such score is relative and per index and per query, calculated using TF-IDF by default
 const transformSearchResults = async (hits: any[]): Promise<VideoResult[]> => {
 
+  console.log('Transforming search results:', JSON.stringify(hits, null, 2));
+  
   // Find the max video score for normalization across all videos
   const maxVideoScore = Math.max(...hits.map(hit => hit._score || 0));
   
@@ -759,28 +761,26 @@ const transformSearchResults = async (hits: any[]): Promise<VideoResult[]> => {
       const maxInnerScore = Math.max(...innerHits.map((segHit: any) => segHit._score || 0));
       
       console.log(`Max inner score: ${maxInnerScore}`);
-      console.log('Inner hits:', JSON.stringify(innerHits, null, 2));
       
       // Map scores to segments using the offset and collect matched segments
       innerHits.forEach((segHit: any) => {
         const offset = segHit._nested?.offset;
-        // 将分数除以2来将范围从0-2转换为0-1
+        // Scale score to 0-1 range (typically OpenSearch scores are between 0-2)
         const score = (segHit._score || 0) / 2;
         
         if (offset !== undefined) {
           const segment = segmentOffsetMap.get(offset);
-          // Deduplicate segments by segment_id due to the nature of the OpenSearch k-NN search below:
-          // 1. Each function evaluates segments independently:
-          // - Vision embedding function evaluates all segments
-          // - Audio embedding function evaluates all segments again
-          // 2. Segments that score highly in both functions can be counted multiple times when OpenSearch:
-          // - Ranks segments by each function's score
-          // - Returns the top N (in your case, 5) inner hits
-          // 3. Doesn't natively deduplicate these inner hits
-          // If one particular segment is by far the best match for your query from both visual and audio perspectives, it could fill all 5 slots of your inner_hits result set.
+          // Skip segments we've already processed
           if (segment && !processedSegmentIds.has(segment.segment_id)) {
-            // Add to processed set to avoid duplicates
+            // Add to processed set to avoid duplicates 
             processedSegmentIds.add(segment.segment_id);
+            
+            // Deduplicate segments by segment_id due to the nature of the OpenSearch k-NN search:
+            // 1. Each function evaluates segments independently:
+            //    - Vision embedding function evaluates all segments
+            //    - Audio embedding function evaluates all segments again
+            // 2. Segments that score highly in both functions can appear multiple times
+            //    when OpenSearch ranks segments and returns top N inner hits
             
             // Normalize the score relative to the highest score within this video, not used for now
             const normalizedScore = maxInnerScore > 0 ? score / maxInnerScore : 0;
