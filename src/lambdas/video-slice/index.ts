@@ -1204,25 +1204,19 @@ async function updateVideoSegments(videoIndex: string, videoId: string, segments
     const documentId = searchResult.hits.hits[0]._id;
     const existingDoc = searchResult.hits.hits[0]._source;
     
-    // Initialize or merge the segments
-    const existingSegments = existingDoc.video_segments || [];
-    const updatedSegments = [...existingSegments];
-    
-    // Add new segments, there is only one segment in the segments array
-    for (const segment of segments) {
-      updatedSegments.push({
-        ...segment,
-        segment_id: segment.segment_id || `unassigned_segment_id`,
-        // Update the embedding field if it exists
-        segment_visual: {
-          ...segment.segment_visual,
-          segment_visual_embedding: segment.segment_visual?.segment_visual_embedding || []
-        },
-        segment_audio: {
-          segment_audio_embedding: segment.segment_audio?.segment_audio_embedding || []
-        }
-      });
-    }
+    // Format new segments for addition
+    const formattedSegments = segments.map(segment => ({
+      ...segment,
+      segment_id: segment.segment_id || `unassigned_segment_id`,
+      // Update the embedding field if it exists
+      segment_visual: {
+        ...segment.segment_visual,
+        segment_visual_embedding: segment.segment_visual?.segment_visual_embedding || []
+      },
+      segment_audio: {
+        segment_audio_embedding: segment.segment_audio?.segment_audio_embedding || []
+      }
+    }));
 
     // Use standard update operation with document ID, TODO: insert the segments into existing segments instead of update since the refresh: true is not supported in the aoss and the video_segement can be stale and new updates will be overwritten, and the segment_count should be accumulated instead of updated
     try {
@@ -1248,7 +1242,7 @@ async function updateVideoSegments(videoIndex: string, videoId: string, segments
               ctx._source.updated_at = params.updated_at;
             `,
             params: {
-              newSegments: updatedSegments.map(segment => {
+              newSegments: formattedSegments.map(segment => {
                 // Create a clean segment object with all the required fields
                 const formattedSegment = {
                   ...segment,
