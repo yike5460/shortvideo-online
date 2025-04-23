@@ -35,6 +35,8 @@ interface SearchQuery {
   selectedIndex?: string;
   advancedSearch?: boolean; // Add the advanced search option
   skipValidation?: boolean; // Flag to skip validation step (false by default, validation is performed)
+  visualSearch?: boolean;   // Flag for visual search toggle
+  audioSearch?: boolean;    // Flag for audio search toggle
 }
 
 interface ValidationResult {
@@ -729,8 +731,6 @@ async function validateVideos(videosWithScores: [string, number][], textDescript
 
 // Update the transform function to normalize OpenSearch confidence scores, such score is relative and per index and per query, calculated using TF-IDF by default
 const transformSearchResults = async (hits: any[]): Promise<VideoResult[]> => {
-
-  console.log('Transforming search results:', JSON.stringify(hits, null, 2));
   
   // Find the max video score for normalization across all videos
   const maxVideoScore = Math.max(...hits.map(hit => hit._score || 0));
@@ -911,17 +911,40 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
       
       // Check if we have at least one valid embedding type
       if (embeddings.vision_embedding || embeddings.audio_embedding) {
-        // Add default weights if not provided
-        const weights = searchQuery.weights || { video: 0.5, audio: 0.5, text: 0, image: 0 };
-        
-        // Normalize weights to add up to 1.0
-        const videoWeight = weights.video || 0.5;
-        const audioWeight = weights.audio || 0.5;
-        
+        // Determine weights based on visualSearch and audioSearch flags
+        let videoWeight = 0.5;
+        let audioWeight = 0.5;
+
+        // If visualSearch and audioSearch flags are provided, use them to set weights
+        if (searchQuery.visualSearch !== undefined && searchQuery.audioSearch !== undefined) {
+          if (searchQuery.visualSearch && searchQuery.audioSearch) {
+            // Both enabled: equal weights
+            videoWeight = 0.5;
+            audioWeight = 0.5;
+          } else if (searchQuery.visualSearch) {
+            // Only visual search enabled
+            videoWeight = 1.0;
+            audioWeight = 0.0;
+          } else if (searchQuery.audioSearch) {
+            // Only audio search enabled
+            videoWeight = 0.0;
+            audioWeight = 1.0;
+          } else {
+            // Neither enabled: use default weights
+            videoWeight = 0.5;
+            audioWeight = 0.5;
+          }
+        } else {
+          // Fallback to weights from the request if available
+          const weights = searchQuery.weights || { video: 0.5, audio: 0.5, text: 0, image: 0 };
+          videoWeight = weights.video || 0.5;
+          audioWeight = weights.audio || 0.5;
+        }
+
         // Calculate normalized weights
         const totalWeight = videoWeight + audioWeight;
-        const normalizedVideoWeight = videoWeight / totalWeight;
-        const normalizedAudioWeight = audioWeight / totalWeight;
+        const normalizedVideoWeight = totalWeight > 0 ? videoWeight / totalWeight : 0.5;
+        const normalizedAudioWeight = totalWeight > 0 ? audioWeight / totalWeight : 0.5;
         
         console.log(`Search weights - Video: ${normalizedVideoWeight}, Audio: ${normalizedAudioWeight}`);
 
