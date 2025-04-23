@@ -308,7 +308,7 @@ export default function S3FileBrowser({
       {/* File listing */}
       <div className="border rounded-lg overflow-hidden">
         {/* Table header */}
-        <div className="grid grid-cols-12 bg-gray-50 border-b px-4 py-2 font-medium text-sm text-gray-500">
+        <div className="grid grid-cols-12 bg-gray-50 border-b px-4 py-2 font-medium text-sm text-gray-500 sticky top-0 z-10">
           <div className="col-span-5">Name</div>
           <div className="col-span-2">Size</div>
           <div className="col-span-2">Type</div>
@@ -316,7 +316,7 @@ export default function S3FileBrowser({
         </div>
 
         {/* Table body */}
-        <div className="divide-y">
+        <div className="divide-y max-h-80 overflow-y-auto">
           {isLoadingFiles && files.length === 0 ? (
             <div className="px-4 py-8 text-center text-gray-500">
               Loading files...
