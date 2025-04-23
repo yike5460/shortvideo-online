@@ -87,7 +87,9 @@ export class S3ConnectorStack extends Construct {
           's3:GetObject',
           's3:GetObjectVersion',
           's3:ListAllMyBuckets',
-          's3:GetBucketLocation'  // Add explicitly for cross-region bucket detection
+          's3:GetBucketLocation',  // For cross-region bucket detection
+          's3:CopyObject',         // Add for copying objects between buckets
+          's3:PutObject'           // Add for uploading objects to destination bucket
         ],
         resources: ['*'] // In production, this should be restricted to specific buckets
       })
@@ -135,7 +137,7 @@ export class S3ConnectorStack extends Construct {
     const assumeRolePolicy = new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       actions: ['sts:AssumeRole'],
-      resources: [this.s3ConnectorRole.roleArn] // Specify the exact role ARN
+      resources: ['*'] // Allow assuming any role, including user-provided roles
     });
 
     // Add the policy to the Lambda function

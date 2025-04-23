@@ -379,6 +379,8 @@ async function createConnector(event: APIGatewayProxyEvent, userId: string): Pro
       updatedAt: timestamp
     };
 
+    console.log('Connector created:', connector);
+
     // Save to DynamoDB
     await docClient.send(new PutCommand({
       TableName: CONNECTORS_TABLE,
@@ -616,8 +618,8 @@ async function listBuckets(connectorId: string, userId: string): Promise<LambdaR
       };
     }
 
-    // Use the service role ARN from environment variables instead of connector's roleArn
-    const roleArn = SERVICE_ROLE_ARN;
+    // Use the connector's roleArn instead of SERVICE_ROLE_ARN
+    const roleArn = getResult.Item.roleArn;
     
     // Log the role being used
     console.log(`Assuming role: ${roleArn}`);
@@ -736,8 +738,8 @@ async function listObjects(event: APIGatewayProxyEvent, connectorId: string, buc
     const continuationToken = queryParams.continuationToken;
     const maxKeys = parseInt(queryParams.maxKeys || '100', 10);
 
-    // Use the service role ARN from environment variables
-    const roleArn = SERVICE_ROLE_ARN;
+    // Use the connector's roleArn instead of SERVICE_ROLE_ARN
+    const roleArn = getResult.Item.roleArn;
     
     // Log the role being used
     console.log(`Assuming role: ${roleArn}`);
@@ -917,8 +919,8 @@ async function searchObjects(event: APIGatewayProxyEvent, connectorId: string, u
       };
     }
 
-    // Use the service role ARN from environment variables
-    const roleArn = SERVICE_ROLE_ARN;
+    // Use the connector's roleArn instead of SERVICE_ROLE_ARN
+    const roleArn = getResult.Item.roleArn;
     
     // Log the role being used
     console.log(`Assuming role: ${roleArn}`);
@@ -1102,8 +1104,8 @@ async function importFromS3(event: APIGatewayProxyEvent, userId: string): Promis
       };
     }
 
-    // Use the service role ARN from environment variables
-    const roleArn = SERVICE_ROLE_ARN;
+    // Use the connector's roleArn instead of SERVICE_ROLE_ARN
+    const roleArn = getResult.Item.roleArn;
     
     // Log the role being used
     console.log(`Assuming role: ${roleArn}`);

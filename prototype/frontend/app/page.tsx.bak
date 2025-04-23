@@ -115,7 +115,7 @@ const initialSearchOptions: SearchOptions = {
   selectedIndex: null,
   confidencePreset: 'medium',
   confidenceAdjustment: 'default',
-  skipValidation: true  // false means Exact Search is enabled
+  skipValidation: false  // false means Exact Search is enabled
 }
 
 // Add API configuration
