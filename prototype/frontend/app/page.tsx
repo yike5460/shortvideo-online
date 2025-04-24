@@ -141,7 +141,7 @@ export default function HomePage() {
   const [indexes, setIndexes] = useState<Index[]>([])
   const [isLoadingIndexes, setIsLoadingIndexes] = useState(false)
   // Add state for advanced search toggle
-  const [advancedSearch, setAdvancedSearch] = useState(false)
+  const [advancedSearch, setAdvancedSearch] = useState(true)
 
   // Authentication check effect
   useEffect(() => {
