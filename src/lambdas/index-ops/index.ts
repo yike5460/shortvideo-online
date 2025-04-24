@@ -91,7 +91,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
  * GET /indexes/{indexId} - Get specific index
  */
 async function handleGetIndex(event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> {
-  console.log('Getting index with event: ', event);
+
   const indexId = event.pathParameters?.indexId;
   
   // If indexId is provided, return the detailed information of the index, including the vector inside the indexId per videoId

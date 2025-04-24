@@ -290,7 +290,7 @@ export const CartPanel: React.FC<CartPanelProps> = ({ isOpen, onClose, className
                   className="text-sm text-indigo-600 hover:text-indigo-800"
                   onClick={handleDeselectAll}
                 >
-                  Deselect all
+                  Un-select all
                 </button>
               )}
             </div>

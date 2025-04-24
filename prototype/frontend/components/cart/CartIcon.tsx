@@ -14,9 +14,10 @@ export const CartIcon: React.FC<CartIconProps> = ({ onClick }) => {
   
   return (
     <button 
-      className="relative p-2 text-gray-600 hover:text-gray-900 focus:outline-none"
+      className="relative p-2 text-gray-600 hover:text-gray-900 focus:outline-none group"
       onClick={onClick}
       aria-label="Open video clips cart"
+      title="Clip Selected"
     >
       <ShoppingCartIcon className="h-6 w-6" />
       {itemCount > 0 && (
@@ -24,6 +25,9 @@ export const CartIcon: React.FC<CartIconProps> = ({ onClick }) => {
           {itemCount}
         </span>
       )}
+      <span className="absolute bottom-0 left-1/2 transform -translate-x-1/2 translate-y-full text-xs font-medium text-gray-700 whitespace-nowrap bg-white px-2 py-1 rounded shadow-sm opacity-0 group-hover:opacity-100 transition-opacity">
+        Clip Selected
+      </span>
     </button>
   );
 };

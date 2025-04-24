@@ -559,18 +559,22 @@ async function updateVideoStatus(videoIndex: string, videoId: string, status: Vi
     // Get the OpenSearch document ID
     const documentId = searchResult.hits.hits[0]._id;
 
-    // Use update operation with document ID instead of updateByQuery
-    await openSearch.update({
-      index: videoIndex,
-      id: documentId,
-      body: {
-        doc: {
-          video_status: status,
-          ...additionalFields,
-          updated_at: new Date().toISOString()
+    // Use withRetry for the OpenSearch update operation to handle version conflicts
+    await withRetry(
+      async () => openSearch.update({
+        index: videoIndex,
+        id: documentId,
+        body: {
+          doc: {
+            video_status: status,
+            ...additionalFields,
+            updated_at: new Date().toISOString()
+          }
         }
-      }
-    });
+      }),
+      5, // Use 5 retries to handle concurrent update conflicts
+      `Update status for video ${videoId} in index ${videoIndex}`
+    );
   } catch (error) {
     console.error(`Error updating status for video ${videoId} in index ${videoIndex}:`, error);
     throw error;
@@ -1142,6 +1146,19 @@ async function getSegmentDetectionResults(jobId: string): Promise<SegmentDetecti
 
 /**
  * Utility function to perform OpenSearch operations with retry logic
+ *
+ * This function is critical for handling version conflicts in OpenSearch/AOSS,
+ * especially when multiple Lambda instances try to update the same document concurrently.
+ * It implements exponential backoff to allow conflicting operations to resolve over time.
+ *
+ * The version conflict error occurs when:
+ * 1. Process A reads a document (with sequence number N)
+ * 2. Process B updates the same document (incrementing sequence number to N+1)
+ * 3. Process A tries to update with original sequence number N, causing a conflict
+ *
+ * By retrying the operation, we give Process A a chance to fetch the latest document
+ * state with the updated sequence number and make its changes on top of that.
+ *
  * @param operation Function that performs the OpenSearch operation
  * @param maxRetries Maximum number of retry attempts
  * @param operationName Name of the operation for logging
@@ -1150,7 +1167,7 @@ async function getSegmentDetectionResults(jobId: string): Promise<SegmentDetecti
 async function withRetry<T>(
   operation: () => Promise<T>,
   // increase maxRetries to 5 since we're using OpenSearch Serverless which the refresh: true is not supported, refer to https://repost.aws/community/users/USiotOGJ78So2L1_DskJDcgQ
-  maxRetries: number = 5, 
+  maxRetries: number = 6, 
   operationName: string = 'OpenSearch operation'
 ): Promise<T> {
   let retries = 0;
@@ -1176,7 +1193,7 @@ async function withRetry<T>(
 }
 
 async function updateVideoSegments(videoIndex: string, videoId: string, segments: VideoSegment[]): Promise<void> {
-  console.log('Segments to update: ', segments, '\nwith embedding: ', segments.map(s => s.segment_visual?.segment_visual_embedding), '\ntype: ', typeof segments[0].segment_visual?.segment_visual_embedding, '\nlength: ', segments.map(s => s.segment_visual?.segment_visual_embedding?.length));
+  console.log('Segments to update: ', segments, '\nwith visual embedding length: ', segments.map(s => s.segment_visual?.segment_visual_embedding?.length), '\nwith audio embedding length: ', segments.map(s => s.segment_audio?.segment_audio_embedding?.length));
   
   try {
     // First search for the document to get the OpenSearch document ID and existing segments
@@ -1218,60 +1235,64 @@ async function updateVideoSegments(videoIndex: string, videoId: string, segments
       }
     }));
 
-    // Use standard update operation with document ID, TODO: insert the segments into existing segments instead of update since the refresh: true is not supported in the aoss and the video_segement can be stale and new updates will be overwritten, and the segment_count should be accumulated instead of updated
+    // Use withRetry for the OpenSearch update operation to handle version conflicts
     try {
-      await openSearch.update({
-        index: videoIndex,
-        id: documentId,
-        body: {
-          script: {
-            source: `
-              // Initialize video_segments array if null
-              if (ctx._source.video_segments == null) {
-                ctx._source.video_segments = [];
-              }
-              
-              // Add each new segment to the array
-              for (int i = 0; i < params.newSegments.length; i++) {
-                ctx._source.video_segments.add(params.newSegments[i]);
-              }
-              
-              // Update the segment count and status
-              ctx._source.segment_count = ctx._source.video_segments.length;
-              ctx._source.video_status = params.video_status;
-              ctx._source.updated_at = params.updated_at;
-            `,
-            params: {
-              newSegments: formattedSegments.map(segment => {
-                // Create a clean segment object with all the required fields
-                const formattedSegment = {
-                  ...segment,
-                  segment_id: segment.segment_id || `unassigned_segment_id`,
-                  // Ensure the visual embedding is included
-                  segment_visual: {
-                    ...segment.segment_visual,
-                    segment_visual_embedding: segment.segment_visual?.segment_visual_embedding || []
-                  }
-                };
-                
-                // If there's an audio embedding, include it in the segment
-                if (segment.segment_audio && Array.isArray(segment.segment_audio.segment_audio_embedding)) {
-                  formattedSegment.segment_audio = {
-                    segment_audio_embedding: segment.segment_audio.segment_audio_embedding
-                  };
+      await withRetry(
+        async () => openSearch.update({
+          index: videoIndex,
+          id: documentId,
+          body: {
+            script: {
+              source: `
+                // Initialize video_segments array if null
+                if (ctx._source.video_segments == null) {
+                  ctx._source.video_segments = [];
                 }
                 
-                return formattedSegment;
-              }),
-              video_status: 'ready_for_shots',
-              updated_at: new Date().toISOString(),
+                // Add each new segment to the array
+                for (int i = 0; i < params.newSegments.length; i++) {
+                  ctx._source.video_segments.add(params.newSegments[i]);
+                }
+                
+                // Update the segment count and status
+                ctx._source.segment_count = ctx._source.video_segments.length;
+                ctx._source.video_status = params.video_status;
+                ctx._source.updated_at = params.updated_at;
+              `,
+              params: {
+                newSegments: formattedSegments.map(segment => {
+                  // Create a clean segment object with all the required fields
+                  const formattedSegment = {
+                    ...segment,
+                    segment_id: segment.segment_id || `unassigned_segment_id`,
+                    // Ensure the visual embedding is included
+                    segment_visual: {
+                      ...segment.segment_visual,
+                      segment_visual_embedding: segment.segment_visual?.segment_visual_embedding || []
+                    }
+                  };
+                  
+                  // If there's an audio embedding, include it in the segment
+                  if (segment.segment_audio && Array.isArray(segment.segment_audio.segment_audio_embedding)) {
+                    formattedSegment.segment_audio = {
+                      segment_audio_embedding: segment.segment_audio.segment_audio_embedding
+                    };
+                  }
+                  
+                  return formattedSegment;
+                }),
+                video_status: 'ready_for_shots',
+                updated_at: new Date().toISOString(),
+              }
             }
           }
-        }
-      });
+        }),
+        5, // Use 5 retries to handle concurrent update conflicts
+        `Update segments for video ${videoId} in index ${videoIndex}`
+      );
       console.log(`Successfully updated segments for video ${videoId} in index ${videoIndex}`);
     } catch (updateError) {
-      console.error(`Error during script update for video ${videoId}:`, updateError);
+      console.error(`Error during script update for video ${videoId} after retries:`, updateError);
     }
   } catch (error) {
     console.error(`Error updating video segments for video ${videoId} in index ${videoIndex}:`, error);
@@ -1373,26 +1394,30 @@ async function updateVideoLabels(videoIndex: string, videoId: string, labels: an
       labels: labelArray
     }));
 
-    // Use script-based update for AOSS compatibility
-    await openSearch.update({
-      index: videoIndex,
-      id: documentId,
-      body: {
-        script: {
-          source: `
-            // Set video_objects with our formatted label structure
-            ctx._source.video_objects = params.formattedLabels;
-            ctx._source.video_status = params.video_status;
-            ctx._source.updated_at = params.updated_at;
-          `,
-          params: {
-            formattedLabels: formattedLabels,
-            video_status: "ready_for_object",
-            updated_at: new Date().toISOString()
+    // Use withRetry with script-based update for AOSS compatibility and version conflict handling
+    await withRetry(
+      async () => openSearch.update({
+        index: videoIndex,
+        id: documentId,
+        body: {
+          script: {
+            source: `
+              // Set video_objects with our formatted label structure
+              ctx._source.video_objects = params.formattedLabels;
+              ctx._source.video_status = params.video_status;
+              ctx._source.updated_at = params.updated_at;
+            `,
+            params: {
+              formattedLabels: formattedLabels,
+              video_status: "ready_for_object",
+              updated_at: new Date().toISOString()
+            }
           }
         }
-      }
-    });
+      }),
+      5, // Use 5 retries to handle concurrent update conflicts
+      `Update labels for video ${videoId} in index ${videoIndex}`
+    );
     console.log(`Successfully updated video labels for video ${videoId} in index ${videoIndex}`);
 
     // Use UpdateCommand to update only specific attributes, also update video_objects_completed flag to true
@@ -1505,14 +1530,18 @@ async function updateVideoFaces(videoIndex: string, videoId: string, faces: any[
       };
     });
 
-    // Use standard update with document ID instead of updateByQuery
-    await openSearch.update({
-      index: videoIndex,
-      id: documentId,
-      body: {
-        doc: existingVideo
-      }
-    });
+    // Use withRetry for the OpenSearch update operation to handle version conflicts
+    await withRetry(
+      async () => openSearch.update({
+        index: videoIndex,
+        id: documentId,
+        body: {
+          doc: existingVideo
+        }
+      }),
+      5, // Use 5 retries to handle concurrent update conflicts
+      `Update faces for video ${videoId} in index ${videoIndex}`
+    );
     console.log(`Successfully updated video faces for video ${videoId} in index ${videoIndex}`);
 
     // Use UpdateCommand to update only specific attributes, also update video_faces_completed flag to true

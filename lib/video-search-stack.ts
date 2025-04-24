@@ -316,7 +316,8 @@ export class VideoSearchStack extends cdk.Stack {
     const collection = new opensearchserverless.CfnCollection(this, 'VideoSearchCollection', {
       name: `video-search-${stage}-knn`,
       description: 'Collection for video search and analytics',
-      type: 'VECTORSEARCH'
+      type: 'VECTORSEARCH',
+      // The Maximum indexing/searching capacity is not supported in official documentation, refer to the similiar thread in community forum: https://repost.aws/questions/QUT51J80bvR5Gj5dk_0Ah0Gg/setting-opensearch-serverless-ocu-capacity-via-cloudformation
     });
 
     // Add dependencies
