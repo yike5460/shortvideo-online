@@ -24,7 +24,7 @@ export default function FeedbackBar({ onFeedback }: FeedbackBarProps) {
     <div className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-white rounded-full shadow-lg border animate-fade-in">
       <div className="flex items-center gap-4 px-6 py-3">
         <span className="text-sm text-gray-600 whitespace-nowrap">
-          Are these results helpful?
+          How is the search results?
         </span>
         <div className="flex items-center gap-2">
           <button

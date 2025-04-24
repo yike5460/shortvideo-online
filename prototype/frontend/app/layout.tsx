@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import { Inter } from 'next/font/google'
 import { AuthProvider } from '@/lib/auth/AuthContext'
 import { ToastProvider } from '@/components/ui/Toast'
+import { CartProvider } from '@/lib/cart/CartContext'
 import ClientLayout from '@/components/layout/ClientLayout'
 import './globals.css'
 
@@ -20,7 +21,9 @@ export default function RootLayout({
       <body className={inter.className}>
         <AuthProvider>
           <ToastProvider>
-            <ClientLayout>{children}</ClientLayout>
+            <CartProvider>
+              <ClientLayout>{children}</ClientLayout>
+            </CartProvider>
           </ToastProvider>
         </AuthProvider>
       </body>

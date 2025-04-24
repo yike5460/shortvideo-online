@@ -1,13 +1,17 @@
 'use client'
 
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
-import { ArrowPathIcon, ArrowsRightLeftIcon, CheckIcon, ChevronDownIcon, CloudArrowDownIcon, ArrowRightIcon } from '@heroicons/react/24/outline'
+import { ArrowPathIcon, ArrowsRightLeftIcon, CheckIcon, ChevronDownIcon, CloudArrowDownIcon, ArrowRightIcon, ShoppingCartIcon } from '@heroicons/react/24/outline'
 import { Tab } from '@headlessui/react'
 import { VideoCameraIcon, ClockIcon, CheckCircleIcon, ExclamationCircleIcon, QuestionMarkCircleIcon } from '@heroicons/react/24/outline'
+import CartIcon from '@/components/cart/CartIcon'
+import CartPanel from '@/components/cart/CartPanel'
 import { cn } from '@/lib/utils'
 import { VideoResult, VideoSegment, SearchOptions } from '@/types'
 import VideoModal from '@/components/VideoModal'
 import { useToast } from '@/components/ui/Toast'
+import AddToCartButton from '@/components/cart/AddToCartButton'
+import { useCart } from '@/lib/cart/CartContext'
 import Link from 'next/link'
 
 // Add API configuration
@@ -25,7 +29,9 @@ export default function SearchResults({
   searchOptions
 }: SearchResultsProps) {
   const { addToast } = useToast();
+  const { addToCart } = useCart(); // Add useCart hook at the component level
   const [selectedView, setSelectedView] = useState<'clip' | 'video'>('clip')
+  const [isCartOpen, setIsCartOpen] = useState(false)
   const [selectedVideo, setSelectedVideo] = useState<VideoResult | null>(null)
   const [selectedSegment, setSelectedSegment] = useState<VideoSegment | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
@@ -559,7 +565,13 @@ export default function SearchResults({
                     {formatTimeDisplay(segment.duration)} duration
                   </span>
                 </div>
-                <div className="mt-4 flex items-center justify-between text-sm text-gray-600">
+                <div className="mt-2 flex items-center justify-between">
+                  <span className="text-sm text-gray-500">
+                    {formatTimeDisplay(segment.duration)} duration
+                  </span>
+                  {/* Removed individual AddToCartButton to reduce visual clutter */}
+                </div>
+                <div className="mt-2 flex items-center justify-between text-sm text-gray-600">
                   <span>{new Date(video.uploadDate).toLocaleDateString()}</span>
                   <span className="text-xs text-gray-500">
                     From {video.videoDuration} video
@@ -571,7 +583,7 @@ export default function SearchResults({
         })}
       </div>
     );
-  }, [results, showConfidenceScores, handleSegmentClick, formatTimeDisplay, getConfidenceLevel, getConfidenceIcon]);
+  }, [results, showConfidenceScores, handleSegmentClick, formatTimeDisplay, getConfidenceLevel, getConfidenceIcon, searchOptions]);
 
   const renderTimelineView = useCallback(() => (
     <div className="space-y-8">
@@ -758,6 +770,7 @@ export default function SearchResults({
                               <CheckIcon className="h-3 w-3 text-white drop-shadow-md" />
                             </div>
                           )}
+                          {/* Removed individual AddToCartButton to reduce visual clutter */}
                         </div>
                       );
                     })}
@@ -805,6 +818,36 @@ export default function SearchResults({
                     </svg>
                     Select All
                   </button>
+                  
+                  {/* Add to Cart button for selected segments */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      
+                      // Add all selected segments to cart
+                      selectedSegments[result.id].forEach(segment => {
+                        // Add to cart directly
+                        addToCart({
+                          videoId: result.id,
+                          indexId: result.indexId,
+                          segment: segment,
+                          addedAt: Date.now(),
+                          source: "",
+                          videoTitle: result.title,
+                          selectedIndex: searchOptions.selectedIndex
+                        });
+                      });
+                      
+                      addToast('success', `Added ${selectedSegments[result.id].length} clips to cart`, {
+                        duration: 3000
+                      });
+                    }}
+                    className="inline-flex items-center gap-1 px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-md transition-colors"
+                  >
+                    <ShoppingCartIcon className="h-4 w-4" />
+                    Add to Cart
+                  </button>
+                  
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
@@ -819,8 +862,8 @@ export default function SearchResults({
                         ? 'bg-yellow-500 cursor-not-allowed'
                         : 'bg-gray-600 hover:bg-gray-700 text-white'
                     }`}
-                    disabled={selectedSegments[result.id].length < 2 || 
-                             mergeStatus.status === 'initiating' || 
+                    disabled={selectedSegments[result.id].length < 2 ||
+                             mergeStatus.status === 'initiating' ||
                              mergeStatus.status === 'processing'}
                   >
                     {mergeStatus.status === 'initiating' || mergeStatus.status === 'processing' ? (
@@ -1006,7 +1049,8 @@ export default function SearchResults({
     clearSelectedSegments,
     selectAllMatchedSegments,
     isMerging,
-    mergedSegment
+    mergedSegment,
+    searchOptions
   ])
 
   const handleViewChange = useCallback((view: 'clip' | 'video') => {
@@ -1053,6 +1097,13 @@ export default function SearchResults({
             </Tab>
           </Tab.List>
         </Tab.Group>
+        
+        {/* Cart Icon */}
+        <div className="flex items-center">
+          <div className="relative">
+            <CartIcon onClick={() => setIsCartOpen(true)} />
+          </div>
+        </div>
       </div>
 
       {tabPanels[selectedView]}
@@ -1066,6 +1117,12 @@ export default function SearchResults({
           closeModal();
           setSelectedSegment(null);
         }}
+      />
+      
+      {/* Cart Panel */}
+      <CartPanel
+        isOpen={isCartOpen}
+        onClose={() => setIsCartOpen(false)}
       />
     </div>
   )
