@@ -1,14 +1,14 @@
 'use client';
 
-import React, { useState } from 'react';
-import { XMarkIcon, ArrowsRightLeftIcon, CloudArrowDownIcon, TrashIcon, ShoppingCartIcon } from '@heroicons/react/24/outline';
-import { useCart, CartItem } from '@/lib/cart/CartContext';
+import React, { useState, useRef, useEffect } from 'react';
+import { XMarkIcon, ArrowsRightLeftIcon, CloudArrowDownIcon, TrashIcon, ShoppingCartIcon, ChevronUpDownIcon } from '@heroicons/react/24/outline';
+import { useCart, CartItem, MergeOptions } from '@/lib/cart/CartContext';
 import { useToast } from '@/components/ui/Toast';
 
 interface CartPanelProps {
   isOpen: boolean;
   onClose: () => void;
-  className?: string; // Add className prop for custom styling
+  className?: string;
 }
 
 // Helper function to format time display
@@ -25,10 +25,20 @@ const formatTimeDisplay = (timeMs: number): string => {
 };
 
 export const CartPanel: React.FC<CartPanelProps> = ({ isOpen, onClose, className = '' }) => {
-  const { items, removeFromCart, clearCart } = useCart();
+  const {
+    items,
+    removeFromCart,
+    clearCart,
+    mergeOptions,
+    updateMergeOptions,
+    reorderItems,
+    updateItemTransition
+  } = useCart();
   const { addToast } = useToast();
   const [selectedItems, setSelectedItems] = useState<Record<string, boolean>>({});
   const [isMerging, setIsMerging] = useState(false);
+  const [draggedItem, setDraggedItem] = useState<number | null>(null);
+  const [dragOverItem, setDragOverItem] = useState<number | null>(null);
   
   // Group items by video
   const itemsByVideo = items.reduce<Record<string, CartItem[]>>((acc, item) => {
@@ -74,16 +84,8 @@ export const CartPanel: React.FC<CartPanelProps> = ({ isOpen, onClose, className
       return;
     }
     
-    // Check if all selected items are from the same video
+    // Get the first item for reference
     const firstItem = selected[0];
-    const allSameVideo = selected.every(
-      item => item.videoId === firstItem.videoId && item.indexId === firstItem.indexId
-    );
-    
-    if (!allSameVideo) {
-      addToast('error', 'Currently, only clips from the same video can be merged');
-      return;
-    }
     
     setIsMerging(true);
     
@@ -106,7 +108,19 @@ export const CartPanel: React.FC<CartPanelProps> = ({ isOpen, onClose, className
           indexId: firstItem.selectedIndex || firstItem.indexId,
           videoId: extractedVideoId, // Use extracted ID instead of encoded videoId
           segmentIds: segmentIds,
-          mergedName: `cart_merged_${Date.now()}`
+          mergedName: `cart_merged_${Date.now()}`,
+          // Add merge options
+          mergeOptions: {
+            resolution: mergeOptions.resolution,
+            transition: mergeOptions.defaultTransition,
+            transitionDuration: mergeOptions.defaultTransitionDuration,
+            // Include individual clip transitions if specified
+            clipTransitions: selected.map(item => ({
+              segmentId: item.segment.segment_id,
+              transitionType: item.transitionType || mergeOptions.defaultTransition,
+              transitionDuration: item.transitionDuration || mergeOptions.defaultTransitionDuration
+            }))
+          }
         }),
       });
       
@@ -171,25 +185,39 @@ export const CartPanel: React.FC<CartPanelProps> = ({ isOpen, onClose, className
     });
   };
   
-  if (!isOpen) return null;
-  
   return (
-    <div className={`${className} fixed inset-0 z-50 overflow-hidden`}>
-      <div className="absolute inset-0 bg-black bg-opacity-50" onClick={onClose} />
-      <div className="absolute top-16 right-0 h-[calc(100%-4rem)] max-w-md w-full bg-white shadow-xl flex flex-col rounded-l-lg">
-        {/* Header */}
-        <div className="p-4 border-b border-gray-200 flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-gray-900">Video Clips Cart</h2>
-          <button 
-            className="text-gray-500 hover:text-gray-700"
-            onClick={onClose}
-          >
-            <XMarkIcon className="h-5 w-5" />
-          </button>
-        </div>
-        
-        {/* Cart content */}
-        <div className="flex-1 overflow-y-auto p-4">
+    <>
+      {/* Backdrop overlay */}
+      {isOpen && (
+        <div
+          className="fixed inset-0 bg-black bg-opacity-50 z-40 transition-opacity duration-300"
+          onClick={onClose}
+          aria-hidden="true"
+        />
+      )}
+      
+      {/* Modal dialog */}
+      <div
+        className={`${className} fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-full max-w-md max-h-[80vh] bg-white rounded-lg shadow-xl z-50 transition-all duration-300 ${
+          isOpen ? 'opacity-100 scale-100' : 'opacity-0 scale-95 pointer-events-none'
+        }`}
+      >
+        <div className="flex flex-col h-full max-h-[80vh] rounded-lg">
+          {/* Header */}
+          <div className="p-4 border-b border-gray-200 flex items-center justify-between">
+            <h2 className="text-lg font-semibold text-gray-900">Video Clips Cart</h2>
+            <button
+              className="text-gray-500 hover:text-gray-700"
+              onClick={onClose}
+              aria-label="Close cart"
+              title="Close cart"
+            >
+              <XMarkIcon className="h-5 w-5" />
+            </button>
+          </div>
+          
+          {/* Cart content */}
+          <div className="flex-1 overflow-y-auto p-4">
           {items.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-gray-500">
               <ShoppingCartIcon className="h-12 w-12 mb-2" />
@@ -216,15 +244,36 @@ export const CartPanel: React.FC<CartPanelProps> = ({ isOpen, onClose, className
                     </div>
                     
                     <div className="space-y-2">
-                      {videoItems.map(item => (
-                        <div 
-                          key={item.segment.segment_id} 
+                      {videoItems.map((item, itemIndex) => {
+                        const globalIndex = items.findIndex(i => i.segment.segment_id === item.segment.segment_id);
+                        return (
+                        <div
+                          key={item.segment.segment_id}
                           className={`flex items-center p-2 rounded-md ${
-                            selectedItems[item.segment.segment_id!] 
-                              ? 'bg-indigo-50 border border-indigo-200' 
+                            selectedItems[item.segment.segment_id!]
+                              ? 'bg-indigo-50 border border-indigo-200'
                               : 'bg-white border border-gray-200'
-                          }`}
+                          } ${draggedItem === globalIndex ? 'opacity-50' : ''} ${dragOverItem === globalIndex ? 'border-2 border-indigo-400' : ''}`}
+                          draggable
+                          onDragStart={() => setDraggedItem(globalIndex)}
+                          onDragEnd={() => {
+                            if (draggedItem !== null && dragOverItem !== null && draggedItem !== dragOverItem) {
+                              reorderItems(draggedItem, dragOverItem);
+                              addToast('success', 'Reordered clips', { duration: 2000 });
+                            }
+                            setDraggedItem(null);
+                            setDragOverItem(null);
+                          }}
+                          onDragOver={(e) => {
+                            e.preventDefault();
+                            if (dragOverItem !== globalIndex) {
+                              setDragOverItem(globalIndex);
+                            }
+                          }}
                         >
+                          <div className="flex-shrink-0 mr-2 cursor-move">
+                            <ChevronUpDownIcon className="h-4 w-4 text-gray-400" />
+                          </div>
                           <div className="flex-shrink-0 mr-3">
                             <input
                               type="checkbox"
@@ -251,6 +300,24 @@ export const CartPanel: React.FC<CartPanelProps> = ({ isOpen, onClose, className
                             <p className="text-xs text-gray-500 truncate">
                               {item.segment.segment_visual?.segment_visual_description || 'No description'}
                             </p>
+                            {/* Transition type indicator */}
+                            {globalIndex < items.length - 1 && (
+                              <div className="mt-1">
+                                <select
+                                  className="text-xs border border-gray-200 rounded p-0.5"
+                                  value={item.transitionType || mergeOptions.defaultTransition}
+                                  onChange={(e) => updateItemTransition(
+                                    item.segment.segment_id!,
+                                    e.target.value as 'cut' | 'fade' | 'dissolve',
+                                    item.transitionDuration || mergeOptions.defaultTransitionDuration
+                                  )}
+                                >
+                                  <option value="cut">Cut</option>
+                                  <option value="fade">Fade</option>
+                                  <option value="dissolve">Dissolve</option>
+                                </select>
+                              </div>
+                            )}
                           </div>
                           
                           <button 
@@ -260,7 +327,7 @@ export const CartPanel: React.FC<CartPanelProps> = ({ isOpen, onClose, className
                             <TrashIcon className="h-4 w-4" />
                           </button>
                         </div>
-                      ))}
+                      )})}
                     </div>
                   </div>
                 );
@@ -269,8 +336,8 @@ export const CartPanel: React.FC<CartPanelProps> = ({ isOpen, onClose, className
           )}
         </div>
         
-        {/* Actions footer */}
-        {items.length > 0 && (
+          {/* Actions footer - only show when there are items */}
+          {items.length > 0 && (
           <div className="p-4 border-t border-gray-200 bg-gray-50">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center">
@@ -293,6 +360,48 @@ export const CartPanel: React.FC<CartPanelProps> = ({ isOpen, onClose, className
                   Un-select all
                 </button>
               )}
+            </div>
+            
+            {/* Merge options panel */}
+            <div className="mb-4 p-3 bg-gray-100 rounded-md">
+              <h4 className="text-sm font-medium text-gray-700 mb-2">Merge Options</h4>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Resolution</label>
+                  <select
+                    value={mergeOptions.resolution}
+                    onChange={(e) => updateMergeOptions({resolution: e.target.value as '720p' | '1080p'})}
+                    className="w-full text-sm border border-gray-300 rounded-md p-1"
+                  >
+                    <option value="720p">720p</option>
+                    <option value="1080p">1080p</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Default Transition</label>
+                  <select
+                    value={mergeOptions.defaultTransition}
+                    onChange={(e) => updateMergeOptions({defaultTransition: e.target.value as 'cut' | 'fade' | 'dissolve'})}
+                    className="w-full text-sm border border-gray-300 rounded-md p-1"
+                  >
+                    <option value="cut">Cut (No Transition)</option>
+                    <option value="fade">Fade</option>
+                    <option value="dissolve">Dissolve</option>
+                  </select>
+                </div>
+              </div>
+              <div className="mt-2">
+                <label className="block text-xs text-gray-500 mb-1">Transition Duration (ms)</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="2000"
+                  step="100"
+                  value={mergeOptions.defaultTransitionDuration}
+                  onChange={(e) => updateMergeOptions({defaultTransitionDuration: parseInt(e.target.value)})}
+                  className="w-full text-sm border border-gray-300 rounded-md p-1"
+                />
+              </div>
             </div>
             
             <div className="grid grid-cols-2 gap-3">
@@ -331,9 +440,10 @@ export const CartPanel: React.FC<CartPanelProps> = ({ isOpen, onClose, className
               </button>
             </div>
           </div>
-        )}
+          )}
+        </div>
       </div>
-    </div>
+    </>
   );
 };
 

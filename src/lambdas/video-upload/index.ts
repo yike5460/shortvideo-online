@@ -1776,13 +1776,13 @@ async function getSegmentDetails(indexId: string, videoId: string, segmentIds: s
   const videoDocument = searchResult.hits.hits[0]._source;
   const videoSegments = videoDocument.video_segments || [];
   
-  // Log all the video segments along with their segment_id for debugging purposes
-  console.log('All video segments:', videoSegments.map((segment: any) => ({
-    segment_id: segment.segment_id,
-    start_time: segment.start_time,
-    end_time: segment.end_time,
-    duration: segment.duration
-  })));
+  // // Log all the video segments along with their segment_id for debugging purposes
+  // console.log('All video segments:', videoSegments.map((segment: any) => ({
+  //   segment_id: segment.segment_id,
+  //   start_time: segment.start_time,
+  //   end_time: segment.end_time,
+  //   duration: segment.duration
+  // })));
 
   // Filter segments by segmentIds, in format of `${videoId}_segment_${segmentNumber}`
   const filteredSegments = videoSegments.filter((segment: any) => 

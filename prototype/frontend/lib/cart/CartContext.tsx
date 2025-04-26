@@ -11,21 +11,39 @@ export interface CartItem {
   source: string;
   videoTitle?: string; // Optional video title
   selectedIndex?: string | null; // Optional selected index from search options
+  order?: number; // For explicit ordering in merged output
+  transitionType?: 'cut' | 'fade' | 'dissolve'; // Transition to next clip
+  transitionDuration?: number; // Transition duration in milliseconds
+}
+
+export interface MergeOptions {
+  resolution: '720p' | '1080p';
+  defaultTransition: 'cut' | 'fade' | 'dissolve';
+  defaultTransitionDuration: number;
 }
 
 interface CartContextType {
   items: CartItem[];
+  mergeOptions: MergeOptions;
   addToCart: (item: CartItem) => void;
   removeFromCart: (segmentId: string) => void;
   clearCart: () => void;
   isInCart: (segmentId: string) => boolean;
   getItemCount: () => number;
+  reorderItems: (sourceIndex: number, destinationIndex: number) => void;
+  updateMergeOptions: (options: Partial<MergeOptions>) => void;
+  updateItemTransition: (segmentId: string, transitionType: 'cut' | 'fade' | 'dissolve', duration: number) => void;
 }
 
 const CartContext = createContext<CartContextType | undefined>(undefined);
 
 export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [items, setItems] = useState<CartItem[]>([]);
+  const [mergeOptions, setMergeOptions] = useState<MergeOptions>({
+    resolution: '720p',
+    defaultTransition: 'cut',
+    defaultTransitionDuration: 500, // 500ms
+  });
   
   // Load cart from localStorage on mount
   useEffect(() => {
@@ -70,14 +88,52 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return items.length;
   };
   
+  // Reorder items in the cart (for drag and drop)
+  const reorderItems = (sourceIndex: number, destinationIndex: number) => {
+    setItems(prevItems => {
+      const result = Array.from(prevItems);
+      const [removed] = result.splice(sourceIndex, 1);
+      result.splice(destinationIndex, 0, removed);
+      
+      // Update order property for each item
+      return result.map((item, index) => ({
+        ...item,
+        order: index
+      }));
+    });
+  };
+  
+  // Update merge options
+  const updateMergeOptions = (options: Partial<MergeOptions>) => {
+    setMergeOptions(prev => ({
+      ...prev,
+      ...options
+    }));
+  };
+  
+  // Update transition for a specific item
+  const updateItemTransition = (segmentId: string, transitionType: 'cut' | 'fade' | 'dissolve', duration: number) => {
+    setItems(prevItems =>
+      prevItems.map(item =>
+        item.segment.segment_id === segmentId
+          ? { ...item, transitionType, transitionDuration: duration }
+          : item
+      )
+    );
+  };
+  
   return (
-    <CartContext.Provider value={{ 
-      items, 
-      addToCart, 
-      removeFromCart, 
-      clearCart, 
+    <CartContext.Provider value={{
+      items,
+      mergeOptions,
+      addToCart,
+      removeFromCart,
+      clearCart,
       isInCart,
-      getItemCount
+      getItemCount,
+      reorderItems,
+      updateMergeOptions,
+      updateItemTransition
     }}>
       {children}
     </CartContext.Provider>

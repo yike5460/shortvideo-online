@@ -94,7 +94,8 @@ export class VideoSearchStack extends cdk.Stack {
       videoUploadFunction: this.createVideoUploadFunction(),
       videoSliceFunction: this.createVideoSliceFunction(),
       videoSearchFunction: this.createVideoSearchFunction(),
-      indexCrudFunction: this.crudIndexFunction()
+      indexCrudFunction: this.crudIndexFunction(),
+      videoMergeFunction: this.createVideoMergeFunction()
     };
 
     // Add dependencies for the lambda functions on the video embedding service and open search collection
@@ -104,6 +105,7 @@ export class VideoSearchStack extends cdk.Stack {
     lambdaFunctions.videoSliceFunction.node.addDependency(this.openSearchCollection);
     lambdaFunctions.videoSearchFunction.node.addDependency(this.openSearchCollection);
     lambdaFunctions.indexCrudFunction.node.addDependency(this.openSearchCollection);
+    lambdaFunctions.videoMergeFunction.node.addDependency(this.openSearchCollection);
 
     // Update OpenSearch access policies with Lambda roles
     this.updateOpenSearchPolicies(deploymentEnv, lambdaFunctions);
@@ -622,6 +624,75 @@ export class VideoSearchStack extends cdk.Stack {
     return videoSliceFunctionHandler;
   }
 
+  /**
+   * Create the video merge Lambda function
+   */
+  private createVideoMergeFunction(): lambda.Function {
+    // Create the Lambda security group with proper egress and ingress rules
+    const lambdaSG = new ec2.SecurityGroup(this, 'LambdaSecurityGroupVideoMerge', {
+      vpc: this.vpc,
+      description: 'Security group for Lambdas accessing OpenSearch via VPC endpoint',
+      allowAllOutbound: true,
+    });
+
+    // Allow outbound connections to HTTP and HTTPS
+    lambdaSG.addEgressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(443), 'Allow HTTPS outbound');
+    lambdaSG.addEgressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(80), 'Allow HTTP outbound');
+
+    // Add ingress rules to allow incoming traffic on HTTP and HTTPS
+    lambdaSG.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(443), 'Allow HTTPS inbound');
+    lambdaSG.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(80), 'Allow HTTP inbound');
+
+    // Extract just the DNS name part by splitting at ':' and selecting the second part
+    const dynamoDbEndpointDns = cdk.Fn.select(
+      1,
+      cdk.Fn.split(
+        ':',
+        cdk.Fn.select(0, this.dynamodbEndpoint.vpcEndpointDnsEntries)
+      )
+    );
+
+    // Assemble to valid endpoint URL
+    const dynamoDbEndpointDnsHttp = `https://${dynamoDbEndpointDns}`;
+
+    const commonLambdaProps = {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      vpc: this.vpc,
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+      securityGroups: [lambdaSG],
+      timeout: cdk.Duration.minutes(15),
+      environment: {
+        VIDEO_BUCKET: this.videoBucket.bucketName,
+        OPENSEARCH_ENDPOINT: `https://${this.openSearchCollection.attrId}.${this.region}.aoss.amazonaws.com`,
+        REDIS_ENDPOINT: this.redisCluster.attrRedisEndpointAddress,
+        INDEXES_TABLE: this.indexesTable.tableName,
+        INDEXES_TABLE_DYNAMODB_DNS_NAME: dynamoDbEndpointDnsHttp,
+      },
+      bundling: {
+        minify: true,
+        sourceMap: true,
+        target: 'node20',
+        format: nodejslambda.OutputFormat.CJS,
+        esbuild: {
+          bundle: true,
+          platform: 'node'
+        }
+      }
+    };
+
+    const videoMergeHandler = new nodejslambda.NodejsFunction(this, 'VideoMergeHandler', {
+      ...commonLambdaProps,
+      entry: 'src/lambdas/video-merge/index.ts',
+      handler: 'handler',
+      memorySize: 4096,
+      // Add the FFmpeg layer
+      layers: [this.ffmpegLayer],
+      depsLockFilePath: 'src/lambdas/video-merge/package.json'
+    });
+
+    return videoMergeHandler;
+  }
+
   private createVideoSearchFunction(): lambda.Function {
     // Create the Lambda security group with proper egress and ingress rules
     const lambdaSG = new ec2.SecurityGroup(this, 'LambdaSecurityGroupVideoSearch', {
@@ -975,6 +1046,7 @@ export class VideoSearchStack extends cdk.Stack {
     videoSliceFunction: lambda.Function;
     videoSearchFunction: lambda.Function;
     indexCrudFunction: lambda.Function;
+    videoMergeFunction: lambda.Function;
   }): apigateway.RestApi {
     // Create API Gateway
     const api = new apigateway.RestApi(this, 'VideoSearchApi', {
@@ -1115,7 +1187,9 @@ export class VideoSearchStack extends cdk.Stack {
     addMethodWithCors(videos, 'GET', lambdaFunctions.videoUploadFunction.videoUploadHandler);
     addMethodWithCors(videos, 'DELETE', lambdaFunctions.videoUploadFunction.videoUploadHandler);
     addMethodWithCors(upload, 'POST', lambdaFunctions.videoUploadFunction.videoUploadHandler);
+    // TODO: Switch to separate merge function instead of using existing videoUploadHandler
     addMethodWithCors(merge, 'POST', lambdaFunctions.videoUploadFunction.videoUploadHandler);
+    // addMethodWithCors(merge, 'POST', lambdaFunctions.videoMergeFunction);
     addMethodWithCors(uploadComplete, 'POST', lambdaFunctions.videoUploadFunction.videoUploadHandler);
     addMethodWithCors(youtube, 'POST', lambdaFunctions.videoUploadFunction.youtubeUploadHandler);
 
@@ -1138,6 +1212,7 @@ export class VideoSearchStack extends cdk.Stack {
       videoSliceFunction: lambda.Function;
       videoSearchFunction: lambda.Function;
       indexCrudFunction: lambda.Function;
+      videoMergeFunction: lambda.Function;
     },
     // textEmbeddingService: ecs.FargateService,
     videoEmbeddingService: ecs.FargateService,
@@ -1151,6 +1226,7 @@ export class VideoSearchStack extends cdk.Stack {
     this.videoBucket.grantRead(lambdaFunctions.videoSearchFunction);
     this.videoBucket.grantReadWrite(lambdaFunctions.videoSliceFunction);
     this.videoBucket.grantReadWrite(lambdaFunctions.indexCrudFunction);
+    this.videoBucket.grantReadWrite(lambdaFunctions.videoMergeFunction);
 
     // Grant permissions to embedding services to access S3
     this.videoBucket.grantRead(videoEmbeddingService.taskDefinition.taskRole);
@@ -1216,6 +1292,7 @@ export class VideoSearchStack extends cdk.Stack {
     lambdaFunctions.videoSliceFunction.addToRolePolicy(openSearchPolicy);
     lambdaFunctions.videoSearchFunction.addToRolePolicy(openSearchPolicy);
     lambdaFunctions.indexCrudFunction.addToRolePolicy(openSearchPolicy);
+    lambdaFunctions.videoMergeFunction.addToRolePolicy(openSearchPolicy);
 
     // Grant permissions to embedding services to access OpenSearch
     // textEmbeddingService.taskDefinition.addToTaskRolePolicy(openSearchPolicy);
@@ -1256,6 +1333,7 @@ export class VideoSearchStack extends cdk.Stack {
     indexesTable.grantReadWriteData(lambdaFunctions.videoSliceFunction);
     indexesTable.grantReadWriteData(lambdaFunctions.indexCrudFunction);
     indexesTable.grantReadData(lambdaFunctions.videoSearchFunction);
+    indexesTable.grantReadWriteData(lambdaFunctions.videoMergeFunction);
   }
 
   private createMonitoringInfrastructure(
@@ -1263,6 +1341,7 @@ export class VideoSearchStack extends cdk.Stack {
       videoUploadFunction: { videoUploadHandler: lambda.Function; youtubeUploadHandler: lambda.Function };
       videoSliceFunction: lambda.Function;
       videoSearchFunction: lambda.Function;
+      videoMergeFunction: lambda.Function;
     },
     textEmbeddingService: ecs.FargateService,
     videoEmbeddingService: ecs.FargateService
@@ -1449,6 +1528,7 @@ export class VideoSearchStack extends cdk.Stack {
     videoUploadFunction: { videoUploadHandler: lambda.Function; youtubeUploadHandler: lambda.Function };
     videoSliceFunction: lambda.Function;
     videoSearchFunction: lambda.Function;
+    videoMergeFunction: lambda.Function;
   }) {
     // Update data access policy to include Lambda roles
     const lambdaAccessPolicy = new opensearchserverless.CfnAccessPolicy(this, 'VideoSearchLambdaAccessPolicy', {
@@ -1472,7 +1552,8 @@ export class VideoSearchStack extends cdk.Stack {
         Principal: [
           lambdaFunctions.videoUploadFunction.videoUploadHandler.role?.roleArn || '',
           lambdaFunctions.videoSliceFunction.role?.roleArn || '',
-          lambdaFunctions.videoSearchFunction.role?.roleArn || ''
+          lambdaFunctions.videoSearchFunction.role?.roleArn || '',
+          lambdaFunctions.videoMergeFunction.role?.roleArn || ''
         ].filter(Boolean)
       }])
     });

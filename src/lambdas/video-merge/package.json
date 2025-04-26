@@ -1,0 +1,16 @@
+{
+  "name": "video-merge-lambda",
+  "version": "1.0.0",
+  "description": "Lambda function for merging video clips",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.400.0",
+    "@aws-sdk/client-s3": "^3.400.0",
+    "@aws-sdk/lib-dynamodb": "^3.400.0",
+    "@aws-sdk/s3-request-presigner": "^3.400.0",
+    "@opensearch-project/opensearch": "^2.3.0"
+  }
+}

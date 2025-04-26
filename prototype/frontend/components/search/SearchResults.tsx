@@ -31,7 +31,6 @@ export default function SearchResults({
   const { addToast } = useToast();
   const { addToCart } = useCart(); // Add useCart hook at the component level
   const [selectedView, setSelectedView] = useState<'clip' | 'video'>('clip')
-  const [isCartOpen, setIsCartOpen] = useState(false)
   const [selectedVideo, setSelectedVideo] = useState<VideoResult | null>(null)
   const [selectedSegment, setSelectedSegment] = useState<VideoSegment | null>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
@@ -1101,7 +1100,7 @@ export default function SearchResults({
         {/* Cart Icon */}
         <div className="flex items-center">
           <div className="relative">
-            <CartIcon onClick={() => setIsCartOpen(true)} />
+            <CartIcon />
           </div>
         </div>
       </div>
@@ -1119,11 +1118,7 @@ export default function SearchResults({
         }}
       />
       
-      {/* Cart Panel */}
-      <CartPanel
-        isOpen={isCartOpen}
-        onClose={() => setIsCartOpen(false)}
-      />
+      {/* CartPanel is now rendered inside CartIcon component */}
     </div>
   )
 }
