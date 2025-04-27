@@ -35,6 +35,8 @@ export class VideoSearchStack extends cdk.Stack {
   private readonly vpc: ec2.Vpc;
   private readonly videoBucket: s3.Bucket;
   private readonly videoProcessingQueue: sqs.Queue;
+  private readonly videoMergeQueue: sqs.Queue;
+  private readonly mergeJobsTable: dynamodb.Table;
   private readonly rekognitionTopic: sns.Topic;
   private readonly rekognitionRole: iam.Role;
   private readonly redisCluster: elasticache.CfnCacheCluster;
@@ -77,6 +79,52 @@ export class VideoSearchStack extends cdk.Stack {
     });
 
     this.videoProcessingQueue = this.createQueueInfrastructure();
+    
+    // Create merge queue
+    const videoMergeDLQ = new sqs.Queue(this, 'VideoMergeDLQ', {
+      queueName: 'video-merge-dlq.fifo',
+      retentionPeriod: cdk.Duration.days(14),
+      fifo: true,
+      contentBasedDeduplication: true
+    });
+
+    this.videoMergeQueue = new sqs.Queue(this, 'VideoMergeQueue', {
+      queueName: 'video-merge-queue.fifo',
+      visibilityTimeout: cdk.Duration.minutes(15),
+      retentionPeriod: cdk.Duration.days(14),
+      fifo: true,
+      contentBasedDeduplication: true,
+      deadLetterQueue: {
+        queue: videoMergeDLQ,
+        maxReceiveCount: 3,
+      },
+    });
+    
+    // Create DynamoDB table for merge jobs
+    this.mergeJobsTable = new dynamodb.Table(this, 'MergeJobsTable', {
+      partitionKey: { name: 'jobId', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'userId', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      timeToLiveAttribute: 'ttl', // Optional: for automatic cleanup of old jobs
+    });
+
+    // Add GSI for listing jobs by user
+    this.mergeJobsTable.addGlobalSecondaryIndex({
+      indexName: 'UserIdIndex',
+      partitionKey: { name: 'userId', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'createdAt', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL
+    });
+
+    // Add GSI for listing jobs by status
+    this.mergeJobsTable.addGlobalSecondaryIndex({
+      indexName: 'StatusIndex',
+      partitionKey: { name: 'status', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'createdAt', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL
+    });
+    
     const { topic, rekognitionRole } = this.createRekognitionTopic();
     this.rekognitionTopic = topic;
     this.rekognitionRole = rekognitionRole;
@@ -667,6 +715,8 @@ export class VideoSearchStack extends cdk.Stack {
         REDIS_ENDPOINT: this.redisCluster.attrRedisEndpointAddress,
         INDEXES_TABLE: this.indexesTable.tableName,
         INDEXES_TABLE_DYNAMODB_DNS_NAME: dynamoDbEndpointDnsHttp,
+        VIDEO_MERGE_QUEUE_URL: this.videoMergeQueue.queueUrl,
+        MERGE_JOBS_TABLE: this.mergeJobsTable.tableName
       },
       bundling: {
         minify: true,
@@ -689,6 +739,12 @@ export class VideoSearchStack extends cdk.Stack {
       layers: [this.ffmpegLayer],
       depsLockFilePath: 'src/lambdas/video-merge/package.json'
     });
+
+    // Add event source from the video merge queue
+    videoMergeHandler.addEventSource(new SqsEventSource(this.videoMergeQueue, {
+      batchSize: 1,
+      reportBatchItemFailures: true
+    }));
 
     return videoMergeHandler;
   }
@@ -1075,6 +1131,7 @@ export class VideoSearchStack extends cdk.Stack {
     // Fixed index "videos"
     // /videos/upload                         POST - Start upload
     // /videos/merge                          POST - Merge videos
+    // /videos/merge/{jobId}                  GET - Get merge job status
     // /videos/upload/{videoId}/complete      POST - Complete upload
     // /videos/youtube                        POST - YouTube upload
     // /videos/?index={indexId} or /videos/   GET  - Get specific video details or all videos
@@ -1187,9 +1244,13 @@ export class VideoSearchStack extends cdk.Stack {
     addMethodWithCors(videos, 'GET', lambdaFunctions.videoUploadFunction.videoUploadHandler);
     addMethodWithCors(videos, 'DELETE', lambdaFunctions.videoUploadFunction.videoUploadHandler);
     addMethodWithCors(upload, 'POST', lambdaFunctions.videoUploadFunction.videoUploadHandler);
-    // TODO: Switch to separate merge function instead of using existing videoUploadHandler
-    addMethodWithCors(merge, 'POST', lambdaFunctions.videoUploadFunction.videoUploadHandler);
-    // addMethodWithCors(merge, 'POST', lambdaFunctions.videoMergeFunction);
+    // Use the dedicated videoMergeFunction for merge operations
+    addMethodWithCors(merge, 'POST', lambdaFunctions.videoMergeFunction);
+    
+    // Add endpoints for merge job status and listing
+    const mergeJob = merge.addResource('{jobId}');
+    addMethodWithCors(mergeJob, 'GET', lambdaFunctions.videoMergeFunction);
+    
     addMethodWithCors(uploadComplete, 'POST', lambdaFunctions.videoUploadFunction.videoUploadHandler);
     addMethodWithCors(youtube, 'POST', lambdaFunctions.videoUploadFunction.youtubeUploadHandler);
 
@@ -1237,6 +1298,13 @@ export class VideoSearchStack extends cdk.Stack {
     
     // Grant SQS send message permissions to videoSliceFunction
     this.videoProcessingQueue.grantSendMessages(lambdaFunctions.videoSliceFunction);
+    
+    // Grant SQS permissions for videoMergeQueue
+    this.videoMergeQueue.grantSendMessages(lambdaFunctions.videoMergeFunction);
+    this.videoMergeQueue.grantConsumeMessages(lambdaFunctions.videoMergeFunction);
+    
+    // Grant DynamoDB permissions for mergeJobsTable
+    this.mergeJobsTable.grantReadWriteData(lambdaFunctions.videoMergeFunction);
 
     // SNS permissions for Rekognition notifications subscription
     snsTopic.grantSubscribe(lambdaFunctions.videoSliceFunction);
