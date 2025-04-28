@@ -663,7 +663,7 @@ async function createMergeJob(jobId: string, userId: string, mergeParams: any): 
   
   // Calculate TTL (30 days from now)
   const ttl = Math.floor(Date.now() / 1000) + (30 * 24 * 60 * 60);
-  
+  console.log('Creating merge job record in DynamoDB for jobId:', jobId, 'userId:', userId, 'mergeParams:', mergeParams);
   const job: MergeJob = {
     jobId,
     userId,
@@ -865,15 +865,15 @@ async function handleGetMergeStatus(event: APIGatewayProxyEvent, jobId: string):
 async function handleMergeRequest(event: APIGatewayProxyEvent): Promise<LambdaResponse> {
   try {
     const request = JSON.parse(event.body!);
-    
+    console.log('Received merge request:', request);
     // Determine if this is a cross-video merge or same-video merge
     const isCrossVideoMerge = request.items && Array.isArray(request.items);
     
     // Create job ID
     const jobId = uuidv4();
     
-    // Get user ID from event
-    const userId = event.requestContext.identity?.cognitoIdentityId || 'anonymous';
+    // Get user ID from request context
+    const userId = request.userId || 'anonymous';
     
     let mergeParams: any;
     

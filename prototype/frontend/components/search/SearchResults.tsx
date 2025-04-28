@@ -335,8 +335,8 @@ export default function SearchResults({
       // Use the selected index from searchOptions if available, otherwise fall back to video.indexId
       const indexId = searchOptions.selectedIndex || video.indexId;
       
-      console.log('Merging segments:', segmentIds, 'into', mergedName, ' video id:', extractedVideoId, ' video index:', indexId);
-      
+      console.log('Merging segments:', segmentIds, 'into', mergedName, ' video id:', extractedVideoId, ' video index:', indexId, ' user id:', userId);
+
       // Show processing toast
       addToast('info', 'Starting merge process. This may take a minute...');
       
