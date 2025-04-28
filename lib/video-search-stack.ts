@@ -79,51 +79,8 @@ export class VideoSearchStack extends cdk.Stack {
     });
 
     this.videoProcessingQueue = this.createQueueInfrastructure();
-    
-    // Create merge queue
-    const videoMergeDLQ = new sqs.Queue(this, 'VideoMergeDLQ', {
-      queueName: 'video-merge-dlq.fifo',
-      retentionPeriod: cdk.Duration.days(14),
-      fifo: true,
-      contentBasedDeduplication: true
-    });
-
-    this.videoMergeQueue = new sqs.Queue(this, 'VideoMergeQueue', {
-      queueName: 'video-merge-queue.fifo',
-      visibilityTimeout: cdk.Duration.minutes(15),
-      retentionPeriod: cdk.Duration.days(14),
-      fifo: true,
-      contentBasedDeduplication: true,
-      deadLetterQueue: {
-        queue: videoMergeDLQ,
-        maxReceiveCount: 3,
-      },
-    });
-    
-    // Create DynamoDB table for merge jobs
-    this.mergeJobsTable = new dynamodb.Table(this, 'MergeJobsTable', {
-      partitionKey: { name: 'jobId', type: dynamodb.AttributeType.STRING },
-      sortKey: { name: 'userId', type: dynamodb.AttributeType.STRING },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      removalPolicy: cdk.RemovalPolicy.DESTROY,
-      timeToLiveAttribute: 'ttl', // Optional: for automatic cleanup of old jobs
-    });
-
-    // Add GSI for listing jobs by user
-    this.mergeJobsTable.addGlobalSecondaryIndex({
-      indexName: 'UserIdIndex',
-      partitionKey: { name: 'userId', type: dynamodb.AttributeType.STRING },
-      sortKey: { name: 'createdAt', type: dynamodb.AttributeType.STRING },
-      projectionType: dynamodb.ProjectionType.ALL
-    });
-
-    // Add GSI for listing jobs by status
-    this.mergeJobsTable.addGlobalSecondaryIndex({
-      indexName: 'StatusIndex',
-      partitionKey: { name: 'status', type: dynamodb.AttributeType.STRING },
-      sortKey: { name: 'createdAt', type: dynamodb.AttributeType.STRING },
-      projectionType: dynamodb.ProjectionType.ALL
-    });
+    this.videoMergeQueue = this.createVideoMergeQueue();
+    this.mergeJobsTable = this.createMergeJobsTable();
     
     const { topic, rekognitionRole } = this.createRekognitionTopic();
     this.rekognitionTopic = topic;
@@ -403,6 +360,61 @@ export class VideoSearchStack extends cdk.Stack {
     initialAccessPolicy.addDependency(collection);
 
     return collection;
+  }
+  
+  /**
+   * Create SQS queue for video merge operations
+   */
+  private createVideoMergeQueue(): sqs.Queue {
+    const dlq = new sqs.Queue(this, 'VideoMergeDLQ', {
+      queueName: 'video-merge-dlq.fifo',
+      retentionPeriod: cdk.Duration.days(14),
+      fifo: true,
+      contentBasedDeduplication: true
+    });
+
+    return new sqs.Queue(this, 'VideoMergeQueue', {
+      queueName: 'video-merge-queue.fifo',
+      visibilityTimeout: cdk.Duration.minutes(15),
+      retentionPeriod: cdk.Duration.days(14),
+      fifo: true,
+      contentBasedDeduplication: true,
+      deadLetterQueue: {
+        queue: dlq,
+        maxReceiveCount: 3,
+      },
+    });
+  }
+  
+  /**
+   * Create DynamoDB table for merge jobs
+   */
+  private createMergeJobsTable(): dynamodb.Table {
+    const table = new dynamodb.Table(this, 'MergeJobsTable', {
+      partitionKey: { name: 'jobId', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'userId', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      timeToLiveAttribute: 'ttl',
+    });
+    
+    // Add GSI for querying by userId
+    table.addGlobalSecondaryIndex({
+      indexName: 'UserIdIndex',
+      partitionKey: { name: 'userId', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'createdAt', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL
+    });
+    
+    // Add GSI for querying by status
+    table.addGlobalSecondaryIndex({
+      indexName: 'StatusIndex',
+      partitionKey: { name: 'status', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'createdAt', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL
+    });
+    
+    return table;
   }
 
   private createCacheInfrastructure(): elasticache.CfnCacheCluster {

@@ -12,6 +12,7 @@ import VideoModal from '@/components/VideoModal'
 import { useToast } from '@/components/ui/Toast'
 import AddToCartButton from '@/components/cart/AddToCartButton'
 import { useCart } from '@/lib/cart/CartContext'
+import { useAuth } from '@/lib/auth/AuthContext'
 import Link from 'next/link'
 
 // Add API configuration
@@ -30,6 +31,8 @@ export default function SearchResults({
 }: SearchResultsProps) {
   const { addToast } = useToast();
   const { addToCart } = useCart(); // Add useCart hook at the component level
+  const { state: authState } = useAuth(); // Add useAuth hook to get user information
+  const userId = authState.user?.id || 'anonymous'; // Get userId or use 'anonymous' as fallback
   const [selectedView, setSelectedView] = useState<'clip' | 'video'>('clip')
   const [selectedVideo, setSelectedVideo] = useState<VideoResult | null>(null)
   const [selectedSegment, setSelectedSegment] = useState<VideoSegment | null>(null)
@@ -348,6 +351,7 @@ export default function SearchResults({
           videoId: extractedVideoId, // Use extracted ID instead of video.id
           segmentIds,
           mergedName,
+          userId, // Include userId in the request
           mergeOptions: {
             resolution: '720p',
             transition: 'cut',
@@ -400,6 +404,7 @@ export default function SearchResults({
         extractedVideoId,
         indexId,
         segments.length,
+        userId, // Add userId parameter
         setMergeStatus,
         addToast,
         setMergedSegment,
@@ -418,7 +423,7 @@ export default function SearchResults({
         message: `Failed to merge: ${error instanceof Error ? error.message : 'Unknown error'}`
       });
     }
-  }, [clearSelectedSegments, searchOptions, addToast, startPollingForMergedFile]);
+  }, [clearSelectedSegments, searchOptions, addToast, startPollingForMergedFile, userId]); // Add userId to dependencies
   
   // Helper function to download selected segments
   const downloadSelectedSegments = useCallback((video: VideoResult, segments: VideoSegment[]) => {
@@ -1166,6 +1171,7 @@ function startPollingForJobStatus(
   videoId: string,
   indexId: string,
   segmentCount: number,
+  userId: string, // Add userId parameter
   setMergeStatus: React.Dispatch<React.SetStateAction<any>>,
   addToast: any, // Use any type to avoid type conflicts
   setMergedSegment: React.Dispatch<React.SetStateAction<any>>,
@@ -1188,7 +1194,7 @@ function startPollingForJobStatus(
     
     try {
       // Call the API to get job status
-      const response = await fetch(`${API_ENDPOINT}/videos/merge/${jobId}`);
+      const response = await fetch(`${API_ENDPOINT}/videos/merge/${jobId}?userId=${encodeURIComponent(userId)}`);
       
       if (!response.ok) {
         throw new Error(`Failed to get job status: ${response.statusText}`);

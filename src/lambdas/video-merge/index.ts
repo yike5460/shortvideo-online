@@ -71,6 +71,7 @@ interface MergeSegmentsRequest {
   videoId: string;           // The original video ID
   segmentIds: string[];      // IDs of segments to merge
   mergedName?: string;       // Optional custom name for the merged segment
+  userId?: string;           // User ID for tracking merge jobs
   mergeOptions?: {
     resolution: '720p' | '1080p';
     transition: 'cut' | 'fade' | 'dissolve';
@@ -93,6 +94,7 @@ interface CrossVideoMergeRequest {
     transitionDuration?: number;
   }[];
   mergedName?: string;
+  userId?: string;           // User ID for tracking merge jobs
   mergeOptions: {
     resolution: '720p' | '1080p';
     defaultTransition: 'cut' | 'fade' | 'dissolve';
@@ -298,8 +300,13 @@ async function _performVideoMerge(params: {
     const pathParts = firstSegment.segment_video_s3_path.split('/');
     const timestamp = pathParts[1];
     
-    // Define S3 paths for merged video and its thumbnail
-    const mergedVideoS3Path = `ProcessedVideos/${timestamp}/merged/${jobId}/${mergedFilename}`;
+    // Extract indexId and videoId from the first segment for consistent S3 path structure
+    // For cross-video merges, we'll use the first segment's indexId and videoId as the "parent"
+    const parentIndexId = firstSegment.indexId;
+    const parentVideoId = firstSegment.videoId;
+    
+    // Define S3 paths for merged video and its thumbnail using the same structure as video-upload/index.ts
+    const mergedVideoS3Path = `ProcessedVideos/${timestamp}/${parentIndexId}/${parentVideoId}/merged/${mergedFilename}`;
     const mergedThumbnailS3Path = mergedVideoS3Path.replace(/\.mp4$/i, '.jpg');
     
     // Create temporary directory for processing
@@ -470,8 +477,119 @@ async function _performVideoMerge(params: {
       mergedThumbnailS3Path
     };
     
+    // Calculate merged segment metadata
+    const mergedSegmentId = `merged_${jobId}`;
+    const startTime = sortedSegments[0].start_time;
+    const endTime = sortedSegments[sortedSegments.length - 1].end_time;
+    const segmentDuration = endTime - startTime;
+    
+    // Create merged segment object
+    const mergedSegment = {
+      segment_id: mergedSegmentId,
+      video_id: parentVideoId,
+      start_time: startTime,
+      end_time: endTime,
+      duration: segmentDuration,
+      segment_video_s3_path: mergedVideoS3Path,
+      segment_video_preview_url: mergedVideoUrl,
+      segment_video_thumbnail_s3_path: mergedThumbnailS3Path,
+      segment_video_thumbnail_url: mergedThumbnailUrl,
+      segment_visual: {
+        segment_visual_description: `Merged clip from ${segments.length} segments`
+      }
+    };
+    
+    // Update OpenSearch document with the merged segment
+    try {
+      // Get the OpenSearch document ID for the video
+      const { body: searchResult } = await withRetry(
+        async () => openSearch.search({
+          index: parentIndexId,
+          body: {
+            query: {
+              term: {
+                video_id: parentVideoId
+              }
+            }
+          }
+        }),
+        3,
+        `Search for video ${parentVideoId} in index ${parentIndexId}`
+      );
+      
+      if (!searchResult.hits || !searchResult.hits.hits || searchResult.hits.hits.length === 0) {
+        throw new Error(`Video ${parentVideoId} not found in index ${parentIndexId}`);
+      }
+      
+      // Extract document ID
+      const documentId = searchResult.hits.hits[0]._id;
+      
+      // Update OpenSearch document
+      await openSearch.update({
+        index: parentIndexId,
+        id: documentId,
+        body: {
+          script: {
+            source: `
+              // Initialize arrays if null
+              if (ctx._source.video_segments == null) {
+                ctx._source.video_segments = [];
+              }
+              if (ctx._source.merged_segments == null) {
+                ctx._source.merged_segments = [];
+              }
+              
+              // Add merged segment to both arrays
+              // Keep in video_segments for backward compatibility
+              ctx._source.video_segments.add(params.mergedSegment);
+              
+              // Add to dedicated merged_segments array
+              ctx._source.merged_segments.add(params.mergedSegment);
+              
+              ctx._source.updated_at = params.updated_at;
+            `,
+            params: {
+              mergedSegment: mergedSegment,
+              updated_at: new Date().toISOString()
+            }
+          }
+        }
+      });
+      
+      console.log(`Successfully added merged segment to OpenSearch document for video ${parentVideoId}`);
+    } catch (error) {
+      console.error('Error updating OpenSearch document:', error);
+      
+      // Clean up S3 objects if OpenSearch update fails
+      try {
+        console.log(`Cleaning up S3 objects after OpenSearch update failure: ${mergedVideoS3Path} and ${mergedThumbnailS3Path}`);
+        
+        // Delete merged video from S3
+        await s3.send(new DeleteObjectCommand({
+          Bucket: bucketName,
+          Key: mergedVideoS3Path
+        }));
+        
+        // Delete thumbnail from S3
+        await s3.send(new DeleteObjectCommand({
+          Bucket: bucketName,
+          Key: mergedThumbnailS3Path
+        }));
+        
+        console.log('Successfully cleaned up S3 objects after OpenSearch update failure');
+      } catch (cleanupError) {
+        console.error('Error cleaning up S3 objects after OpenSearch update failure:', cleanupError);
+      }
+      
+      // Re-throw the error to mark the job as failed
+      throw new Error(`Failed to update OpenSearch document: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+    
     // Update job status to completed
-    await updateMergeJobCompleted(jobId, userId, result);
+    await updateMergeJobCompleted(jobId, userId, {
+      ...result,
+      mergedSegment
+    });
     
     // Clean up temporary files
     try {
@@ -480,7 +598,10 @@ async function _performVideoMerge(params: {
       console.warn('Error cleaning up temporary files:', cleanupError);
     }
     
-    return result;
+    return {
+      ...result,
+      mergedSegment
+    };
   } catch (error) {
     // Update job status to failed
     await updateMergeJobFailed(jobId, userId, error instanceof Error ? error.message : 'Unknown error');
@@ -531,146 +652,8 @@ async function getVideoDuration(videoPath: string): Promise<number> {
   }
 }
 
-/**
- * Handle merging video segments from different videos
- */
-async function handleCrossVideoMerge(event: APIGatewayProxyEvent): Promise<LambdaResponse> {
-  try {
-    const request: CrossVideoMergeRequest = JSON.parse(event.body!);
-    const { items, mergedName, mergeOptions } = request;
-
-    console.log(`Handling cross-video merge request for ${items.length} segments`);
-    
-    // Validate request parameters
-    if (!items || items.length < 2 || !mergeOptions) {
-      return {
-        statusCode: STATUS_CODES.BAD_REQUEST,
-        headers: corsHeaders,
-        body: JSON.stringify({
-          error: 'Invalid request parameters',
-          details: 'At least 2 items and mergeOptions are required'
-        })
-      };
-    }
-
-    // Create job ID
-    const jobId = uuidv4();
-    
-    // Get user ID from event (in a real implementation, this would come from auth)
-    const userId = event.requestContext.identity?.cognitoIdentityId || 'anonymous';
-    
-    // Create merge parameters for unified function
-    const mergeParams = {
-      items,
-      mergedName,
-      mergeOptions,
-      jobId,
-      userId
-    };
-    
-    // Create job record in DynamoDB
-    await createMergeJob(jobId, userId, mergeParams);
-    
-    // Queue the job
-    await queueMergeJob(jobId, mergeParams);
-    
-    return {
-      statusCode: STATUS_CODES.OK,
-      headers: corsHeaders,
-      body: JSON.stringify({
-        message: 'Cross-video merge job created and queued',
-        jobId,
-        status: 'queued'
-      })
-    };
-  } catch (error) {
-    console.error('Error creating cross-video merge job:', error);
-    return {
-      statusCode: STATUS_CODES.INTERNAL_SERVER_ERROR,
-      headers: corsHeaders,
-      body: JSON.stringify({
-        error: 'Failed to create cross-video merge job',
-        details: error instanceof Error ? error.message : 'Unknown error'
-      })
-    };
-  }
-}
-
-/**
- * Handle the merging of video segments from the same video
- */
-async function handleMergeSegments(event: APIGatewayProxyEvent): Promise<LambdaResponse> {
-  try {
-    const request: MergeSegmentsRequest = JSON.parse(event.body!);
-    const { indexId, videoId, segmentIds, mergedName, mergeOptions } = request;
-
-    console.log(`Handling segment merge request for video ${videoId} in index ${indexId}, segments: ${segmentIds.join(', ')}`);
-    
-    // Validate request parameters
-    if (!indexId || !videoId || !segmentIds || segmentIds.length < 2) {
-      return {
-        statusCode: STATUS_CODES.BAD_REQUEST,
-        headers: corsHeaders,
-        body: JSON.stringify({
-          error: 'Invalid request parameters',
-          details: 'indexId, videoId, and at least 2 segmentIds are required'
-        })
-      };
-    }
-
-    // Create job ID
-    const jobId = uuidv4();
-    
-    // Get user ID from event (in a real implementation, this would come from auth)
-    const userId = event.requestContext.identity?.cognitoIdentityId || 'anonymous';
-    
-    // Create merge parameters for unified function
-    const mergeParams = {
-      items: segmentIds.map(segmentId => ({
-        indexId,
-        videoId,
-        segmentId,
-        // Default transition settings
-        transitionType: (mergeOptions?.transition || 'cut') as 'cut' | 'fade' | 'dissolve',
-        transitionDuration: mergeOptions?.transitionDuration || 500
-      })),
-      mergedName,
-      mergeOptions: {
-        resolution: (mergeOptions?.resolution || '720p') as '720p' | '1080p',
-        defaultTransition: (mergeOptions?.transition || 'cut') as 'cut' | 'fade' | 'dissolve',
-        defaultTransitionDuration: mergeOptions?.transitionDuration || 500
-      },
-      jobId,
-      userId
-    };
-    
-    // Create job record in DynamoDB
-    await createMergeJob(jobId, userId, mergeParams);
-    
-    // Queue the job
-    await queueMergeJob(jobId, mergeParams);
-    
-    return {
-      statusCode: STATUS_CODES.OK,
-      headers: corsHeaders,
-      body: JSON.stringify({
-        message: 'Merge job created and queued',
-        jobId,
-        status: 'queued'
-      })
-    };
-  } catch (error) {
-    console.error('Error creating merge job:', error);
-    return {
-      statusCode: STATUS_CODES.INTERNAL_SERVER_ERROR,
-      headers: corsHeaders,
-      body: JSON.stringify({
-        error: 'Failed to create merge job',
-        details: error instanceof Error ? error.message : 'Unknown error'
-      })
-    };
-  }
-}
+// The separate handleCrossVideoMerge and handleMergeSegments functions have been removed
+// and replaced with the unified handleMergeRequest function below
 
 /**
  * Create a merge job record in DynamoDB
@@ -739,9 +722,10 @@ async function updateMergeJobCompleted(jobId: string, userId: string, result: an
   await docClient.send(new UpdateCommand({
     TableName: process.env.MERGE_JOBS_TABLE,
     Key: { jobId, userId },
-    UpdateExpression: 'SET #status = :status, progress = :progress, result = :result, completedAt = :completedAt',
+    UpdateExpression: 'SET #status = :status, progress = :progress, #result = :result, completedAt = :completedAt',
     ExpressionAttributeNames: {
-      '#status': 'status'
+      '#status': 'status',
+      '#result': 'result'
     },
     ExpressionAttributeValues: {
       ':status': 'completed',
@@ -778,20 +762,43 @@ async function updateMergeJobFailed(jobId: string, userId: string, errorMessage:
  */
 async function getMergeJobStatus(jobId: string, userId?: string, allowMissingUserId?: boolean): Promise<MergeJob | null> {
   if (userId) {
+    // Direct query with primary key (no change)
     const result = await docClient.send(new GetCommand({
       TableName: process.env.MERGE_JOBS_TABLE,
       Key: { jobId, userId }
     }));
     return result.Item as MergeJob || null;
   } else if (allowMissingUserId) {
-    // Scan for the jobId (inefficient, but needed for SQS handler)
+    // Use StatusIndex instead of non-existent jobId-index
+    // Query for all jobs with status 'queued' or 'processing' (most likely for recent jobs)
     const result = await docClient.send(new QueryCommand({
       TableName: process.env.MERGE_JOBS_TABLE,
-      IndexName: 'jobId-index',
-      KeyConditionExpression: 'jobId = :jobId',
-      ExpressionAttributeValues: { ':jobId': jobId }
+      IndexName: 'StatusIndex',
+      KeyConditionExpression: 'status = :status',
+      ExpressionAttributeValues: {
+        ':status': 'queued'
+      }
     }));
-    return (result.Items && result.Items[0]) as MergeJob || null;
+    
+    // If no queued jobs found, try processing jobs
+    if (!result.Items || result.Items.length === 0) {
+      const processingResult = await docClient.send(new QueryCommand({
+        TableName: process.env.MERGE_JOBS_TABLE,
+        IndexName: 'StatusIndex',
+        KeyConditionExpression: 'status = :status',
+        ExpressionAttributeValues: {
+          ':status': 'processing'
+        }
+      }));
+      
+      // Filter results client-side to find the job with matching jobId
+      const job = processingResult.Items?.find(item => item.jobId === jobId);
+      return job as MergeJob || null;
+    }
+    
+    // Filter results client-side to find the job with matching jobId
+    const job = result.Items?.find(item => item.jobId === jobId);
+    return job as MergeJob || null;
   } else {
     throw new Error('userId is required');
   }
@@ -819,7 +826,11 @@ async function listMergeJobs(userId: string): Promise<MergeJob[]> {
  */
 async function handleGetMergeStatus(event: APIGatewayProxyEvent, jobId: string): Promise<LambdaResponse> {
   try {
-    const userId = event.requestContext.identity?.cognitoIdentityId || 'anonymous';
+    // Get userId from query parameter if provided, otherwise from auth context
+    const queryParams = event.queryStringParameters || {};
+    const userId = queryParams.userId || event.requestContext.identity?.cognitoIdentityId || 'anonymous';
+    
+    console.log(`Getting status for job ${jobId} with userId ${userId}`);
     const job = await getMergeJobStatus(jobId, userId);
     
     if (!job) {
@@ -943,6 +954,7 @@ async function handleMergeRequest(event: APIGatewayProxyEvent): Promise<LambdaRe
       body: JSON.stringify({
         message: 'Merge job created and queued',
         jobId,
+        userId,  // Include userId in response for frontend polling
         status: 'queued'
       })
     };
@@ -971,14 +983,26 @@ export const handler = async (event: APIGatewayProxyEvent | SQSEvent): Promise<L
         const body = JSON.parse(record.body);
         try {
           console.log(`Processing merge job from SQS: ${JSON.stringify(body)}`);
-          // userId is not in mergeParams, so fetch it from DynamoDB first
-          const jobId = body.mergeParams.jobId;
-          // Get the job to extract userId
-          const job = await getMergeJobStatus(jobId, undefined, true); // true = allow missing userId
-          if (!job || !job.userId) {
-            throw new Error('userId not found for job');
+          
+          // Extract jobId from the message
+          const jobId = body.jobId;
+          
+          // Try to extract userId directly from the message parameters
+          const userId = body.mergeParams?.userId;
+          
+          if (userId) {
+            // If userId is in the message, use it directly
+            console.log(`Using userId ${userId} from message parameters`);
+            await _performVideoMerge(body.mergeParams, userId);
+          } else {
+            // Fall back to querying DynamoDB if userId is not in the message
+            console.log(`No userId found in message parameters, querying DynamoDB for job ${jobId}`);
+            const job = await getMergeJobStatus(jobId, undefined, true); // true = allow missing userId
+            if (!job || !job.userId) {
+              throw new Error('userId not found for job');
+            }
+            await _performVideoMerge(body.mergeParams, job.userId);
           }
-          await _performVideoMerge(body.mergeParams, job.userId);
         } catch (error) {
           console.error('Error processing merge job:', error);
           // Don't throw here to prevent the message from being reprocessed
