@@ -1,4 +1,4 @@
-# shortvideo-online
+# Know Your Video (Design Document)
 
 ## Search Service
 
@@ -85,8 +85,92 @@ The backend is implemented using AWS CDK with TypeScript, providing a secure and
   - Automatic metadata extraction
   - Queue-based processing
 
+- **S3 Connector**
+  - Allows importing videos from user's own S3 buckets
+  - Authentication using IAM role-based access
+  - Browsing and searching within S3 buckets
+  - Direct streaming of media from S3
+  - Hybrid approach for file transfers (direct streaming for small files, copy operation for large files)
+  - Seamless integration with existing processing pipeline
+
+##### S3 Connector Architecture
+```mermaid
+graph TD
+    A[Frontend] --> B[API Gateway]
+    B --> C[S3 Connector Lambda]
+    C --> D[User's S3 Bucket]
+    C --> E[Platform S3 Bucket]
+    E -->|S3 Event| F[Video Slice Lambda]
+    F --> G[OpenSearch]
+    C --> H[DynamoDB]
+    
+    subgraph "User Authentication"
+        I[Cognito] --> J[IAM Role]
+        J --> D
+    end
+    
+    subgraph "Media Processing"
+        F --> E
+    end
+```
+
+##### S3 Authentication Flow
+```mermaid
+sequenceDiagram
+    participant User
+    participant Frontend
+    participant Backend
+    participant AWS STS
+    participant User S3 Bucket
+    
+    User->>Frontend: Configure S3 connector with IAM role ARN
+    Frontend->>Backend: Store connector configuration
+    Backend->>Backend: Validate IAM role ARN format
+    
+    User->>Frontend: Browse S3 bucket
+    Frontend->>Backend: Request bucket contents
+    Backend->>AWS STS: AssumeRole with user's IAM role ARN
+    AWS STS->>Backend: Return temporary credentials
+    Backend->>User S3 Bucket: List objects using temporary credentials
+    User S3 Bucket->>Backend: Return object list
+    Backend->>Frontend: Return formatted file list
+    Frontend->>User: Display files
+```
+
+##### S3 Media Import Flow
+```mermaid
+sequenceDiagram
+    participant User
+    participant Frontend
+    participant Backend
+    participant AWS STS
+    participant User S3 Bucket
+    participant Platform S3 Bucket
+    participant Video Slice Lambda
+    
+    User->>Frontend: Select files to import
+    Frontend->>Backend: Request file import
+    Backend->>AWS STS: AssumeRole with user's IAM role ARN
+    AWS STS->>Backend: Return temporary credentials
+    
+    alt Small Files (<100MB) - Direct Streaming
+        Backend->>User S3 Bucket: Get object using temporary credentials
+        User S3 Bucket->>Backend: Stream object data
+        Backend->>Backend: Validate and process metadata
+        Backend->>Platform S3 Bucket: Upload to platform bucket
+    else Large Files (≥100MB) - Copy Operation
+        Backend->>User S3 Bucket: Generate pre-signed URL
+        Backend->>Platform S3 Bucket: Copy object using pre-signed URL
+    end
+    
+    Platform S3 Bucket->>Video Slice Lambda: Trigger Lambda via S3 event
+    Video Slice Lambda->>OpenSearch: Index video metadata
+    Backend->>Frontend: Return import status
+    Frontend->>User: Display import progress
+```
+
 - **Common Processing**
-  - Both flows converge to same processing pipeline
+  - All upload flows converge to same processing pipeline
   - SQS queuing for async processing
   - OpenSearch indexing for search capabilities
   - Progress tracking through job status
@@ -635,12 +719,26 @@ Overall API Path:
    /videos/{videoId} or /videos/          DELETE - Delete specific video or all videos
    /videos/status/{videoId}               GET  - Check status, uploading, slicing, indexing, completed, failed
    /videos/search                         POST - Search videos
+   /videos/merge                          POST - Start a merge job
+   /videos/merge/{jobId}                  GET - Check merge job status
+   /videos/merge                          GET - List user's merge jobs
+   /videos/import/s3                      POST - Import video from S3
 
     # Dynamic index management
    /indexes                               POST - Create index, this may be handled by the /videos/upload endpoint
    /indexes/{indexId}                     GET - Get index details or delete index, including query status, search options, upload status
    /indexes/{indexId}                     POST - Upload videos to specific index
    /indexes/{indexId}                     DELETE - Delete index
+   
+    # S3 Connector management
+   /connectors/s3                         POST - Create new S3 connector
+   /connectors/s3                         GET - List user's S3 connectors
+   /connectors/s3/{connectorId}           GET - Get connector details
+   /connectors/s3/{connectorId}           PUT - Update connector
+   /connectors/s3/{connectorId}           DELETE - Delete connector
+   /connectors/s3/{connectorId}/buckets           - List buckets
+   /connectors/s3/{connectorId}/buckets/{bucket}  - List files in bucket
+   /connectors/s3/{connectorId}/search           - Search files
 ```
 
 ##### Video Management
@@ -819,6 +917,110 @@ s3://bucket-name/
 |                   └── def_002.jpg (thumbnail)
 ```
 
+## Video Processing Features
+
+### Video Clip Cart and Merging
+
+This feature allows users to store selected video clips in a temporary cart, enabling them to search with different keywords multiple times and accumulate clips from various searches before performing operations like merging, downloading, or exporting.
+
+#### Data Structure
+
+```typescript
+interface CartItem {
+  videoId: string;
+  indexId: string;
+  segment: VideoSegment;
+  addedAt: number; // timestamp
+  source: string; // search query that found this clip
+  videoTitle?: string; // video title for display
+  selectedIndex?: string | null; // selected index from search options
+  order?: number; // for explicit ordering in merged output
+  transitionAfter?: 'cut' | 'fade' | 'dissolve'; // transition to next clip
+  transitionDurationMs?: number; // transition duration
+}
+
+interface MergeJob {
+  id: string;
+  userId: string;
+  status: 'queued' | 'processing' | 'completed' | 'failed';
+  progress: number;
+  createdAt: number;
+  completedAt?: number;
+  clips: CartItem[];
+  options: {
+    resolution: '720p' | '1080p';
+    defaultTransition: string;
+    outputFormat: string;
+    mergedName: string;
+  };
+  result?: {
+    mergedVideoUrl: string;
+    thumbnailUrl: string;
+    duration: number;
+  };
+  error?: string;
+}
+```
+
+#### Frontend Components
+
+```mermaid
+graph TD
+    A[Main Search Page] --> B[Search Results Area]
+    A --> C[Cart Sidebar]
+    C --> D[Collapse/Expand Toggle]
+    C --> E[Cart Header]
+    C --> F[Cart Items List]
+    C --> G[Cart Actions]
+    F --> H[Drag & Drop Reordering]
+    G --> I[Merge Options Panel]
+    I --> J[Resolution Selector]
+    I --> K[Transition Type Selector]
+    G --> L[Merge Button]
+    G --> M[Download Button]
+    G --> N[Clear Button]
+```
+
+#### Backend Infrastructure
+
+```mermaid
+graph TD
+    A[API Gateway] --> B[Video Merge Lambda]
+    B --> C[S3 Bucket]
+    B --> D[DynamoDB Table]
+    B --> E[FFmpeg Layer]
+    F[Frontend] -->|Polling| B
+```
+
+#### Video Processing Pipeline
+
+```mermaid
+flowchart TD
+    A[Start Merge Job] --> B{Validate Inputs}
+    B -->|Invalid| C[Return Error]
+    B -->|Valid| D[Create Job in DynamoDB]
+    D --> E[Process Video Merge]
+    E --> F[Download Source Clips]
+    F --> G[Normalize Video Formats]
+    G --> H[Apply Transitions]
+    H --> I[Encode Final Output]
+    I --> J[Upload to S3]
+    J --> K[Update Job Status in DynamoDB]
+    L[Frontend] -->|Poll Status| K
+```
+
+#### Processing Optimizations
+
+- **Lambda Configuration**: 10GB memory allocation for maximum CPU performance
+- **Parallel Processing**: Concurrent download and normalization of clips
+- **FFmpeg Optimizations**:
+  - Hardware acceleration when available
+  - Adaptive encoding presets based on clip length
+  - Two-pass encoding for longer clips
+- **Resolution Management**: Adaptive resolution processing based on clip count
+- **Transition Optimization**: Pre-computed transition frames and FFmpeg filters
+- **Timeout Prevention**: Heartbeat mechanism with quality reduction fallbacks
+
 ## Security & Performance
 
 - **Upload Security**
@@ -852,6 +1054,12 @@ s3://bucket-name/
 ## TODO
 Backend:
 - [ ] Add index deletion using /indexes/{indexId} DELETE
+- [ ] Unifiy the merge job entry point for Video Clip Cart (Merge Selected button) and Video Bar (Merge button)
+- [ ] Optimize video merge performance for 10+ clips
+- [ ] Test for cross account access for S3 connector
+- [ ] Test for video transition between clips
+- [ ] Test for drag and drop reordering for video clip cart
+
 
 Frontend:
-- [ ] Integrate with Amplify, code like import { defineAuth } from '@aws-amplify/backend'
+- [ ] Deep Search feature
