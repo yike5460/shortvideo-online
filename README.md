@@ -1059,7 +1059,7 @@ Backend:
 - [ ] Test for cross account access for S3 connector
 - [ ] Test for video transition between clips
 - [ ] Test for drag and drop reordering for video clip cart
-
+- [ ] BGM, translation for merge job and separate panel for the post processing
 
 Frontend:
 - [ ] Deep Search feature
