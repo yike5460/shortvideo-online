@@ -52,6 +52,8 @@ cdk.context.json
 .parcel-cache/
 !/.projenrc.ts
 .next/
-
+# All environment variables
+.env
+.env.local
 src/layers/ffmpeg/bin/
 src/layers/yt-dlp/bin/
