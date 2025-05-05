@@ -3,11 +3,11 @@ import { NovaClient } from '../utils/nova-client';
 async function main() {
   try {
     // S3 URI of your video file
-    const s3Uri = 's3://your-bucket-name/path/to/your-video.mp4';
+    const s3Uri = 's3://video-search-dev-ap-northeast-1/RawVideos/2025-04-12/0412/b93e2638-77c9-4aec-8981-b1013c272498/黑神话-神笔马良.mp4';
     const videoFormat = 'mp4';
     
     // Optional: S3 bucket owner account ID
-    const bucketOwner = '111122223333'; // Replace with your bucket owner account ID
+    const bucketOwner = ''; // Replace with your bucket owner account ID
     
     // Create a new Nova client
     const novaClient = new NovaClient();

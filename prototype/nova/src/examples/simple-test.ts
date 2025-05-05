@@ -41,8 +41,8 @@ async function main() {
     console.log(`  - Path: ${testVideoPath}`);
     console.log(`  - Size: ${fileSizeMB.toFixed(2)} MB`);
     
-    if (fileSizeMB > 5) {
-      console.error('❌ ERROR: Video is larger than 5MB. Please use a smaller video for testing.');
+    if (fileSizeMB > 25) {
+      console.error('❌ ERROR: Video is larger than 25MB (base64). Please use a smaller video for testing.');
       console.log('Recommended size: 1-3MB, duration: 3-5 seconds.');
       return;
     }
@@ -95,7 +95,7 @@ async function main() {
       // Provide troubleshooting guidance based on error message
       if (error.message.includes('ValidationException')) {
         console.log('\n🔍 Troubleshooting Suggestions:');
-        console.log('  1. Ensure your video is very small (under 5MB, ideally 1-3MB)');
+        console.log('  1. Ensure your video is very small (under 25MB (base64), ideally 1-3MB)');
         console.log('  2. Try a shorter video (3-5 seconds)');
         console.log('  3. Verify your AWS credentials and region are correct');
         console.log('  4. Ensure you have access to the Nova models in AWS Bedrock');

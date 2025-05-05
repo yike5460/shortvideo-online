@@ -48,7 +48,12 @@ export class NovaClient {
     inferenceConfig?: InferenceConfig
   ): Promise<NovaResponse> {
     try {
-      const videoFormat = path.extname(videoPath).slice(1).toLowerCase();
+      // Extract format from file extension and ensure it's one of the supported formats
+      const rawFormat = path.extname(videoPath).slice(1).toLowerCase();
+      const supportedFormats = ["mkv", "mov", "mp4", "webm", "three_gp", "flv", "mpeg", "mpg", "wmv"];
+      const videoFormat = supportedFormats.includes(rawFormat) ? rawFormat : "mp4"; // Default to mp4 if not supported
+      
+      console.log(`Video format: ${videoFormat}`);
       
       // Check file size before attempting to read
       const stats = fs.statSync(videoPath);
@@ -64,7 +69,7 @@ export class NovaClient {
       const videoBuffer = fs.readFileSync(videoPath);
       const videoBase64 = videoBuffer.toString('base64');
 
-      // Following the format from the JavaScript SDK v3 examples
+      // Following the format from the JavaScript SDK v3 examples, detailed schema refer to https://docs.aws.amazon.com/nova/latest/userguide/complete-request-schema.html
       const requestBody: BedrockRequestBody = {
         messages: [
           {
@@ -96,6 +101,25 @@ export class NovaClient {
       
       console.log(`Invoking model: ${this.modelId}`);
       console.log(`Request structure: ${Object.keys(requestBody).join(', ')}`);
+      
+      // Log the full request body structure (without the actual video bytes for brevity)
+      const logRequestBody = JSON.parse(JSON.stringify(requestBody)); // Deep clone
+      if (logRequestBody.messages && logRequestBody.messages[0]?.content) {
+        const videoContent = logRequestBody.messages[0].content.find((c: any) => 'video' in c);
+        if (videoContent && 'video' in videoContent && videoContent.video.source.bytes) {
+          videoContent.video.source.bytes = `[Base64 encoded video - ${(videoBase64.length / 1024 / 1024).toFixed(2)}MB]`;
+        }
+      }
+      console.log('Full request body:', JSON.stringify(logRequestBody, null, 2));
+      
+      // Validate the request structure
+      if (!requestBody.messages || !Array.isArray(requestBody.messages) || requestBody.messages.length === 0) {
+        throw new Error('Invalid request: messages array is required and must not be empty');
+      }
+      
+      if (requestBody.messages[0].role !== 'user') {
+        throw new Error('Invalid request: first message must have role "user"');
+      }
       
       // Format matches JavaScript SDK v3 examples for Bedrock
       const command = new InvokeModelCommand({
@@ -136,6 +160,12 @@ export class NovaClient {
     inferenceConfig?: InferenceConfig
   ): Promise<NovaResponse> {
     try {
+      // Validate format is one of the supported formats
+      const supportedFormats = ["mkv", "mov", "mp4", "webm", "three_gp", "flv", "mpeg", "mpg", "wmv"];
+      const videoFormat = supportedFormats.includes(format) ? format : "mp4"; // Default to mp4 if not supported
+      
+      console.log(`Video format: ${videoFormat}`);
+      
       // Following the format from the JavaScript SDK v3 examples
       const requestBody: BedrockRequestBody = {
         messages: [
@@ -144,7 +174,7 @@ export class NovaClient {
             content: [
               {
                 video: {
-                  format: format,
+                  format: videoFormat,
                   source: {
                     s3Location: {
                       uri: s3Uri,
@@ -205,8 +235,32 @@ export class NovaClient {
     inferenceConfig?: InferenceConfig
   ): Promise<NovaResponse> {
     try {
+      // Validate video formats in videoContents
+      const supportedFormats = ["mkv", "mov", "mp4", "webm", "three_gp", "flv", "mpeg", "mpg", "wmv"];
+      
+      // Create a copy of videoContents with validated formats
+      const validatedContents = videoContents.map(content => {
+        if ('video' in content && content.video && content.video.format) {
+          // Validate and potentially correct the format
+          const format = content.video.format;
+          const validFormat = supportedFormats.includes(format) ? format : "mp4";
+          
+          if (format !== validFormat) {
+            console.log(`Converting unsupported video format '${format}' to '${validFormat}'`);
+            return {
+              ...content,
+              video: {
+                ...content.video,
+                format: validFormat
+              }
+            };
+          }
+        }
+        return content;
+      });
+      
       // Prepare content for multiple videos
-      const allContent = [...videoContents, { text: prompt }];
+      const allContent = [...validatedContents, { text: prompt }];
       
       // Following JavaScript SDK format
       const requestBody: BedrockRequestBody = {

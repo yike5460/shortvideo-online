@@ -2,8 +2,8 @@ import { NovaClient } from '../utils/nova-client';
 import path from 'path';
 import fs from 'fs';
 
-// Reduce max size to 5MB to ensure it works with the API
-const MAX_RECOMMENDED_SIZE_MB = 500;
+// The maximum size of the video file to process, 25 MB for base64, and 1GB for S3 URI, refer to https://docs.aws.amazon.com/nova/latest/userguide/modalities-video.html#:~:text=The%20Amazon%20Nova%20models%20allow,S3%20URI%20for%20video%20understanding.
+const MAX_RECOMMENDED_SIZE_MB = 25;
 
 async function main() {
   try {
@@ -181,7 +181,7 @@ async function main() {
       }
     } else {
       console.log('\n❌ No videos were processed successfully.');
-      console.log('Please try using smaller video files (under 5MB is recommended for testing).');
+      console.log('Please try using smaller video files (under 25MB (base64) is recommended for testing).');
     }
   } catch (error) {
     console.error('Error in video processing example:', error);

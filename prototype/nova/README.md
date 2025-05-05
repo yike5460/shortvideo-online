@@ -27,7 +27,7 @@ Ensure that your AWS account has access to Amazon Bedrock and the Nova model.
 
 Nova API has **strict requirements** for video processing:
 
-- **Maximum size: 5MB** - The API will reject larger files with validation errors
+- **Maximum size: 25MB (base64) or 1GB (S3 URI)** - The API will reject larger files with validation errors
 - **Recommended: 2-3MB** - Very small, short clips work best
 - **Duration: 3-8 seconds** - Keep videos extremely short
 - **Resolution: 480p or 720p** - Higher resolutions increase file size without benefit
@@ -129,9 +129,11 @@ const batchResults = await novaClient.processMultipleVideos({
 If you encounter errors:
 
 1. **ValidationException: Malformed input request**
-   - Ensure your video is under 5MB
+   - Ensure your video is under 25MB (base64)
    - Try using an even smaller or shorter video (2-3MB)
    - Verify your AWS credentials have Bedrock access
+   - Ensure your request follows the correct schema (no `schemaVersion` field)
+   - Verify the video format is one of the supported formats: "mkv", "mov", "mp4", "webm", "three_gp", "flv", "mpeg", "mpg", "wmv"
 
 2. **AccessDeniedException**
    - Verify your AWS account has Bedrock API access
