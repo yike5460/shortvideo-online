@@ -5,6 +5,7 @@ import fs from 'fs';
 // The maximum size of the video file to process, 25 MB for base64, and 1GB for S3 URI, refer to https://docs.aws.amazon.com/nova/latest/userguide/modalities-video.html#:~:text=The%20Amazon%20Nova%20models%20allow,S3%20URI%20for%20video%20understanding.
 const MAX_RECOMMENDED_SIZE_MB = 25;
 
+// npm run example:local-video -- media/small/Beach_small.mp4
 async function main() {
   try {
     // Check if a specific video file is provided as a command-line argument

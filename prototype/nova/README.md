@@ -116,12 +116,6 @@ const s3Result = await novaClient.processS3Video({
   s3Uri: 's3://your-bucket/your-video.mp4',
   prompt: 'Describe this video'
 });
-
-// Process multiple videos
-const batchResults = await novaClient.processMultipleVideos({
-  videoPaths: ['/path/to/video1.mp4', '/path/to/video2.mp4'],
-  prompt: 'Describe each video'
-});
 ```
 
 ## Troubleshooting

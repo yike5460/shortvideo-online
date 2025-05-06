@@ -23,6 +23,7 @@ interface BedrockRequestBody {
 export class NovaClient {
   private client: BedrockRuntimeClient;
   private modelId: string;
+  private lastResponse: NovaResponse | null = null;
 
   constructor(modelId?: string) {
     this.client = new BedrockRuntimeClient({
@@ -61,7 +62,7 @@ export class NovaClient {
       console.log(`Video file size: ${fileSizeInMB.toFixed(2)} MB`);
       
       // Warn if file is large - might hit API limits
-      if (fileSizeInMB > 10) {
+      if (fileSizeInMB > 25) {
         console.warn(`WARNING: Video file is ${fileSizeInMB.toFixed(2)} MB, which may exceed API limits. Consider reducing the file size.`);
       }
       
@@ -133,6 +134,9 @@ export class NovaClient {
       const responseBody = JSON.parse(
         new TextDecoder().decode(response.body)
       ) as NovaResponse;
+      
+      // Store the last response
+      this.lastResponse = responseBody;
       
       return responseBody;
     } catch (error) {
@@ -221,53 +225,59 @@ export class NovaClient {
   }
 
   /**
-   * Process multiple videos
-   * @param videoContents Array of video content objects
-   * @param prompt The prompt to send with the videos
+   * Process a local image file
+   * @param imagePath Path to the local image file
+   * @param prompt The prompt to send with the image
    * @param systemMessages Optional system messages
    * @param inferenceConfig Optional inference configuration
    * @returns The model response
    */
-  public async processMultipleVideos(
-    videoContents: ContentType[],
+  public async processLocalImage(
+    imagePath: string,
     prompt: string,
     systemMessages?: SystemMessage[],
     inferenceConfig?: InferenceConfig
   ): Promise<NovaResponse> {
     try {
-      // Validate video formats in videoContents
-      const supportedFormats = ["mkv", "mov", "mp4", "webm", "three_gp", "flv", "mpeg", "mpg", "wmv"];
+      // Check file size before attempting to read
+      const stats = fs.statSync(imagePath);
+      const fileSizeInMB = stats.size / (1024 * 1024);
+      console.log(`Image file size: ${fileSizeInMB.toFixed(2)} MB`);
       
-      // Create a copy of videoContents with validated formats
-      const validatedContents = videoContents.map(content => {
-        if ('video' in content && content.video && content.video.format) {
-          // Validate and potentially correct the format
-          const format = content.video.format;
-          const validFormat = supportedFormats.includes(format) ? format : "mp4";
-          
-          if (format !== validFormat) {
-            console.log(`Converting unsupported video format '${format}' to '${validFormat}'`);
-            return {
-              ...content,
-              video: {
-                ...content.video,
-                format: validFormat
-              }
-            };
-          }
-        }
-        return content;
-      });
+      // Warn if file is large - might hit API limits
+      if (fileSizeInMB > 5) {
+        console.warn(`WARNING: Image file is ${fileSizeInMB.toFixed(2)} MB, which may exceed API limits. Consider reducing the file size.`);
+      }
       
-      // Prepare content for multiple videos
-      const allContent = [...validatedContents, { text: prompt }];
+      // Read image file as binary data and encode as base64
+      const imageBuffer = fs.readFileSync(imagePath);
+      const imageBase64 = imageBuffer.toString('base64');
       
-      // Following JavaScript SDK format
+      // Get image format from file extension
+      const imageFormat = path.extname(imagePath).slice(1).toLowerCase();
+      const supportedFormats = ["jpeg", "jpg", "png", "gif", "webp"];
+      const format = supportedFormats.includes(imageFormat) ? imageFormat : "jpeg"; // Default to jpeg if not supported
+      
+      console.log(`Image format: ${format}`);
+
+      // Following the format from the JavaScript SDK v3 examples
       const requestBody: BedrockRequestBody = {
         messages: [
           {
             role: 'user',
-            content: allContent
+            content: [
+              {
+                image: {
+                  format: format,
+                  source: {
+                    bytes: imageBase64
+                  }
+                }
+              },
+              {
+                text: prompt
+              }
+            ]
           }
         ],
         inferenceConfig: {
@@ -280,8 +290,20 @@ export class NovaClient {
         requestBody.system = systemMessages;
       }
       
-      console.log(`Invoking model with multiple videos: ${this.modelId}`);
+      console.log(`Invoking model: ${this.modelId}`);
+      console.log(`Request structure: ${Object.keys(requestBody).join(', ')}`);
       
+      // Log the full request body structure (without the actual image bytes for brevity)
+      const logRequestBody = JSON.parse(JSON.stringify(requestBody)); // Deep clone
+      if (logRequestBody.messages && logRequestBody.messages[0]?.content) {
+        const imageContent = logRequestBody.messages[0].content.find((c: any) => 'image' in c);
+        if (imageContent && 'image' in imageContent && imageContent.image.source.bytes) {
+          imageContent.image.source.bytes = `[Base64 encoded image - ${(imageBase64.length / 1024 / 1024).toFixed(2)}MB]`;
+        }
+      }
+      console.log('Full request body:', JSON.stringify(logRequestBody, null, 2));
+      
+      // Format matches JavaScript SDK v3 examples for Bedrock
       const command = new InvokeModelCommand({
         modelId: this.modelId,
         contentType: "application/json",
@@ -294,9 +316,12 @@ export class NovaClient {
         new TextDecoder().decode(response.body)
       ) as NovaResponse;
       
+      // Store the last response
+      this.lastResponse = responseBody;
+      
       return responseBody;
     } catch (error) {
-      console.error('Error processing multiple videos:', error);
+      console.error('Error processing local image:', error);
       throw error;
     }
   }
@@ -312,5 +337,13 @@ export class NovaClient {
     ) as { text: string } | undefined;
 
     return textContent?.text || '';
+  }
+  
+  /**
+   * Get the last response from the model
+   * @returns The last response or null if no response has been received
+   */
+  public getLastResponse(): NovaResponse | null {
+    return this.lastResponse;
   }
 } 
