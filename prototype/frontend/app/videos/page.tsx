@@ -294,6 +294,14 @@ export default function VideosPage() {
   const [selectedTags, setSelectedTags] = useState<string[]>([])
   const [appliedTags, setAppliedTags] = useState<string[]>([])
   
+  // Initialize selectedIndexId from URL parameter
+  useEffect(() => {
+    const indexParam = searchParams.get('index');
+    if (indexParam) {
+      setSelectedIndexId(indexParam);
+    }
+  }, [searchParams]); // This will run when the component mounts and if searchParams changes
+  
   // Define sort options
   const sortOptions = [
     { value: "recent_upload", label: "Recent upload" },

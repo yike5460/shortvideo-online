@@ -1054,12 +1054,13 @@ flowchart TD
 ## TODO
 Backend:
 - [ ] Add index deletion using /indexes/{indexId} DELETE
-- [ ] Unifiy the merge job entry point for Video Clip Cart (Merge Selected button) and Video Bar (Merge button)
 - [ ] Optimize video merge performance for 10+ clips
 - [ ] Test for cross account access for S3 connector
 - [ ] Test for video transition between clips
-- [ ] Test for drag and drop reordering for video clip cart
 - [ ] BGM, translation for merge job and separate panel for the post processing
 
 Frontend:
 - [ ] Deep Search feature
+
+Issues:
+- [ ] The merged video can't be deleted
