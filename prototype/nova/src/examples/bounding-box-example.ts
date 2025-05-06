@@ -56,22 +56,105 @@ async function drawBoundingBoxes(
     // Draw the image on the canvas
     ctx.drawImage(image, 0, 0);
     
-    // Define a color map for different object categories
+    // Define a color map for common object categories
     const colorMap: {[key: string]: string} = {
-      person: '#FF0000', // Red
-      car: '#00FF00',    // Green
-      dog: '#0000FF',    // Blue
-      cat: '#FF00FF',    // Magenta
-      chair: '#FFFF00',  // Yellow
-      table: '#00FFFF',  // Cyan
-      building: '#FFA500', // Orange
-      tree: '#008000',   // Dark Green
-      water: '#00BFFF',  // Deep Sky Blue
-      // Add more categories and colors as needed
+      person: '#FF0000',     // Red
+      car: '#00FF00',        // Green
+      dog: '#0000FF',        // Blue
+      cat: '#FF00FF',        // Magenta
+      chair: '#FFFF00',      // Yellow
+      table: '#00FFFF',      // Cyan
+      building: '#FFA500',   // Orange
+      tree: '#008000',       // Dark Green
+      water: '#00BFFF',      // Deep Sky Blue
+      bicycle: '#8B4513',    // Brown
+      book: '#4B0082',       // Indigo
+      bottle: '#800080',     // Purple
+      bowl: '#A52A2A',       // Brown
+      bus: '#556B2F',        // Dark Olive Green
+      clock: '#483D8B',      // Dark Slate Blue
+      cup: '#8FBC8F',        // Dark Sea Green
+      door: '#2F4F4F',       // Dark Slate Gray
+      keyboard: '#5F9EA0',   // Cadet Blue
+      laptop: '#6495ED',     // Cornflower Blue
+      monitor: '#7FFFD4',    // Aquamarine
+      mouse: '#D2691E',      // Chocolate
+      phone: '#DC143C',      // Crimson
+      plant: '#228B22',      // Forest Green
+      sofa: '#B8860B',       // Dark Goldenrod
+      tv: '#4682B4',         // Steel Blue
+      window: '#87CEEB',     // Sky Blue
+      text: '#9932CC',       // Dark Orchid
+      flower: '#FF1493',     // Deep Pink
+      fruit: '#FF8C00',      // Dark Orange
+      vegetable: '#32CD32',  // Lime Green
+      sign: '#DAA520',       // Goldenrod
+      light: '#F0E68C',      // Khaki
+      fan: '#40E0D0',        // Turquoise
+      umbrella: '#800000',   // Maroon
+      handbag: '#9370DB',    // Medium Purple
+      tie: '#191970',        // Midnight Blue
+      suitcase: '#BDB76B',   // Dark Khaki
+      microwave: '#CD853F',  // Peru
+      oven: '#D2B48C',       // Tan
+      toaster: '#BC8F8F',    // Rosy Brown
+      sink: '#4169E1',       // Royal Blue
+      refrigerator: '#FA8072', // Salmon
+      blender: '#F08080',    // Light Coral
+      notebook: '#CD5C5C',   // Indian Red
+      alarm: '#B22222',      // Firebrick
+      vase: '#FF6347',       // Tomato
+      scissors: '#FF4500',   // Orange Red
+      'teddy bear': '#DA70D6', // Orchid
+      'hair drier': '#BA55D3', // Medium Orchid
+      toothbrush: '#9400D3', // Dark Violet
+      necklace: '#8A2BE2',   // Blue Violet
+      ring: '#9932CC',       // Dark Orchid
+      bracelet: '#8B008B',   // Dark Magenta
+      earrings: '#800080',   // Purple
+      watch: '#4B0082',      // Indigo
+      machine: '#483D8B',    // Dark Slate Blue
+      piano: '#6A5ACD',      // Slate Blue
+      guitar: '#7B68EE',     // Medium Slate Blue
+      drum: '#6495ED',       // Cornflower Blue
+      violin: '#4169E1',     // Royal Blue
+      flute: '#1E90FF',      // Dodger Blue
+      bridge: '#00BFFF',     // Deep Sky Blue
+      road: '#87CEEB',       // Sky Blue
+      mountain: '#B0C4DE',   // Light Steel Blue
+      river: '#ADD8E6',      // Light Blue
+      lake: '#B0E0E6',       // Powder Blue
+      ocean: '#5F9EA0',      // Cadet Blue
+      beach: '#F0FFFF',      // Azure
+      forest: '#7CFC00',     // Lawn Green
+      field: '#7FFF00',      // Chartreuse
+      grass: '#ADFF2F',      // Green Yellow
+      vehicle: '#006400',    // Dark Green
     };
     
-    // Default color for categories not in the map
-    const defaultColor = '#FF0000'; // Red
+    /**
+     * Generate a color based on the string (for categories not in the color map)
+     * This ensures each category gets a unique but consistent color
+     */
+    function generateColorFromString(str: string): string {
+      // Simple hash function to generate a number from a string
+      let hash = 0;
+      for (let i = 0; i < str.length; i++) {
+        hash = str.charCodeAt(i) + ((hash << 5) - hash);
+      }
+      
+      // Convert the hash to a color
+      let color = '#';
+      for (let i = 0; i < 3; i++) {
+        // Get a value between 0-255 for each RGB component
+        // Ensure colors are not too dark (< 50) or too light (> 200)
+        const value = ((hash >> (i * 8)) & 0xFF);
+        const adjustedValue = Math.max(50, Math.min(200, value));
+        color += adjustedValue.toString(16).padStart(2, '0');
+      }
+      
+      return color;
+    }
     
     // Draw each bounding box
     boundingBoxes.forEach(box => {
@@ -82,8 +165,8 @@ async function drawBoundingBoxes(
       const width = x2 - x1;
       const height = y2 - y1;
       
-      // Get color for this category or use default
-      const color = colorMap[category.toLowerCase()] || defaultColor;
+      // Get color for this category or generate one
+      const color = colorMap[category.toLowerCase()] || generateColorFromString(category);
       
       // Draw the rectangle
       ctx.strokeStyle = color;
@@ -137,7 +220,7 @@ async function drawBoundingBoxes(
       // Draw legend items
       let itemY = legendY + 40;
       Array.from(uniqueCategories).forEach(category => {
-        const color = colorMap[category.toLowerCase()] || defaultColor;
+        const color = colorMap[category.toLowerCase()] || generateColorFromString(category);
         
         // Draw color box
         ctx.fillStyle = color;
