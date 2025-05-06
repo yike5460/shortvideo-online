@@ -55,5 +55,7 @@ cdk.context.json
 # All environment variables
 .env
 .env.local
+# All files inside media directory
+media/
 src/layers/ffmpeg/bin/
 src/layers/yt-dlp/bin/

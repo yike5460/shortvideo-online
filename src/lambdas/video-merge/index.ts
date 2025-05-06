@@ -481,7 +481,9 @@ async function _performVideoMerge(params: {
     const mergedSegmentId = `merged_${jobId}`;
     const startTime = sortedSegments[0].start_time;
     const endTime = sortedSegments[sortedSegments.length - 1].end_time;
-    const segmentDuration = endTime - startTime;
+    // const segmentDuration = endTime - startTime;
+    // We use the duration from the ffprobe command instead of the endTime - startTime since the order of segments might be not in strict time order in scnarios that: (1) the segments are from different videos, (2) the segments are not in strict time order due to the drag and drop of segments by the user
+    const segmentDuration = duration;
     
     // Create merged segment object
     const mergedSegment = {

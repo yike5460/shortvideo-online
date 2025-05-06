@@ -13,6 +13,7 @@ import { useToast } from '@/components/ui/Toast'
 import AddToCartButton from '@/components/cart/AddToCartButton'
 import { useCart } from '@/lib/cart/CartContext'
 import { useAuth } from '@/lib/auth/AuthContext'
+import { mergeUtility } from '@/lib/merge/MergeUtility'
 import Link from 'next/link'
 
 // Add API configuration
@@ -234,78 +235,7 @@ export default function SearchResults({
     });
   }, [addToast]);
   
-  // Function to poll for merged file existence
-  const startPollingForMergedFile = useCallback((s3Path: string, videoId: string, indexId: string, segmentCount: number) => {
-    const checkInterval = 5000; // Check every 5 seconds
-    const maxAttempts = 60;     // Maximum 5 minutes (60 * 5 seconds)
-    let attempts = 0;
-    
-    // Clear any existing intervals
-    if (pollingIntervalRef.current) {
-      clearInterval(pollingIntervalRef.current);
-    }
-    
-    // Start polling
-    pollingIntervalRef.current = setInterval(() => {
-      attempts++;
-      console.log(`Checking if merged file exists (attempt ${attempts}/${maxAttempts})...`);
-      
-      // TODO, since we don't have a direct API to check file existence,
-      // we'll simulate checking by waiting for a few attempts
-      if (attempts >= 3) { // Simulate the file being ready after 15 seconds (3 * 5s)
-        // Clear interval
-        if (pollingIntervalRef.current) {
-          clearInterval(pollingIntervalRef.current);
-          pollingIntervalRef.current = null;
-        }
-        
-        // Update status to completed
-        setMergeStatus({
-          status: 'completed',
-          message: 'Merge completed successfully!',
-          videoId,
-          indexId
-        });
-        
-        // Show success toast with action to view merged video
-        addToast('success', `Successfully merged ${segmentCount} clips`, {
-          duration: 8000, // 8 seconds
-          action: {
-            label: 'View merged video',
-            onClick: () => {
-              // Navigate to the videos page with the merged video
-              window.location.href = `/videos?indexId=${encodeURIComponent(indexId)}&videoId=${encodeURIComponent(videoId)}`;
-            }
-          }
-        });
-        
-        return;
-      }
-      
-      // If max attempts reached
-      if (attempts >= maxAttempts) {
-        clearInterval(pollingIntervalRef.current!);
-        pollingIntervalRef.current = null;
-        
-        // Update status to failed
-        setMergeStatus({
-          status: 'failed',
-          message: 'Merge process timed out. The video might still be processing.'
-        });
-        
-        // Show error toast
-        addToast('error', 'Merge process timed out. The video might still be processing.');
-      }
-    }, checkInterval);
-    
-    // Return a cleanup function
-    return () => {
-      if (pollingIntervalRef.current) {
-        clearInterval(pollingIntervalRef.current);
-        pollingIntervalRef.current = null;
-      }
-    };
-  }, [addToast]);
+  // This function has been replaced by the mergeUtility
   
   // Helper function to merge selected segments for a video
   const mergeSegments = useCallback(async (video: VideoResult, segments: VideoSegment[]) => {
@@ -340,48 +270,23 @@ export default function SearchResults({
       // Show processing toast
       addToast('info', 'Starting merge process. This may take a minute...');
       
-      // Call the backend API to perform the actual merge
-      const response = await fetch(`${API_ENDPOINT}/videos/merge`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          indexId,
-          videoId: extractedVideoId, // Use extracted ID instead of video.id
-          segmentIds,
-          mergedName,
-          userId, // Include userId in the request
-          mergeOptions: {
-            resolution: '720p',
-            transition: 'cut',
-            transitionDuration: 500
-          }
-        }),
-      });
-      
-      if (!response.ok) {
-        throw new Error(`Failed to merge segments: ${response.statusText}`);
-      }
-      
-      const result = await response.json();
-      
-      // The backend now returns a job ID instead of the merged segment
-      const jobId = result.jobId;
-      
-      // Update merge status
-      setMergeStatus({
-        status: 'processing',
-        message: 'Merging in progress...',
-        jobId,
-        progress: 0,
+      // Create merge parameters
+      const mergeParams = {
+        indexId,
         videoId: extractedVideoId,
-        indexId
-      });
+        segmentIds,
+        mergedName,
+        userId,
+        mergeOptions: {
+          resolution: '720p' as '720p' | '1080p',
+          transition: 'cut' as 'cut' | 'fade' | 'dissolve',
+          transitionDuration: 500
+        }
+      };
       
       // Create a temporary client-side representation of the merged segment
       const tempMergedSegment: VideoSegment = {
-        segment_id: `merged_job_${jobId}`,
+        segment_id: `merged_job_temp`,
         video_id: video.id,
         start_time: 0,
         end_time: 0,
@@ -398,18 +303,88 @@ export default function SearchResults({
       // Clear selected segments after initiating merge
       clearSelectedSegments(video.id);
       
-      // Start polling for job status
-      startPollingForJobStatus(
+      // Initiate merge job
+      const jobId = await mergeUtility.initiateVideoMerge(mergeParams);
+      
+      // Update merge status with job ID
+      setMergeStatus({
+        status: 'processing',
+        message: 'Merging in progress...',
         jobId,
-        extractedVideoId,
-        indexId,
-        segments.length,
-        userId, // Add userId parameter
-        setMergeStatus,
-        addToast,
-        setMergedSegment,
-        pollingIntervalRef
-      );
+        progress: 0,
+        videoId: extractedVideoId,
+        indexId
+      });
+      
+      // Update the merged segment with the job ID
+      setMergedSegment(prev => ({
+        ...prev!,
+        segment_id: `merged_job_${jobId}`
+      }));
+      
+      // Poll for job status
+      mergeUtility.pollMergeJobStatus(jobId, userId, {
+        onProgress: (progress) => {
+          setMergeStatus(prev => ({
+            ...prev,
+            progress,
+            message: `Merging in progress... ${progress}%`
+          }));
+        },
+        onComplete: (result) => {
+          // Update status to completed
+          setMergeStatus({
+            status: 'completed',
+            message: 'Merge completed successfully!',
+            jobId,
+            progress: 100,
+            videoId: extractedVideoId,
+            indexId,
+            result
+          });
+          
+          // If we have result data, update the merged segment
+          if (result) {
+            const updatedMergedSegment = {
+              segment_id: `merged_${jobId}`,
+              video_id: extractedVideoId,
+              start_time: 0,
+              end_time: result.duration || 0,
+              duration: result.duration || 0,
+              segment_video_thumbnail_url: result.thumbnailUrl,
+              segment_video_preview_url: result.mergedVideoUrl,
+              segment_visual: {
+                segment_visual_description: `Merged clip: ${segments.length} segments`
+              }
+            };
+            
+            setMergedSegment(updatedMergedSegment);
+          }
+          
+          // Show success toast with action to view merged video
+          addToast('success', `Successfully merged ${segments.length} clips`, {
+            duration: 8000, // 8 seconds
+            action: {
+              label: 'View merged video',
+              onClick: () => {
+                // Navigate to the videos page with the merged video
+                window.location.href = `/videos?indexId=${encodeURIComponent(indexId)}&videoId=${encodeURIComponent(extractedVideoId)}`;
+              }
+            }
+          });
+        },
+        onFailed: (error) => {
+          // Update status to failed
+          setMergeStatus({
+            status: 'failed',
+            message: `Failed to merge: ${error}`,
+            jobId
+          });
+          
+          // Show error toast
+          addToast('error', `Failed to merge segments: ${error}`);
+        }
+      });
       
     } catch (error) {
       console.error('Error merging segments:', error);
@@ -422,8 +397,11 @@ export default function SearchResults({
         status: 'failed',
         message: `Failed to merge: ${error instanceof Error ? error.message : 'Unknown error'}`
       });
+      
+      // Reset merging state
+      setIsMerging(false);
     }
-  }, [clearSelectedSegments, searchOptions, addToast, startPollingForMergedFile, userId]); // Add userId to dependencies
+  }, [clearSelectedSegments, searchOptions, addToast, userId]);
   
   // Helper function to download selected segments
   const downloadSelectedSegments = useCallback((video: VideoResult, segments: VideoSegment[]) => {
@@ -1165,133 +1143,4 @@ export default function SearchResults({
   )
 }
 
-// Real implementation of polling for job status
-function startPollingForJobStatus(
-  jobId: string,
-  videoId: string,
-  indexId: string,
-  segmentCount: number,
-  userId: string, // Add userId parameter
-  setMergeStatus: React.Dispatch<React.SetStateAction<any>>,
-  addToast: any, // Use any type to avoid type conflicts
-  setMergedSegment: React.Dispatch<React.SetStateAction<any>>,
-  pollingIntervalRef: React.MutableRefObject<NodeJS.Timeout | null>
-) {
-  const API_ENDPOINT = process.env.NEXT_PUBLIC_API_URL;
-  const checkInterval = 5000; // Check every 5 seconds
-  const maxAttempts = 60;     // Maximum 5 minutes (60 * 5 seconds)
-  let attempts = 0;
-  
-  // Clear any existing intervals
-  if (pollingIntervalRef.current) {
-    clearInterval(pollingIntervalRef.current);
-  }
-  
-  // Start polling
-  pollingIntervalRef.current = setInterval(async () => {
-    attempts++;
-    console.log(`Checking merge job status (attempt ${attempts}/${maxAttempts})...`);
-    
-    try {
-      // Call the API to get job status
-      const response = await fetch(`${API_ENDPOINT}/videos/merge/${jobId}?userId=${encodeURIComponent(userId)}`);
-      
-      if (!response.ok) {
-        throw new Error(`Failed to get job status: ${response.statusText}`);
-      }
-      
-      const jobStatus = await response.json();
-      console.log('Job status:', jobStatus);
-      
-      // Update UI based on job status
-      if (jobStatus.status === 'completed') {
-        // Clear interval
-        if (pollingIntervalRef.current) {
-          clearInterval(pollingIntervalRef.current);
-          pollingIntervalRef.current = null;
-        }
-        
-        // Update status to completed
-        setMergeStatus({
-          status: 'completed',
-          message: 'Merge completed successfully!',
-          jobId,
-          progress: 100,
-          videoId,
-          indexId,
-          result: jobStatus.result
-        });
-        
-        // If we have result data, update the merged segment
-        if (jobStatus.result) {
-          const updatedMergedSegment = {
-            segment_id: `merged_${jobId}`,
-            video_id: videoId,
-            start_time: 0,
-            end_time: jobStatus.result.duration || 0,
-            duration: jobStatus.result.duration || 0,
-            segment_video_thumbnail_url: jobStatus.result.thumbnailUrl,
-            segment_video_preview_url: jobStatus.result.mergedVideoUrl,
-            segment_visual: {
-              segment_visual_description: `Merged clip: ${segmentCount} segments`
-            }
-          };
-          
-          setMergedSegment(updatedMergedSegment);
-        }
-        
-        // Show success toast with action to view merged video
-        addToast('success', `Successfully merged ${segmentCount} clips`, {
-          duration: 8000, // 8 seconds
-          action: {
-            label: 'View merged video',
-            onClick: () => {
-              // Navigate to the videos page with the merged video
-              window.location.href = `/videos?indexId=${encodeURIComponent(indexId)}&videoId=${encodeURIComponent(videoId)}`;
-            }
-          }
-        });
-      } else if (jobStatus.status === 'failed') {
-        // Clear interval
-        if (pollingIntervalRef.current) {
-          clearInterval(pollingIntervalRef.current);
-          pollingIntervalRef.current = null;
-        }
-        
-        // Update status to failed
-        setMergeStatus({
-          status: 'failed',
-          message: jobStatus.errorMessage || 'Merge process failed', // Note: using errorMessage instead of error
-          jobId
-        });
-        
-        // Show error toast
-        addToast('error', jobStatus.errorMessage || 'Merge process failed');
-      } else if (jobStatus.status === 'processing') {
-        // Update progress
-        setMergeStatus((prev: any) => ({
-          ...prev,
-          progress: jobStatus.progress || prev.progress,
-          message: `Merging in progress... ${jobStatus.progress || 0}%`
-        }));
-      }
-    } catch (error) {
-      console.error('Error checking job status:', error);
-    }
-    
-    // If max attempts reached
-    if (attempts >= maxAttempts) {
-      clearInterval(pollingIntervalRef.current!);
-      pollingIntervalRef.current = null;
-      
-      // Update status to failed
-      setMergeStatus({
-        status: 'failed',
-        message: 'Merge process timed out. The video might still be processing.'
-      });
-      
-      // Show error toast
-      addToast('error', 'Merge process timed out. The video might still be processing.');
-    }
-  }, checkInterval);
-}
+// The startPollingForJobStatus function has been replaced by mergeUtility.pollMergeJobStatus

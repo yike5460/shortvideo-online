@@ -4,6 +4,8 @@ import React, { useState, useRef, useEffect } from 'react';
 import { XMarkIcon, ArrowsRightLeftIcon, CloudArrowDownIcon, TrashIcon, ShoppingCartIcon, ChevronUpDownIcon } from '@heroicons/react/24/outline';
 import { useCart, CartItem, MergeOptions } from '@/lib/cart/CartContext';
 import { useToast } from '@/components/ui/Toast';
+import { mergeUtility } from '@/lib/merge/MergeUtility';
+import { useAuth } from '@/lib/auth/AuthContext';
 
 interface CartPanelProps {
   isOpen: boolean;
@@ -35,8 +37,11 @@ export const CartPanel: React.FC<CartPanelProps> = ({ isOpen, onClose, className
     updateItemTransition
   } = useCart();
   const { addToast } = useToast();
+  const { state: authState } = useAuth();
+  const userId = authState.user?.id || 'anonymous';
   const [selectedItems, setSelectedItems] = useState<Record<string, boolean>>({});
   const [isMerging, setIsMerging] = useState(false);
+  const [mergeProgress, setMergeProgress] = useState(0);
   const [draggedItem, setDraggedItem] = useState<number | null>(null);
   const [dragOverItem, setDragOverItem] = useState<number | null>(null);
   
@@ -88,6 +93,7 @@ export const CartPanel: React.FC<CartPanelProps> = ({ isOpen, onClose, className
     const firstItem = selected[0];
     
     setIsMerging(true);
+    setMergeProgress(0);
     
     try {
       // Get segment IDs for the API call
@@ -97,60 +103,69 @@ export const CartPanel: React.FC<CartPanelProps> = ({ isOpen, onClose, className
       // Assuming segment_id format is [videoId]_segment_[segmentNumber]
       const extractedVideoId = segmentIds[0].split('_segment_')[0];
       
-      // Call the merge API
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/videos/merge`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
+      // Use the selectedIndex if available, otherwise fall back to the item's indexId
+      const indexId = firstItem.selectedIndex || firstItem.indexId;
+      
+      // Create merge parameters
+      const mergeParams = {
+        indexId,
+        videoId: extractedVideoId,
+        segmentIds,
+        mergedName: `cart_merged_${Date.now()}`,
+        userId,
+        mergeOptions: {
+          resolution: mergeOptions.resolution,
+          transition: mergeOptions.defaultTransition,
+          transitionDuration: mergeOptions.defaultTransitionDuration,
+          clipTransitions: selected.map(item => ({
+            segmentId: item.segment.segment_id,
+            transitionType: item.transitionType || mergeOptions.defaultTransition,
+            transitionDuration: item.transitionDuration || mergeOptions.defaultTransitionDuration
+          }))
+        }
+      };
+      
+      // Show processing toast
+      addToast('info', 'Starting merge process. This may take a minute...');
+      
+      // Initiate merge job
+      const jobId = await mergeUtility.initiateVideoMerge(mergeParams);
+      
+      // Poll for job status
+      mergeUtility.pollMergeJobStatus(jobId, userId, {
+        onProgress: (progress) => {
+          setMergeProgress(progress);
         },
-        body: JSON.stringify({
-          // Use the selectedIndex if available, otherwise fall back to the item's indexId
-          indexId: firstItem.selectedIndex || firstItem.indexId,
-          videoId: extractedVideoId, // Use extracted ID instead of encoded videoId
-          segmentIds: segmentIds,
-          mergedName: `cart_merged_${Date.now()}`,
-          // Add merge options
-          mergeOptions: {
-            resolution: mergeOptions.resolution,
-            transition: mergeOptions.defaultTransition,
-            transitionDuration: mergeOptions.defaultTransitionDuration,
-            // Include individual clip transitions if specified
-            clipTransitions: selected.map(item => ({
-              segmentId: item.segment.segment_id,
-              transitionType: item.transitionType || mergeOptions.defaultTransition,
-              transitionDuration: item.transitionDuration || mergeOptions.defaultTransitionDuration
-            }))
-          }
-        }),
-      });
-      
-      if (!response.ok) {
-        throw new Error(`Failed to merge segments: ${response.statusText}`);
-      }
-      
-      const result = await response.json();
-      
-      // Remove merged items from cart
-      selected.forEach(item => {
-        removeFromCart(item.segment.segment_id!);
-      });
-      
-      addToast('success', `Successfully merged ${selected.length} clips`, {
-        duration: 5000,
-        action: {
-          label: 'View merged video',
-          onClick: () => {
-            // Use the selectedIndex if available, otherwise fall back to the item's indexId
-            const indexId = firstItem.selectedIndex || firstItem.indexId;
-            window.location.href = `/videos?indexId=${encodeURIComponent(indexId)}&videoId=${encodeURIComponent(extractedVideoId)}`;
-          }
+        onComplete: (result) => {
+          // Remove merged items from cart
+          selected.forEach(item => {
+            removeFromCart(item.segment.segment_id!);
+          });
+          
+          addToast('success', `Successfully merged ${selected.length} clips`, {
+            duration: 5000,
+            action: {
+              label: 'View merged video',
+              onClick: () => {
+                window.location.href = `/videos?indexId=${encodeURIComponent(indexId)}&videoId=${encodeURIComponent(extractedVideoId)}`;
+              }
+            }
+          });
+          
+          setIsMerging(false);
+          setMergeProgress(0);
+        },
+        onFailed: (error) => {
+          addToast('error', `Failed to merge segments: ${error}`);
+          setIsMerging(false);
+          setMergeProgress(0);
         }
       });
     } catch (error) {
       console.error('Error merging segments:', error);
       addToast('error', `Failed to merge segments: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    } finally {
       setIsMerging(false);
+      setMergeProgress(0);
     }
   };
   
@@ -415,7 +430,7 @@ export const CartPanel: React.FC<CartPanelProps> = ({ isOpen, onClose, className
                 onClick={handleMergeSelected}
               >
                 <ArrowsRightLeftIcon className="h-4 w-4 mr-1" />
-                {isMerging ? 'Merging...' : 'Merge Selected'}
+                {isMerging ? `Merging... ${mergeProgress}%` : 'Merge Selected'}
               </button>
               
               <button
@@ -438,6 +453,21 @@ export const CartPanel: React.FC<CartPanelProps> = ({ isOpen, onClose, className
                 <TrashIcon className="h-4 w-4 mr-1" />
                 Clear Cart
               </button>
+              
+              {/* Progress bar for merge operation */}
+              {isMerging && (
+                <div className="col-span-2 mt-3">
+                  <div className="w-full bg-gray-200 rounded-full h-2.5">
+                    <div
+                      className="bg-indigo-600 h-2.5 rounded-full transition-all duration-500 ease-in-out"
+                      style={{ width: `${mergeProgress}%` }}
+                    ></div>
+                  </div>
+                  <p className="text-xs text-gray-600 mt-1 text-center">
+                    {mergeProgress}% complete
+                  </p>
+                </div>
+              )}
             </div>
           </div>
           )}
