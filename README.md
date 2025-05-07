@@ -1061,6 +1061,8 @@ Backend:
 
 Frontend:
 - [ ] Deep Search feature
+- [ ] Display video cards in the search page before user user actually performs the search, and offer the option to generate video summary for each video to guide the user what keywords to use for the initial video search
+- [ ] Add pagination with icons for the video page, currently only max 20 videos are displayed
 
 Issues:
 - [ ] The merged video can't be deleted

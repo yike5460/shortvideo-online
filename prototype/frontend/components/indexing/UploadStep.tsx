@@ -62,6 +62,7 @@ export default function UploadStep({
   const [cookieFile, setCookieFile] = useState<File | null>(null)
   const [cookieFileName, setCookieFileName] = useState<string>('')
   const [cookieUploadProgress, setCookieUploadProgress] = useState<UploadProgress | null>(null)
+  const [showCookieHint, setShowCookieHint] = useState(false)
   const cookieInputRef = useRef<HTMLInputElement>(null)
   
   // S3 connector state
@@ -533,7 +534,43 @@ export default function UploadStep({
           </div>
           {/* Cookie file upload UI (no upload button, mandatory) */}
           <div className="mt-2">
-            <label className="block text-sm font-medium text-gray-700 mb-1">Upload a YouTube cookie file (.txt, Netscape format, required)</label>
+            <div className="flex items-center gap-2 mb-1">
+              <label className="block text-sm font-medium text-gray-700">Upload a YouTube cookie file (.txt, Netscape format, required)</label>
+              <button
+                type="button"
+                onClick={() => setShowCookieHint(!showCookieHint)}
+                className="text-gray-400 hover:text-gray-600 focus:outline-none"
+                aria-label="Show cookie information"
+              >
+                <InformationCircleIcon className="h-5 w-5" />
+              </button>
+            </div>
+            
+            {/* Collapsible hint panel */}
+            {showCookieHint && (
+              <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg text-sm text-gray-700">
+                <h4 className="font-medium mb-2">About YouTube Cookies</h4>
+                <div className="space-y-3">                  
+                  <div>
+                    <p className="font-medium">Browser extensions for exporting cookies:</p>
+                    <ul className="list-disc pl-5 mt-1">
+                      <li>Chrome: <a href="https://chrome.google.com/webstore/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline hover:text-blue-800">Get cookies.txt LOCALLY</a></li>
+                      <li>Firefox: <a href="https://addons.mozilla.org/en-US/firefox/addon/cookies-txt/" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline hover:text-blue-800">cookies.txt</a></li>
+                    </ul>
+                  </div>
+                  
+                  <div>
+                    <p className="font-medium">Cookie file format requirements:</p>
+                    <ul className="list-disc pl-5 mt-1">
+                      <li>Must be in Mozilla/Netscape format</li>
+                      <li>First line must be either "# HTTP Cookie File" or "# Netscape HTTP Cookie File"</li>
+                      <li>Correct newline format: CRLF (\r\n) for Windows, LF (\n) for Unix/Linux/macOS</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            )}
+            
             <div className="flex items-center gap-2">
               <input
                 type="file"

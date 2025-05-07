@@ -254,6 +254,76 @@ const getLimitedTags = (tags: string[], limit: number = 3): { displayed: string[
   };
 };
 
+// Custom dropdown component with scrollable options
+function CustomSelect({
+  options,
+  value,
+  onChange,
+  placeholder,
+  disabled
+}: {
+  options: {value: string, label: string}[],
+  value: string,
+  onChange: (value: string) => void,
+  placeholder?: string,
+  disabled?: boolean
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    }
+    
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
+  
+  // Find the selected option label
+  const selectedOption = options.find(option => option.value === value);
+  
+  return (
+    <div className="relative" ref={dropdownRef}>
+      <button
+        type="button"
+        className={`w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm text-left focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 ${disabled ? 'bg-gray-100 cursor-not-allowed' : 'bg-white cursor-pointer'}`}
+        onClick={() => !disabled && setIsOpen(!isOpen)}
+        disabled={disabled}
+      >
+        <span>{selectedOption ? selectedOption.label : placeholder || 'Select an option'}</span>
+        <span className="absolute inset-y-0 right-0 flex items-center pr-2 pointer-events-none">
+          <ChevronDownIcon className="h-5 w-5 text-gray-400" aria-hidden="true" />
+        </span>
+      </button>
+      
+      {isOpen && (
+        <div className="absolute z-50 mt-1 w-full bg-white shadow-lg max-h-60 rounded-md py-1 text-base ring-1 ring-black ring-opacity-5 overflow-auto focus:outline-none sm:text-sm">
+          {options.map((option) => (
+            <div
+              key={option.value}
+              className={`cursor-pointer select-none relative py-2 pl-3 pr-9 hover:bg-gray-100 ${
+                option.value === value ? 'bg-indigo-100 text-indigo-900' : 'text-gray-900'
+              }`}
+              onClick={() => {
+                onChange(option.value);
+                setIsOpen(false);
+              }}
+            >
+              {option.label}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function VideosPage() {
   const { state } = useAuth()
   const searchParams = useSearchParams()
@@ -459,7 +529,6 @@ export default function VideosPage() {
         }
         
         const data: VideoResponse = await response.json();
-        console.log('Videos data:', data);
         // Even if we get a successful response, videos might be null or undefined
         const videosData = data.videos || [];
         setVideos(videosData); 
@@ -469,8 +538,8 @@ export default function VideosPage() {
         setAllTags(extractedTags);
         
         // Update the total videos count when loading all videos
-        if (!selectedIndexId && videosData.length > 0) {
-          setTotalVideos(videosData.length);
+        if (!selectedIndexId && data.total) {
+          setTotalVideos(data.total);
         }
       } catch (error) {
         console.error('Error fetching videos:', error);
@@ -503,7 +572,7 @@ export default function VideosPage() {
         }
         
         const data = await response.json();
-        
+
         // Create a map to deduplicate indexes and preserve video counts
         const indexMap = new Map();
         
@@ -537,7 +606,7 @@ export default function VideosPage() {
         
         // Convert the map back to an array
         const formattedIndexes = Array.from(indexMap.values());
-        
+
         setIndexes(formattedIndexes);
       } catch (error) {
         console.error('Error fetching indexes:', error);
@@ -808,36 +877,28 @@ export default function VideosPage() {
             Switch Index
           </label>
           <div className="relative mb-3">
-            <select
-              id="index-select"
-              className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+            <CustomSelect
+              options={[
+                { value: '', label: `All Indexes (${totalVideos})` },
+                ...indexes
+                  .sort((a, b) => a.name.localeCompare(b.name))
+                  .map(index => ({
+                    value: index.id,
+                    label: `${index.name} (${index.videoCount} videos)`
+                  }))
+              ]}
               value={selectedIndexId || ''}
-              onChange={(e) => {
-                const newIndex = e.target.value || null;
-                setSelectedIndexId(newIndex);
+              onChange={(newIndex) => {
+                setSelectedIndexId(newIndex || null);
                 // Reset videos array to show loading state when changing indexes
                 setVideos([]);
                 setIsLoading(true);
                 // Reset selected tags when changing index
                 setSelectedTags([]);
               }}
+              placeholder="Select an index"
               disabled={isLoadingIndexes}
-            >
-              <option value="">All Indexes ({totalVideos})</option>
-              {indexes.length > 0 ? (
-                [...indexes]
-                  .sort((a, b) => a.name.localeCompare(b.name))
-                  .map((index) => (
-                    <option key={index.id} value={index.id}>
-                      {index.name} ({index.videoCount} videos)
-                    </option>
-                  ))
-              ) : (
-                <option value="" disabled>
-                  {isLoadingIndexes ? 'Loading indexes...' : 'No indexes available'}
-                </option>
-              )}
-            </select>
+            />
             {isLoading && (
               <div className="absolute right-10 top-3">
                 <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-indigo-500"></div>

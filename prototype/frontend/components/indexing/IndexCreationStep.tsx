@@ -55,8 +55,6 @@ export default function IndexCreationStep({ onNext }: IndexCreationStepProps) {
 
   const handleModelSelect = (modelId: string, disabled?: boolean) => {
     if (disabled) return
-    
-    console.log('Selecting model:', modelId)
     setSelectedModels(prev => {
       const newModels = prev.includes(modelId)
         ? prev.filter(id => id !== modelId)
@@ -68,10 +66,6 @@ export default function IndexCreationStep({ onNext }: IndexCreationStepProps) {
 
   const handleSubmit = (e: React.MouseEvent) => {
     e.preventDefault()
-    console.log('Submit clicked')
-    console.log('Index name:', indexName)
-    console.log('Selected models:', selectedModels)
-
     if (!indexName.trim()) {
       setError('Please enter an index name')
       return
