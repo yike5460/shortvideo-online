@@ -1052,6 +1052,9 @@ flowchart TD
     - Security group controls
 
 ## TODO
+- Video Generation feature with Nova
+- Try g6e instance to launch Qwen2-VL-7B-Instruct locally
+
 Backend:
 - [ ] Add index deletion using /indexes/{indexId} DELETE
 - [ ] Optimize video merge performance for 10+ clips
@@ -1063,6 +1066,9 @@ Frontend:
 - [ ] Deep Search feature
 - [ ] Display video cards in the search page before user user actually performs the search, and offer the option to generate video summary for each video to guide the user what keywords to use for the initial video search
 - [ ] Add pagination with icons for the video page, currently only max 20 videos are displayed
+- [ ] Adjust the position of the ellipsis button from top right of video panel to the top right of the panel below
+- [ ] Add video summary to the video details page of video modal, using Nova for the video summary implementation
 
 Issues:
 - [ ] The merged video can't be deleted
+- [ ] Video with low confidence still being displayed in the search results

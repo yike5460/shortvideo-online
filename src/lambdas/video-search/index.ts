@@ -544,6 +544,7 @@ async function analyzeFramesWithQwen(frames: string[], textDescription: string):
     throw new Error('SiliconFlow API key not configured');
   }
   
+  // Refer to the official documentation: https://docs.siliconflow.cn/cn/userguide/capabilities/vision#2-2-%E5%8C%85%E5%90%AB%E5%9B%BE%E5%83%8F%E7%9A%84-message-%E6%B6%88%E6%81%AF%E6%A0%BC%E5%BC%8F%E7%A4%BA%E4%BE%8B
   try {
     // Prepare the content for SiliconFlow API
     const content: any[] = [];
