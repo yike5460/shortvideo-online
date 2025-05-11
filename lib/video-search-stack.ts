@@ -104,12 +104,6 @@ export class VideoSearchStack extends cdk.Stack {
       indexCrudFunction: this.crudIndexFunction(),
       videoMergeFunction: this.createVideoMergeFunction()
     };
-    
-    // Initialize API Gateway
-    const api = this.createApiGateway(lambdaFunctions);
-    
-    // Create Video Understanding stack
-    this.videoUnderstandingStack = this.createVideoUnderstandingStack(api, deploymentEnv);
 
     // Add dependencies for the lambda functions on the video embedding service and open search collection
     lambdaFunctions.videoUploadFunction.videoUploadHandler.node.addDependency(this.videoEmbeddingService);
@@ -122,10 +116,15 @@ export class VideoSearchStack extends cdk.Stack {
 
     // Update OpenSearch access policies with Lambda roles
     this.updateOpenSearchPolicies(deploymentEnv, lambdaFunctions);
-
+    
+    // Initialize API Gateway
+    const api = this.createApiGateway(lambdaFunctions);
 
     // Create S3 connector stack
     this.s3ConnectorStack = this.createS3ConnectorStack(api, deploymentEnv);
+   
+    // Create Video Understanding stack
+    this.videoUnderstandingStack = this.createVideoUnderstandingStack(api, deploymentEnv);
 
     // Set up permissions
     this.setupPermissions(lambdaFunctions, this.videoEmbeddingService, this.rekognitionTopic, this.indexesTable);
@@ -1697,7 +1696,8 @@ export class VideoSearchStack extends cdk.Stack {
       videoBucket: this.videoBucket.bucketName,
       dynamodbEndpoint: this.dynamodbEndpoint,
       openSearchEndpoint: `https://${this.openSearchCollection.attrId}.${this.region}.aoss.amazonaws.com`,
-      indexesTable: this.indexesTable
+      indexesTable: this.indexesTable,
+      deploymentEnvironment: deploymentEnv
     });
   }
 }

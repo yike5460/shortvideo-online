@@ -9,20 +9,21 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as nodejslambda from 'aws-cdk-lib/aws-lambda-nodejs';
 import { Construct } from 'constructs';
 
-export interface VideoUnderstandingStackProps extends cdk.StackProps {
+export interface VideoUnderstandingProps {
   vpc: ec2.Vpc;
   api: apigateway.RestApi;
   videoBucket: string;
   dynamodbEndpoint: ec2.InterfaceVpcEndpoint;
   openSearchEndpoint: string;
   indexesTable: dynamodb.Table;
+  deploymentEnvironment: string;
 }
 
-export class VideoUnderstandingStack extends cdk.Stack {
+export class VideoUnderstandingStack extends Construct {
   public readonly videoUnderstandingFunction: lambda.Function;
   
-  constructor(scope: Construct, id: string, props: VideoUnderstandingStackProps) {
-    super(scope, id, props);
+  constructor(scope: Construct, id: string, props: VideoUnderstandingProps) {
+    super(scope, id);
 
     // Create DynamoDB table for video understanding sessions
     const sessionsTable = new dynamodb.Table(this, 'VideoUnderstandingSessions', {
