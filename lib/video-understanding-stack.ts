@@ -76,7 +76,8 @@ export class VideoUnderstandingStack extends Construct {
         INDEXES_TABLE: props.indexesTable.tableName,
         INDEXES_TABLE_DYNAMODB_DNS_NAME: dynamoDbEndpointDnsHttp,
         SESSIONS_TABLE: sessionsTable.tableName,
-        NOVA_MODEL_ID: 'amazon.nova-pro-v1:0',
+        // Make sure the model ID is aligned with the inference profile
+        NOVA_MODEL_ID: 'apac.amazon.nova-pro-v1:0',
       },
       bundling: {
         minify: true,

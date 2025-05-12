@@ -12,13 +12,17 @@ import * as crypto from 'crypto';
 const dynamoClient = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(dynamoClient);
 const s3 = new S3Client({});
-const bedrock = new BedrockRuntimeClient({});
+const bedrock = new BedrockRuntimeClient({
+  // Align with the inference profile region
+  region: process.env.AWS_REGION || 'ap-northeast-1',
+});
 
 // Constants
 const VIDEO_BUCKET = process.env.VIDEO_BUCKET || '';
 const SESSIONS_TABLE = process.env.SESSIONS_TABLE || 'VideoUnderstandingSessions';
 const SESSION_TTL = 60 * 60; // 1 hour in seconds
-const NOVA_MODEL_ID = process.env.NOVA_MODEL_ID || 'amazon.nova-pro-v1:0';
+// Make sure the region is aligned with the inference profile
+const NOVA_MODEL_ID = process.env.NOVA_MODEL_ID || 'apac.amazon.nova-pro-v1:0';
 
 // CORS headers
 const corsHeaders = {

@@ -27,11 +27,14 @@ export class NovaClient {
 
   constructor(modelId?: string) {
     this.client = new BedrockRuntimeClient({
-      region: process.env.AWS_REGION || 'us-east-1',
+      // Make sure the region is aligned with the inference profile
+      region: process.env.AWS_REGION || 'ap-northeast-1',
     });
     // Make sure to use the correct model ID format
     // For Nova, model IDs should include the region prefix if necessary
-    this.modelId = modelId || process.env.NOVA_MODEL_ID || 'amazon.nova-pro-v1:0';
+    // this.modelId = modelId || process.env.NOVA_MODEL_ID || 'amazon.nova-pro-v1:0';
+    // Use the inference profile ID instead of the model ID
+    this.modelId = "apac.amazon.nova-pro-v1:0"
   }
 
   /**
