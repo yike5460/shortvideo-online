@@ -61,6 +61,8 @@ export default function AskPage() {
   const [isComplete, setIsComplete] = useState(false)
   const [selectedIndexId, setSelectedIndexId] = useState<string | null>(null)
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
+  const [hasError, setHasError] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string>('')
   const chatContainerRef = useRef<HTMLDivElement>(null)
   const eventSourceRef = useRef<EventSource | null>(null)
   const [isDropdownOpen, setIsDropdownOpen] = useState(false)
@@ -229,6 +231,8 @@ export default function AskPage() {
       setError(null);
       setResponseText('');
       setIsComplete(false);
+      setHasError(false);
+      setErrorMessage('');
       
       // Add user message to chat
       const userMessage: ChatMessage = {
@@ -308,10 +312,27 @@ export default function AskPage() {
       });
       
       // Handle errors
-      eventSource.addEventListener('error', (error) => {
-        console.error('SSE Error:', error);
-        setError('Error receiving response from server');
+      eventSource.addEventListener('error', (event) => {
+        console.error('SSE Error:', event);
+        
+        // Try to parse error message from the event data
+        let errorMsg = 'Error receiving response from server';
+        try {
+          if (event instanceof MessageEvent && event.data) {
+            const errorData = JSON.parse(event.data);
+            if (errorData.error) {
+              errorMsg = errorData.error;
+            }
+          }
+        } catch (parseError) {
+          console.error('Error parsing error message:', parseError);
+        }
+        
+        setError(errorMsg);
+        setErrorMessage(errorMsg);
         setIsProcessing(false);
+        setIsComplete(true); // Set isComplete to true to stop the waiting animation
+        setHasError(true); // Set hasError to true to show error indicator in chat
         eventSource.close();
         eventSourceRef.current = null;
       });
@@ -508,9 +529,11 @@ export default function AskPage() {
                 </div>
               ) : (
                 chatMessages.map((message, index) => (
-                  <div 
-                    key={index} 
-                    className={`chat-message ${message.type === 'user' ? 'chat-message-user' : 'chat-message-assistant'}`}
+                  <div
+                    key={index}
+                    className={`chat-message ${message.type === 'user' ? 'chat-message-user' : 'chat-message-assistant'} ${
+                      message.type === 'assistant' && index === chatMessages.length - 1 && hasError ? 'chat-message-error' : ''
+                    }`}
                   >
                     <div className="chat-message-content">
                       {message.content || (
@@ -521,6 +544,14 @@ export default function AskPage() {
                             <span className="dot"></span>
                           </div>
                         )
+                      )}
+                      {message.type === 'assistant' && index === chatMessages.length - 1 && hasError && (
+                        <div className="error-indicator">
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-red-500" viewBox="0 0 20 20" fill="currentColor">
+                            <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                          </svg>
+                          <span className="ml-2 text-red-500">Error: {errorMessage || 'Unable to process request'}</span>
+                        </div>
                       )}
                     </div>
                     <div className="chat-message-time">
