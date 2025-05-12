@@ -505,23 +505,6 @@ export default function AskPage() {
                   <p className="text-gray-500 text-center mt-4">
                     Select a video and ask a question to start the conversation
                   </p>
-                  {selectedVideo && (
-                    <div className="sample-suggestions mt-6">
-                      <p className="text-sm text-gray-500 mb-3 text-center">Try asking:</p>
-                      <div className="flex flex-wrap justify-center gap-2">
-                        {SAMPLE_QUESTIONS.map((sampleQuestion, index) => (
-                          <button
-                            key={index}
-                            className="chat-suggestion-pill"
-                            onClick={() => handleSampleQuestionClick(sampleQuestion)}
-                            disabled={isProcessing}
-                          >
-                            {sampleQuestion}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
                 </div>
               ) : (
                 chatMessages.map((message, index) => (
@@ -547,6 +530,25 @@ export default function AskPage() {
                 ))
               )}
             </div>
+            
+            {/* Sample suggestions - now outside the conditional rendering */}
+            {selectedVideo && (
+              <div className="sample-suggestions mt-4 mb-4">
+                <p className="text-sm text-gray-500 mb-3 text-center">Try asking:</p>
+                <div className="flex flex-wrap justify-center gap-2">
+                  {SAMPLE_QUESTIONS.map((sampleQuestion, index) => (
+                    <button
+                      key={index}
+                      className="chat-suggestion-pill"
+                      onClick={() => handleSampleQuestionClick(sampleQuestion)}
+                      disabled={isProcessing}
+                    >
+                      {sampleQuestion}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             
             {/* Chat input */}
             <form onSubmit={handleSubmit} className="chat-input-container">
