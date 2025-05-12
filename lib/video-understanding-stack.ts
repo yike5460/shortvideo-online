@@ -89,7 +89,21 @@ export class VideoUnderstandingStack extends Construct {
 
     // Grant permissions to the Lambda function
     sessionsTable.grantReadWriteData(this.videoUnderstandingFunction);
+    
+    // Grant read access to the indexes table with explicit permissions
     props.indexesTable.grantReadData(this.videoUnderstandingFunction);
+    
+    // Add explicit permissions for DynamoDB operations on the indexes table
+    const indexesTablePolicy = new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'dynamodb:GetItem',
+        'dynamodb:Query',
+        'dynamodb:Scan'
+      ],
+      resources: [props.indexesTable.tableArn]
+    });
+    this.videoUnderstandingFunction.addToRolePolicy(indexesTablePolicy);
 
     // Grant S3 permissions
     const s3Policy = new iam.PolicyStatement({

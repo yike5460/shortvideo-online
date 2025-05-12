@@ -957,6 +957,16 @@ async function processSegmentDetection(
         } else {
           console.warn(`No audio embedding generated for segment ${segmentNumber}`);
         }
+        
+        // Add detailed logging about embeddings
+        console.log(`Vision embedding length: ${embeddings.vision_embedding?.length || 0}, Audio embedding length: ${embeddings.audio_embedding?.length || 0}`);
+        if (embeddings.vision_embedding && embeddings.vision_embedding.length > 0) {
+          console.log(`Successfully generated vision embedding for segment ${segmentNumber}, length: ${embeddings.vision_embedding.length}`);
+        }
+        
+        if (!embeddings.audio_embedding || embeddings.audio_embedding.length === 0) {
+          console.warn(`No audio embedding generated for segment ${segmentNumber}`);
+        }
       } catch (error) {
         console.error('Error generating embeddings:', error);
       }
@@ -1166,7 +1176,7 @@ async function getSegmentDetectionResults(jobId: string): Promise<SegmentDetecti
  */
 async function withRetry<T>(
   operation: () => Promise<T>,
-  // increase maxRetries to 5 since we're using OpenSearch Serverless which the refresh: true is not supported, refer to https://repost.aws/community/users/USiotOGJ78So2L1_DskJDcgQ
+  // increase maxRetries to 6 since we're using OpenSearch Serverless which the refresh: true is not supported, refer to https://repost.aws/community/users/USiotOGJ78So2L1_DskJDcgQ
   maxRetries: number = 6, 
   operationName: string = 'OpenSearch operation'
 ): Promise<T> {
@@ -1185,7 +1195,7 @@ async function withRetry<T>(
       
       console.warn(`${operationName} failed (retry ${retries}/${maxRetries}):`, error);
       
-      // Exponential backoff: 4s, 16s, 64s, 256s, 1024s
+      // Exponential backoff: 4s, 16s, 64s, 256s, 1024s, 4096s, 16384s
       const delay = Math.pow(4, retries) * 1000;
       await new Promise(resolve => setTimeout(resolve, delay));
     }
@@ -1230,9 +1240,16 @@ async function updateVideoSegments(videoIndex: string, videoId: string, segments
         ...segment.segment_visual,
         segment_visual_embedding: segment.segment_visual?.segment_visual_embedding || []
       },
-      segment_audio: {
-        segment_audio_embedding: segment.segment_audio?.segment_audio_embedding || []
-      }
+      // Only include segment_audio if it has a valid embedding
+      ...(segment.segment_audio?.segment_audio_embedding &&
+           Array.isArray(segment.segment_audio.segment_audio_embedding) &&
+           segment.segment_audio.segment_audio_embedding.length > 0
+        ? {
+            segment_audio: {
+              segment_audio_embedding: segment.segment_audio.segment_audio_embedding
+            }
+          }
+        : {})
     }));
 
     // Use withRetry for the OpenSearch update operation to handle version conflicts
@@ -1272,12 +1289,15 @@ async function updateVideoSegments(videoIndex: string, videoId: string, segments
                     }
                   };
                   
-                  // If there's an audio embedding, include it in the segment
-                  if (segment.segment_audio && Array.isArray(segment.segment_audio.segment_audio_embedding)) {
+                  // Only include audio embedding if it exists and is not empty
+                  if (segment.segment_audio &&
+                      Array.isArray(segment.segment_audio.segment_audio_embedding) &&
+                      segment.segment_audio.segment_audio_embedding.length > 0) {
                     formattedSegment.segment_audio = {
                       segment_audio_embedding: segment.segment_audio.segment_audio_embedding
                     };
                   }
+                  // Don't include segment_audio at all if there's no valid embedding
                   
                   return formattedSegment;
                 }),
@@ -1287,7 +1307,7 @@ async function updateVideoSegments(videoIndex: string, videoId: string, segments
             }
           }
         }),
-        5, // Use 5 retries to handle concurrent update conflicts
+        6, // Use 6 retries to handle concurrent update conflicts
         `Update segments for video ${videoId} in index ${videoIndex}`
       );
       console.log(`Successfully updated segments for video ${videoId} in index ${videoIndex}`);

@@ -59,11 +59,13 @@ interface InitRequest {
 // Helper function to get video details from DynamoDB
 async function getVideoDetails(videoId: string, indexId: string) {
   try {
+    // Use the INDEXES_TABLE instead of VIDEOS_TABLE
+    // The primary key is indexId and the sort key is videoId
     const params = {
-      TableName: process.env.VIDEOS_TABLE || 'Videos',
+      TableName: process.env.INDEXES_TABLE,
       Key: {
-        id: videoId,
-        indexId: indexId
+        indexId: indexId,
+        videoId: videoId
       }
     };
 
@@ -330,7 +332,16 @@ export async function streamHandler(event: APIGatewayProxyEvent): Promise<Lambda
       }
 
       // Process the video with Nova
+      // Log the video details for debugging
+      console.log('Video details from DynamoDB:', JSON.stringify(videoDetails, null, 2));
+      
+      // Get the S3 path from the video details
       const videoS3Path = videoDetails.video_s3_path || '';
+      
+      if (!videoS3Path) {
+        console.error('No video_s3_path found in video details');
+        throw new Error('Video S3 path not found in metadata');
+      }
       const response = await processVideoWithNova(videoS3Path, session.question);
       
       // In a real implementation, we would stream chunks as they become available

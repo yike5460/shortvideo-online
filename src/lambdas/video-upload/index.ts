@@ -483,7 +483,8 @@ async function formatSearchResults(body: any, page: number, pageSize: number, fr
     const filteredVideoObjects = processVideoObjects(hit._source.video_objects, 95, 3);
     
     return {
-      id: hit._id,
+      // The id is the actual video_id, not the OpenSearch document ID
+      id: hit._source.video_id,
       title: hit._source.video_title || '',
       description: hit._source.video_description || '',
       videoS3Path: hit._source.video_s3_path,
@@ -1248,31 +1249,6 @@ async function handleCompleteUpload(event: APIGatewayProxyEvent): Promise<Lambda
     // Extract thumbnail and get video duration
     const { thumbnailUrl, duration } = await extractAndUploadThumbnail(videoS3Path, thumbnailS3Path);
 
-    // Generate a video preview url for the video
-    const getCommand = new GetObjectCommand({
-      Bucket: process.env.VIDEO_BUCKET,
-      Key: videoS3Path,
-    });
-    const videoPreviewUrl = await getSignedUrl(s3 as any, getCommand as any, { expiresIn: 3600 });
-
-    // Use UpdateCommand to update only specific attributes:
-    await withRetry(
-      async () => docClient.send(new UpdateCommand({
-        TableName: process.env.INDEXES_TABLE,
-        Key: { 
-          indexId,
-          videoId 
-        },
-        UpdateExpression: "SET video_status = :status, updated_at = :updated_at",
-        ExpressionAttributeValues: {
-          ":status": "uploaded",
-          ":updated_at": new Date().toISOString()
-        }
-      })),
-      3,
-      `Update indexes table with status uploaded and updated_at`
-    );
-
     // Format the duration as a human-readable string (HH:MM:SS)
     const formatDuration = (ms: number): string => {
       if (!ms) return '00:00:00';
@@ -1284,6 +1260,36 @@ async function handleCompleteUpload(event: APIGatewayProxyEvent): Promise<Lambda
       
       return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
     };
+    
+    // Generate a video preview url for the video
+    const getCommand = new GetObjectCommand({
+      Bucket: process.env.VIDEO_BUCKET,
+      Key: videoS3Path,
+    });
+    const videoPreviewUrl = await getSignedUrl(s3 as any, getCommand as any, { expiresIn: 3600 });
+
+    // Use UpdateCommand to update the DynamoDB table with all necessary metadata:
+    await withRetry(
+      async () => docClient.send(new UpdateCommand({
+        TableName: process.env.INDEXES_TABLE,
+        Key: {
+          indexId,
+          videoId
+        },
+        UpdateExpression: "SET video_status = :status, updated_at = :updated_at, video_s3_path = :video_s3_path, video_thumbnail_s3_path = :thumbnail_s3_path, video_duration = :duration, video_preview_url = :preview_url, video_thumbnail_url = :thumbnail_url",
+        ExpressionAttributeValues: {
+          ":status": "uploaded",
+          ":updated_at": new Date().toISOString(),
+          ":video_s3_path": videoS3Path,
+          ":thumbnail_s3_path": thumbnailS3Path,
+          ":duration": formatDuration(duration),
+          ":preview_url": videoPreviewUrl,
+          ":thumbnail_url": thumbnailUrl
+        }
+      })),
+      3,
+      `Update indexes table with complete video metadata`
+    );
 
     // Use update operation with document ID instead of updateByQuery
     // This is better supported in OpenSearch Serverless
