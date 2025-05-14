@@ -35,7 +35,7 @@ model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
     checkpoint,
     torch_dtype=torch.bfloat16,
     device_map="auto",
-    # attn_implementation="flash_attention_2",
+    attn_implementation="sdpa",
 )
 
 @app.get("/")
