@@ -204,6 +204,105 @@ commit_hashs=("00a7db29f2f740ce3aef3b4ed9653a5bd9b9ce7d")
 https://huggingface.co/alibaba-pai/VideoCLIP-XL/tree/main
 ```
 
+#### Video Understanding
+
+##### Video Question-Answering with Amazon Nova
+The video understanding feature allows users to ask natural language questions about their videos and receive AI-powered insights. This feature leverages Amazon Nova to analyze video content and generate responses to user queries.
+
+Key capabilities:
+- Ask questions about video content using natural language
+- Receive detailed AI-generated responses about video scenes, objects, actions, and context
+- Stream responses in real-time with a typing animation for better user experience
+
+Technical implementation:
+- Uses Amazon Nova Pro model (apac.amazon.nova-pro-v1:0) for video analysis
+- Implements a session-based approach with DynamoDB for tracking request status
+- Provides streaming responses using Server-Sent Events (SSE)
+- Supports both local and S3-hosted videos
+
+API endpoints:
+- POST /videos/ask/init - Initializes a streaming session with videoId, indexId, and question
+- GET /videos/ask/stream/{sessionId} - Streams the response for a given session
+
+##### Self-hosted Video Understanding with Qwen2.5-VL
+As an alternative to Amazon Nova, the platform also supports self-hosting the Qwen2.5-VL-7B-Instruct model for video understanding. This provides more flexibility and control over the video analysis process.
+
+Key capabilities:
+- Process both images and videos with a single model
+- Support for both direct URLs and S3 paths for videos
+- Configurable video processing parameters (fps, max_frames)
+- Comprehensive error handling and logging
+
+Technical implementation:
+- Uses Qwen2.5-VL-7B-Instruct model from Hugging Face
+- FastAPI application for RESTful API endpoints
+- Docker container for easy deployment and scaling
+- Automatic handling of S3 video downloads and cleanup
+
+API endpoints:
+- GET /predict - Process an image or video and generate a response
+- GET /health - Health check endpoint
+
+Docker container:
+- Based on Python 3.12
+- Includes ffmpeg for video processing
+- Uses qwen-vl-utils[decord] for video frame extraction
+- Supports GPU acceleration with CUDA
+
+Example usage:
+```bash
+# For image input
+curl -G "localhost:7860/predict" \
+  --data-urlencode "url=https://example.com/image.jpg" \
+  --data-urlencode "prompt=Describe this image." \
+  --data-urlencode "input_type=image"
+
+# For video input
+curl -G "localhost:7860/predict" \
+  --data-urlencode "url=https://example.com/video.mp4" \
+  --data-urlencode "prompt=Describe this video." \
+  --data-urlencode "input_type=video" \
+  --data-urlencode "fps=1.0" \
+  --data-urlencode "max_frames=8"
+
+# For video from S3
+curl -G "localhost:7860/predict" \
+  --data-urlencode "url=s3://your-bucket/path/to/video.mp4" \
+  --data-urlencode "prompt=Describe this video." \
+  --data-urlencode "input_type=video"
+```
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Frontend
+    participant API Gateway
+    participant Init Lambda
+    participant Stream Lambda
+    participant DynamoDB
+    participant Nova
+    
+    User->>Frontend: Select video & ask question
+    Frontend->>API Gateway: POST /videos/ask/init
+    API Gateway->>Init Lambda: Process request
+    Init Lambda->>DynamoDB: Create session
+    Init Lambda->>Frontend: Return sessionId
+    Frontend->>API Gateway: GET /videos/ask/stream/{sessionId}
+    API Gateway->>Stream Lambda: Process request
+    Stream Lambda->>DynamoDB: Update session status
+    Stream Lambda->>Nova: Process video with question
+    Nova-->>Stream Lambda: Generate response
+    Stream Lambda-->>Frontend: Stream response chunks
+    Frontend-->>User: Display typing animation
+    Stream Lambda->>DynamoDB: Update session status
+```
+
+User interface components:
+- Index selection dropdown for choosing the video collection
+- Video thumbnail grid for selecting the specific video
+- Question input field with sample questions
+- Response display area with typing animation and completion indicator
+
 **Video Metadata Injection**
 Using Amazon Opensearch to store the video information and enable multimodal search capabilities. The schema is optimized for both exact keyword matching and semantic search across visual and audio content:
 
