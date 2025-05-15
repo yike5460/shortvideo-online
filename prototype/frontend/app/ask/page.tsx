@@ -488,47 +488,6 @@ export default function AskPage() {
           )}
         </div>
         
-        {/* Model Selection */}
-        <div className="bg-white rounded-lg shadow-md p-6">
-          <h2 className="text-lg font-medium mb-4">Select a Model</h2>
-          
-          <div className="relative" ref={modelDropdownRef}>
-            <div
-              className="custom-select-header block w-full pl-3 pr-10 py-2 text-base border border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 rounded-md cursor-pointer"
-              onClick={() => setIsModelDropdownOpen(!isModelDropdownOpen)}
-            >
-              <div className="flex justify-between items-center">
-                <span>{AVAILABLE_MODELS.find(model => model.id === selectedModel)?.name || 'Select a model'}</span>
-                <svg className={`h-5 w-5 transition-transform duration-200 ${isModelDropdownOpen ? 'transform rotate-180' : ''}`} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                  <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
-                </svg>
-              </div>
-            </div>
-            
-            {isModelDropdownOpen && (
-              <div className="custom-select-dropdown absolute z-10 mt-1 w-full bg-white shadow-lg max-h-60 rounded-md py-1 text-base ring-1 ring-black ring-opacity-5 overflow-auto focus:outline-none sm:text-sm">
-                {AVAILABLE_MODELS.map((model) => (
-                  <div
-                    key={model.id}
-                    className={`cursor-pointer select-none relative py-2 pl-3 pr-9 hover:bg-indigo-50 ${selectedModel === model.id ? 'bg-indigo-100 text-indigo-900' : 'text-gray-900'}`}
-                    onClick={() => handleModelSelect(model.id)}
-                  >
-                    {model.name}
-                    
-                    {selectedModel === model.id && (
-                      <span className="absolute inset-y-0 right-0 flex items-center pr-4 text-indigo-600">
-                        <svg className="h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                          <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                        </svg>
-                      </span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-        
         {/* Video Selection Box */}
         <div className="bg-white rounded-lg shadow-md p-6">
           <h2 className="text-lg font-medium mb-4">Select a Video</h2>
@@ -671,6 +630,59 @@ export default function AskPage() {
                   onChange={handleQuestionChange}
                   disabled={isProcessing || !selectedVideo}
                 />
+                
+                {/* Model selector floating button */}
+                <div className="absolute bottom-2 left-3 flex gap-2 items-center">
+                  <div className="relative" ref={modelDropdownRef}>
+                    <button
+                      type="button"
+                      className="rounded-full p-2 bg-gray-100 hover:bg-gray-200 transition-colors flex items-center justify-center"
+                      onClick={() => setIsModelDropdownOpen(!isModelDropdownOpen)}
+                      title="Select AI Model"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5 text-gray-600">
+                        <circle cx="6" cy="8" r="2" />
+                        <circle cx="6" cy="16" r="2" />
+                        <circle cx="12" cy="12" r="2" />
+                        <circle cx="18" cy="8" r="2" />
+                        <circle cx="18" cy="16" r="2" />
+                        <line x1="6" y1="8" x2="12" y2="12" />
+                        <line x1="6" y1="16" x2="12" y2="12" />
+                        <line x1="18" y1="8" x2="12" y2="12" />
+                        <line x1="18" y1="16" x2="12" y2="12" />
+                      </svg>
+                    </button>
+                    
+                    {isModelDropdownOpen && (
+                      <div className="absolute bottom-full mb-2 left-0 z-20 w-48 bg-white shadow-lg rounded-md py-1 text-base ring-1 ring-black ring-opacity-5 overflow-auto focus:outline-none sm:text-sm">
+                        <div className="px-3 py-2 text-xs font-medium text-gray-500 border-b">
+                          Select AI Model
+                        </div>
+                        {AVAILABLE_MODELS.map((model) => (
+                          <div
+                            key={model.id}
+                            className={`cursor-pointer select-none relative py-2 pl-3 pr-9 hover:bg-indigo-50 ${selectedModel === model.id ? 'bg-indigo-100 text-indigo-900' : 'text-gray-900'}`}
+                            onClick={() => handleModelSelect(model.id)}
+                          >
+                            {model.name}
+                            
+                            {selectedModel === model.id && (
+                              <span className="absolute inset-y-0 right-0 flex items-center pr-4 text-indigo-600">
+                                <svg className="h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                                  <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                                </svg>
+                              </span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  
+                  <span className="text-xs text-gray-500">
+                    {AVAILABLE_MODELS.find(model => model.id === selectedModel)?.name}
+                  </span>
+                </div>
                 
                 <button
                   type="submit"
