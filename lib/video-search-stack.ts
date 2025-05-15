@@ -28,6 +28,7 @@ interface VideoSearchStackProps extends cdk.StackProps {
   maxAzs: number;
   deploymentEnvironment?: string;
   externalVideoEmbeddingEndpoint?: string;
+  externalVideoUnderstandingEndpoint?: string;
   siliconflowApiKey?: string;
   appDomain?: string;
 }
@@ -47,6 +48,7 @@ export class VideoSearchStack extends cdk.Stack {
   private readonly dynamodbEndpoint: ec2.InterfaceVpcEndpoint;
   private readonly videoEmbeddingService: ecs.FargateService;
   private readonly externalVideoEmbeddingEndpoint: string;
+  private readonly externalVideoUnderstandingEndpoint: string;
   private readonly siliconflowApiKey?: string;
   private readonly appDomain?: string;
   private readonly userPool: cognito.UserPool;
@@ -58,6 +60,7 @@ export class VideoSearchStack extends cdk.Stack {
     super(scope, id, props);
 
     this.externalVideoEmbeddingEndpoint = props.externalVideoEmbeddingEndpoint || '';
+    this.externalVideoUnderstandingEndpoint = props.externalVideoUnderstandingEndpoint || '';
     this.siliconflowApiKey = props.siliconflowApiKey || '';
     this.appDomain = props.appDomain;
     const deploymentEnv = props.deploymentEnvironment || 'dev';
@@ -93,8 +96,8 @@ export class VideoSearchStack extends cdk.Stack {
     // Create OpenSearch collection
     this.openSearchCollection = this.createSearchInfrastructure(deploymentEnv);
 
-    // Create video embedding service
-    this.videoEmbeddingService = this.createVideoEmbeddingService();
+    // Create video embedding service, commented out for now as we are using external video embedding service
+    // this.videoEmbeddingService = this.createVideoEmbeddingService();
 
     // Create Lambda functions after OpenSearch collection
     const lambdaFunctions = {
@@ -106,9 +109,9 @@ export class VideoSearchStack extends cdk.Stack {
     };
 
     // Add dependencies for the lambda functions on the video embedding service and open search collection
-    lambdaFunctions.videoUploadFunction.videoUploadHandler.node.addDependency(this.videoEmbeddingService);
+    // lambdaFunctions.videoUploadFunction.videoUploadHandler.node.addDependency(this.videoEmbeddingService);
     lambdaFunctions.videoUploadFunction.videoUploadHandler.node.addDependency(this.openSearchCollection);
-    lambdaFunctions.videoSliceFunction.node.addDependency(this.videoEmbeddingService);
+    // lambdaFunctions.videoSliceFunction.node.addDependency(this.videoEmbeddingService);
     lambdaFunctions.videoSliceFunction.node.addDependency(this.openSearchCollection);
     lambdaFunctions.videoSearchFunction.node.addDependency(this.openSearchCollection);
     lambdaFunctions.indexCrudFunction.node.addDependency(this.openSearchCollection);
@@ -127,7 +130,8 @@ export class VideoSearchStack extends cdk.Stack {
     this.videoUnderstandingStack = this.createVideoUnderstandingStack(api, deploymentEnv);
 
     // Set up permissions
-    this.setupPermissions(lambdaFunctions, this.videoEmbeddingService, this.rekognitionTopic, this.indexesTable);
+    // this.setupPermissions(lambdaFunctions, this.videoEmbeddingService, this.rekognitionTopic, this.indexesTable);
+    this.setupPermissions(lambdaFunctions, this.rekognitionTopic, this.indexesTable);
 
     // Create stack outputs
     this.createStackOutputs(api);
@@ -640,7 +644,7 @@ export class VideoSearchStack extends cdk.Stack {
         REDIS_ENDPOINT: this.redisCluster.attrRedisEndpointAddress,
         INDEXES_TABLE: this.indexesTable.tableName,
         INDEXES_TABLE_DYNAMODB_DNS_NAME: dynamoDbEndpointDnsHttp,
-        EMBEDDING_SERVICE_URL: this.videoEmbeddingService.serviceName,
+        // EMBEDDING_SERVICE_URL: this.videoEmbeddingService.serviceName,
         EXTERNAL_EMBEDDING_ENDPOINT: this.externalVideoEmbeddingEndpoint || '',
       },
       bundling: {
@@ -992,7 +996,7 @@ export class VideoSearchStack extends cdk.Stack {
       minHealthyPercent: 100,
       maxHealthyPercent: 200,
       assignPublicIp: false,
-      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_NAT },
       securityGroups: [embeddingServiceSG],
       capacityProviderStrategies: [
         {
@@ -1053,7 +1057,9 @@ export class VideoSearchStack extends cdk.Stack {
 
     // Add container to task definition
     const container = taskDefinition.addContainer('VideoEmbeddingContainer', {
-      image: ecs.ContainerImage.fromAsset('src/containers/qwen-embedding'),
+      // Use simple sample container image to placehold the ECS service creation process
+      // image: ecs.ContainerImage.fromRegistry('public.ecr.aws/amazonlinux/amazonlinux:latest'),
+      image: ecs.ContainerImage.fromAsset('src/containers/video-embedding'),
       logging: new ecs.AwsLogDriver({
         streamPrefix: 'video-embedding-service',
         logRetention: logs.RetentionDays.ONE_WEEK,
@@ -1098,7 +1104,7 @@ export class VideoSearchStack extends cdk.Stack {
       minHealthyPercent: 100,
       maxHealthyPercent: 200,
       assignPublicIp: false,
-      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_NAT },
       securityGroups: [videoEmbeddingServiceSG],
       capacityProviderStrategies: [
         {
@@ -1293,7 +1299,7 @@ export class VideoSearchStack extends cdk.Stack {
       videoMergeFunction: lambda.Function;
     },
     // textEmbeddingService: ecs.FargateService,
-    videoEmbeddingService: ecs.FargateService,
+    // videoEmbeddingService: ecs.FargateService,
     // queue: sqs.Queue
     snsTopic: sns.Topic,
     indexesTable: dynamodb.Table
@@ -1307,7 +1313,7 @@ export class VideoSearchStack extends cdk.Stack {
     this.videoBucket.grantReadWrite(lambdaFunctions.videoMergeFunction);
 
     // Grant permissions to embedding services to access S3
-    this.videoBucket.grantRead(videoEmbeddingService.taskDefinition.taskRole);
+    // this.videoBucket.grantRead(videoEmbeddingService.taskDefinition.taskRole);
  
     // SQS permissions
     // queue.grantSendMessages(lambdaFunctions.videoUploadFunction.videoUploadHandler);
@@ -1381,7 +1387,7 @@ export class VideoSearchStack extends cdk.Stack {
 
     // Grant permissions to embedding services to access OpenSearch
     // textEmbeddingService.taskDefinition.addToTaskRolePolicy(openSearchPolicy);
-    videoEmbeddingService.taskDefinition.addToTaskRolePolicy(openSearchPolicy);
+    // videoEmbeddingService.taskDefinition.addToTaskRolePolicy(openSearchPolicy);
 
     // Grant Rekognition permissions to video slice function
     const rekognitionPolicy = new iam.PolicyStatement({
@@ -1697,7 +1703,8 @@ export class VideoSearchStack extends cdk.Stack {
       dynamodbEndpoint: this.dynamodbEndpoint,
       openSearchEndpoint: `https://${this.openSearchCollection.attrId}.${this.region}.aoss.amazonaws.com`,
       indexesTable: this.indexesTable,
-      deploymentEnvironment: deploymentEnv
+      deploymentEnvironment: deploymentEnv,
+      externalVideoUnderstandingEndpoint: this.externalVideoUnderstandingEndpoint || ''
     });
   }
 }

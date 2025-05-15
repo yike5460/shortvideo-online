@@ -17,6 +17,7 @@ export interface VideoUnderstandingProps {
   openSearchEndpoint: string;
   indexesTable: dynamodb.Table;
   deploymentEnvironment: string;
+  externalVideoUnderstandingEndpoint?: string;
 }
 
 export class VideoUnderstandingStack extends Construct {
@@ -78,6 +79,8 @@ export class VideoUnderstandingStack extends Construct {
         SESSIONS_TABLE: sessionsTable.tableName,
         // Make sure the model ID is aligned with the inference profile
         NOVA_MODEL_ID: 'apac.amazon.nova-pro-v1:0',
+        // External video understanding endpoint (Qwen-VL)
+        EXTERNAL_VIDEO_UNDERSTANDING_ENDPOINT: props.externalVideoUnderstandingEndpoint || '',
       },
       bundling: {
         minify: true,

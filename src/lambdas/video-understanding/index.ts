@@ -23,6 +23,8 @@ const SESSIONS_TABLE = process.env.SESSIONS_TABLE || 'VideoUnderstandingSessions
 const SESSION_TTL = 60 * 60; // 1 hour in seconds
 // Make sure the region is aligned with the inference profile
 const NOVA_MODEL_ID = process.env.NOVA_MODEL_ID || 'apac.amazon.nova-pro-v1:0';
+// External video understanding endpoint (Qwen-VL)
+const EXTERNAL_VIDEO_UNDERSTANDING_ENDPOINT = process.env.EXTERNAL_VIDEO_UNDERSTANDING_ENDPOINT || '';
 
 // CORS headers
 const corsHeaders = {
@@ -228,6 +230,53 @@ async function processVideoWithNova(s3Path: string, question: string): Promise<s
   }
 }
 
+// Helper function to process video with Qwen-VL
+async function processVideoWithQwenVL(s3Path: string, question: string): Promise<string> {
+  try {
+    // Parse S3 path
+    let bucket = VIDEO_BUCKET;
+    let key = s3Path;
+    
+    // If s3Path is a full s3:// URL, parse it
+    if (s3Path.startsWith('s3://')) {
+      s3Path = s3Path.replace('s3://', '');
+      const parts = s3Path.split('/', 2);
+      bucket = parts[0];
+      key = parts.length > 1 ? parts.slice(1).join('/') : '';
+    }
+    
+    if (!bucket) {
+      throw new Error('No S3 bucket specified');
+    }
+
+    // Create the S3 URI
+    const s3Uri = `s3://${bucket}/${key}`;
+    
+    // Create URL with query parameters
+    const url = new URL(`${EXTERNAL_VIDEO_UNDERSTANDING_ENDPOINT}/predict`);
+    url.searchParams.append('url', s3Uri);
+    url.searchParams.append('prompt', question);
+    url.searchParams.append('input_type', 'video');
+    
+    console.log(`Making request to Qwen-VL endpoint: ${url.toString()}`);
+    
+    // Make a request to the Qwen-VL endpoint
+    const response = await fetch(url.toString());
+    
+    if (!response.ok) {
+      throw new Error(`Error from Qwen-VL endpoint: ${response.status} ${response.statusText}`);
+    }
+    
+    const responseData = await response.json();
+    
+    // Extract the response text
+    return responseData.response || '';
+  } catch (error) {
+    console.error('Error processing video with Qwen-VL:', error);
+    throw error;
+  }
+}
+
 // Handler for initializing a streaming session
 export async function initHandler(event: APIGatewayProxyEvent): Promise<LambdaResponse> {
   try {
@@ -346,7 +395,15 @@ export async function streamHandler(event: APIGatewayProxyEvent): Promise<Lambda
         console.error('No video_s3_path found in video details');
         throw new Error('Video S3 path not found in metadata');
       }
-      const response = await processVideoWithNova(videoS3Path, session.question);
+      // Use Qwen-VL if external endpoint is provided, otherwise use Nova
+      let response: string;
+      if (EXTERNAL_VIDEO_UNDERSTANDING_ENDPOINT) {
+        console.log(`Using external Qwen-VL endpoint: ${EXTERNAL_VIDEO_UNDERSTANDING_ENDPOINT}`);
+        response = await processVideoWithQwenVL(videoS3Path, session.question);
+      } else {
+        console.log('Using Nova for video processing');
+        response = await processVideoWithNova(videoS3Path, session.question);
+      }
       
       // In a real implementation, we would stream chunks as they become available
       // For this implementation, we'll simulate streaming with chunks

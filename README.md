@@ -1,4 +1,4 @@
-# Know Your Video (Design Document)
+# Know Your Moments (Design Document)
 
 ## Search Service
 
@@ -1151,8 +1151,7 @@ flowchart TD
     - Security group controls
 
 ## TODO
-- Video Generation feature with Nova
-- Try g6e instance to launch Qwen2-VL-7B-Instruct locally
+
 
 Backend:
 - [ ] Add index deletion using /indexes/{indexId} DELETE
@@ -1160,9 +1159,10 @@ Backend:
 - [ ] Test for cross account access for S3 connector
 - [ ] Test for video transition between clips
 - [ ] BGM, translation for merge job and separate panel for the post processing
+- [ ] Overall cache for the query in video search and video understanding, aiming to achieve "consistent time-to-first-token (TTFT) latency for videos up to 15 minutes" in duration and "superior response times for extended content ranging from 30 to 60 minutes in length" when compared against other leading models like OpenAI's GPT-4o and Google's Gemini 1.5 Pro
 
 Frontend:
-- [ ] Deep Search feature
+- [ ] Deep Search feature, deprecate for now
 - [ ] Display video cards in the search page before user user actually performs the search, and offer the option to generate video summary for each video to guide the user what keywords to use for the initial video search
 - [ ] Add pagination with icons for the video page, currently only max 20 videos are displayed
 - [ ] Adjust the position of the ellipsis button from top right of video panel to the top right of the panel below
