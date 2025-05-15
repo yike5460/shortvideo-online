@@ -18,6 +18,12 @@ interface VideoThumbnail {
   indexId: string;
 }
 
+// Define interface for AI models
+interface AIModel {
+  id: string;
+  name: string;
+}
+
 interface Index {
   id: string;
   name: string;
@@ -46,6 +52,12 @@ const SAMPLE_QUESTIONS = [
   "What are highlighted moments of this video?"
 ];
 
+// Available AI models for video understanding
+const AVAILABLE_MODELS: AIModel[] = [
+  { id: 'qwen-vl-2.5', name: 'Qwen-VL 2.5' },
+  { id: 'nova', name: 'Amazon Nova' }
+];
+
 export default function AskPage() {
   const { state } = useAuth()
   const searchParams = useSearchParams()
@@ -66,13 +78,22 @@ export default function AskPage() {
   const chatContainerRef = useRef<HTMLDivElement>(null)
   const eventSourceRef = useRef<EventSource | null>(null)
   const [isDropdownOpen, setIsDropdownOpen] = useState(false)
+  const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
+  const modelDropdownRef = useRef<HTMLDivElement>(null)
+  const [selectedModel, setSelectedModel] = useState<string>('qwen-vl-2.5')
 
   // Initialize selectedIndexId from URL parameter and fetch indexes on mount
   useEffect(() => {
     const indexParam = searchParams.get('index');
     if (indexParam) {
       setSelectedIndexId(indexParam);
+    }
+    
+    // Load saved model from localStorage
+    const savedModel = localStorage.getItem('selectedVideoUnderstandingModel');
+    if (savedModel) {
+      setSelectedModel(savedModel);
     }
     
     // Fetch available indexes
@@ -130,6 +151,11 @@ export default function AskPage() {
     
     fetchIndexes();
   }, [searchParams, state.session, API_ENDPOINT]);
+  
+  // Save selected model to localStorage when it changes
+  useEffect(() => {
+    localStorage.setItem('selectedVideoUnderstandingModel', selectedModel);
+  }, [selectedModel]);
 
   // Fetch videos when selectedIndexId changes
   useEffect(() => {
@@ -266,7 +292,8 @@ export default function AskPage() {
         body: JSON.stringify({
           videoId: selectedVideo.id,
           indexId: selectedVideo.indexId,
-          question: question
+          question: question,
+          model: selectedModel
         })
       });
       
@@ -353,11 +380,14 @@ export default function AskPage() {
     };
   }, []);
 
-  // Handle click outside to close dropdown
+  // Handle click outside to close dropdowns
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
         setIsDropdownOpen(false);
+      }
+      if (modelDropdownRef.current && !modelDropdownRef.current.contains(event.target as Node)) {
+        setIsModelDropdownOpen(false);
       }
     }
     
@@ -371,6 +401,12 @@ export default function AskPage() {
   const handleIndexSelect = (indexId: string) => {
     setSelectedIndexId(indexId);
     setIsDropdownOpen(false);
+  };
+  
+  // Handle model selection
+  const handleModelSelect = (modelId: string) => {
+    setSelectedModel(modelId);
+    setIsModelDropdownOpen(false);
   };
 
   if (isLoading) {
@@ -450,6 +486,47 @@ export default function AskPage() {
               )}
             </div>
           )}
+        </div>
+        
+        {/* Model Selection */}
+        <div className="bg-white rounded-lg shadow-md p-6">
+          <h2 className="text-lg font-medium mb-4">Select a Model</h2>
+          
+          <div className="relative" ref={modelDropdownRef}>
+            <div
+              className="custom-select-header block w-full pl-3 pr-10 py-2 text-base border border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 rounded-md cursor-pointer"
+              onClick={() => setIsModelDropdownOpen(!isModelDropdownOpen)}
+            >
+              <div className="flex justify-between items-center">
+                <span>{AVAILABLE_MODELS.find(model => model.id === selectedModel)?.name || 'Select a model'}</span>
+                <svg className={`h-5 w-5 transition-transform duration-200 ${isModelDropdownOpen ? 'transform rotate-180' : ''}`} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                  <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
+                </svg>
+              </div>
+            </div>
+            
+            {isModelDropdownOpen && (
+              <div className="custom-select-dropdown absolute z-10 mt-1 w-full bg-white shadow-lg max-h-60 rounded-md py-1 text-base ring-1 ring-black ring-opacity-5 overflow-auto focus:outline-none sm:text-sm">
+                {AVAILABLE_MODELS.map((model) => (
+                  <div
+                    key={model.id}
+                    className={`cursor-pointer select-none relative py-2 pl-3 pr-9 hover:bg-indigo-50 ${selectedModel === model.id ? 'bg-indigo-100 text-indigo-900' : 'text-gray-900'}`}
+                    onClick={() => handleModelSelect(model.id)}
+                  >
+                    {model.name}
+                    
+                    {selectedModel === model.id && (
+                      <span className="absolute inset-y-0 right-0 flex items-center pr-4 text-indigo-600">
+                        <svg className="h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                          <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                        </svg>
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
         
         {/* Video Selection Box */}

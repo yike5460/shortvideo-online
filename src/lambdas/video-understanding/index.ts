@@ -49,6 +49,7 @@ interface SessionData {
   videoId: string;
   indexId: string;
   question: string;
+  model?: string;  // Add model field
   status: 'pending' | 'processing' | 'completed' | 'error';
   createdAt: number;
   ttl: number;
@@ -60,6 +61,37 @@ interface InitRequest {
   videoId: string;
   indexId: string;
   question: string;
+  model?: string;  // Add model field
+}
+
+// Interface for model processors
+interface ModelProcessor {
+  processVideo(s3Path: string, question: string): Promise<string>;
+}
+
+// Factory function to get the appropriate model processor
+function getModelProcessor(model?: string): ModelProcessor {
+  switch (model) {
+    case 'nova':
+      return {
+        processVideo: processVideoWithNova
+      };
+    case 'qwen-vl-2.5':
+      return {
+        processVideo: processVideoWithQwenVL
+      };
+    default:
+      // Default behavior: use Qwen-VL if external endpoint exists, otherwise Nova
+      return {
+        processVideo: async (s3Path: string, question: string) => {
+          if (EXTERNAL_VIDEO_UNDERSTANDING_ENDPOINT) {
+            return processVideoWithQwenVL(s3Path, question);
+          } else {
+            return processVideoWithNova(s3Path, question);
+          }
+        }
+      };
+  }
 }
 
 // Helper function to get video details from DynamoDB
@@ -289,7 +321,7 @@ export async function initHandler(event: APIGatewayProxyEvent): Promise<LambdaRe
     }
 
     const request: InitRequest = JSON.parse(event.body);
-    const { videoId, indexId, question } = request;
+    const { videoId, indexId, question, model } = request;
 
     if (!videoId || !question) {
       return {
@@ -318,6 +350,7 @@ export async function initHandler(event: APIGatewayProxyEvent): Promise<LambdaRe
       videoId,
       indexId,
       question,
+      model,
       status: 'pending',
       createdAt: now,
       ttl: now + SESSION_TTL
@@ -395,15 +428,12 @@ export async function streamHandler(event: APIGatewayProxyEvent): Promise<Lambda
         console.error('No video_s3_path found in video details');
         throw new Error('Video S3 path not found in metadata');
       }
-      // Use Qwen-VL if external endpoint is provided, otherwise use Nova
-      let response: string;
-      if (EXTERNAL_VIDEO_UNDERSTANDING_ENDPOINT) {
-        console.log(`Using external Qwen-VL endpoint: ${EXTERNAL_VIDEO_UNDERSTANDING_ENDPOINT}`);
-        response = await processVideoWithQwenVL(videoS3Path, session.question);
-      } else {
-        console.log('Using Nova for video processing');
-        response = await processVideoWithNova(videoS3Path, session.question);
-      }
+      // Get the appropriate model processor based on the selected model
+      const modelProcessor = getModelProcessor(session.model);
+      console.log(`Using model: ${session.model || 'default'}`);
+      
+      // Process the video with the selected model
+      const response = await modelProcessor.processVideo(videoS3Path, session.question);
       
       // In a real implementation, we would stream chunks as they become available
       // For this implementation, we'll simulate streaming with chunks
