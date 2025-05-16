@@ -26,6 +26,225 @@ const NOVA_MODEL_ID = process.env.NOVA_MODEL_ID || 'apac.amazon.nova-pro-v1:0';
 // External video understanding endpoint (Qwen-VL)
 const EXTERNAL_VIDEO_UNDERSTANDING_ENDPOINT = process.env.EXTERNAL_VIDEO_UNDERSTANDING_ENDPOINT || '';
 
+// Define question types for specialized prompts
+enum QuestionType {
+  HASHTAGS = 'hashtags',
+  SUMMARY = 'summary',
+  HIGHLIGHTS = 'highlights',
+  CHAPTERS = 'chapters',
+  CLASSIFICATION = 'classification',
+  AUDIENCE = 'audience',
+  TIMELINE = 'timeline',
+  GENERAL = 'general'
+}
+
+// Helper function to format time in MM:SS format
+function formatTime(seconds: number | string): string {
+  if (typeof seconds === 'string') {
+    // If it's already a string format, return it
+    return seconds;
+  }
+  
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+}
+
+// Function to detect question type
+function detectQuestionType(question: string): QuestionType {
+  const lowerQuestion = question.toLowerCase();
+  /*
+  Align with the sample questions in the frontend
+  const SAMPLE_QUESTIONS = [
+    "Generate hashtags and topics",
+    "Summarize this video",
+    "What are highlighted moments of this video",
+    "Chapterize this video",
+    "Classify this video based on Youtube categories, Output as JSON format",
+    "What audience is the video suitable for, and why",
+    "Break down the video by main event and timestamp"
+  ];
+  */
+  
+  if (lowerQuestion.includes('hashtag') || lowerQuestion.includes('topic')) {
+    return QuestionType.HASHTAGS;
+  } else if (lowerQuestion.includes('summarize') || lowerQuestion.includes('summary')) {
+    return QuestionType.SUMMARY;
+  } else if (lowerQuestion.includes('highlight') || lowerQuestion.includes('key moment')) {
+    return QuestionType.HIGHLIGHTS;
+  } else if (lowerQuestion.includes('chapter') || lowerQuestion.includes('section')) {
+    return QuestionType.CHAPTERS;
+  } else if (lowerQuestion.includes('classify') || lowerQuestion.includes('categor') || lowerQuestion.includes('json')) {
+    return QuestionType.CLASSIFICATION;
+  } else if (lowerQuestion.includes('audience') || lowerQuestion.includes('suitable for')) {
+    return QuestionType.AUDIENCE;
+  } else if (lowerQuestion.includes('main event') || lowerQuestion.includes('timeline') || lowerQuestion.includes('timestamp')) {
+    return QuestionType.TIMELINE;
+  } else {
+    return QuestionType.GENERAL;
+  }
+}
+
+// Function to enhance prompt based on question type
+function enhancePrompt(question: string, videoMetadata: any): string {
+  const questionType = detectQuestionType(question);
+  const optimalFps = videoMetadata.fps || 1;
+  const startTime = videoMetadata.startTime || '00:00:00';
+  const duration = videoMetadata.duration || '';
+  
+  switch (questionType) {
+    case QuestionType.HIGHLIGHTS:
+      return `Please describe the video content and identify key events or actions in shots granularity with precise timestamps.
+FPS sampling rate: ${optimalFps.toFixed(4)}
+Video start time: ${startTime}
+Video duration: ${formatTime(duration)}
+
+For each shot, use the format: [MM:SS - MM:SS] Description of the shot.
+Ensure each timestamp is accurate to the content being described.
+Don't miss any shots and details in the video.
+
+For example:
+[00:00:00 - 00:01:00] A person is walking down a street.
+[00:01:00 - 00:02:00] A car drives by.
+[00:02:00 - 00:03:00] A person is talking on the phone.
+
+Original question: ${question}`;
+    
+    case QuestionType.CHAPTERS:
+      return `Please analyze this video and divide it into logical chapters or sections with timestamps.
+Video duration: ${formatTime(duration)}
+
+For each chapter, provide:
+1. A clear, descriptive title
+2. Start and end timestamps in [MM:SS] format
+3. A brief summary of what happens in that chapter
+
+Format your response as:
+## Chapter 1: [Title]
+[00:00 - MM:SS]
+Brief description of this chapter's content.
+
+## Chapter 2: [Title]
+[MM:SS - MM:SS]
+Brief description of this chapter's content.
+
+Original question: ${question}`;
+    
+    case QuestionType.CLASSIFICATION:
+      return `Please classify this video based on YouTube categories and output the result in JSON format.
+Analyze the video content carefully and determine the most appropriate YouTube categories.
+
+Your response should be in valid JSON format like this:
+{
+  "primaryCategory": "string",
+  "secondaryCategories": ["string", "string"],
+  "tags": ["string", "string", "string"],
+  "contentRating": "string",
+  "reasoning": "string"
+}
+
+Where:
+- primaryCategory: The main YouTube category this video belongs to
+- secondaryCategories: Array of other relevant categories
+- tags: Array of relevant tags for this video
+- contentRating: Age appropriateness (e.g., "General", "Teen", "Mature")
+- reasoning: Brief explanation of why these categories were chosen
+
+Original question: ${question}`;
+    
+    case QuestionType.HASHTAGS:
+      return `Please generate relevant hashtags and topics for this video.
+Watch the video carefully and identify:
+1. The main subject matter
+2. Key themes and concepts
+3. Notable objects, people, or activities
+4. Style, mood, or aesthetic elements
+5. Trending or evergreen topics related to the content
+
+Format your response as:
+
+## Hashtags
+#hashtag1 #hashtag2 #hashtag3 (provide at least 10 relevant hashtags)
+
+## Topics
+- Main topic 1
+- Main topic 2
+- Main topic 3 (provide 5-7 main topics)
+
+## Keywords
+keyword1, keyword2, keyword3 (provide 10-15 keywords)
+
+Original question: ${question}`;
+    
+    case QuestionType.AUDIENCE:
+      return `Please analyze this video and determine what audience it is most suitable for, and explain why.
+Consider the following factors:
+1. Age appropriateness
+2. Content complexity
+3. Subject matter interest
+4. Educational value
+5. Entertainment value
+6. Cultural context
+7. Prerequisites (knowledge or experience needed)
+
+Format your response as:
+
+## Primary Audience
+Describe the main audience this video is best suited for
+
+## Secondary Audiences
+List any other audiences that might find value in this content
+
+## Reasoning
+Provide a detailed explanation of why this video is suitable for these audiences, citing specific elements from the video
+
+## Content Advisories
+Note any content that might be inappropriate or challenging for certain viewers
+
+Original question: ${question}`;
+    
+    case QuestionType.TIMELINE:
+      return `Please break down this video by main events and timestamps.
+Video duration: ${formatTime(duration)}
+
+Create a detailed timeline of the video, identifying:
+1. All major events, scenes, or segments
+2. Precise start and end timestamps for each event
+3. Brief descriptions of what happens in each segment
+
+Format your response as:
+
+## Timeline
+[00:00 - MM:SS] Description of first event
+[MM:SS - MM:SS] Description of second event
+[MM:SS - MM:SS] Description of third event
+...and so on
+
+Be comprehensive and don't miss any significant moments or transitions in the video.
+
+Original question: ${question}`;
+    
+    case QuestionType.SUMMARY:
+      return `Please provide a comprehensive summary of this video.
+Video duration: ${formatTime(duration)}
+
+Your summary should include:
+1. The main subject or purpose of the video
+2. Key points, arguments, or information presented
+3. Important visual elements or demonstrations
+4. The overall structure and flow
+5. Any conclusions or calls to action
+
+Format your response as a well-structured summary with paragraphs covering different aspects of the content.
+Include a brief introduction and conclusion.
+
+Original question: ${question}`;
+    
+    default:
+      return question;
+  }
+}
+
 // CORS headers
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -66,7 +285,7 @@ interface InitRequest {
 
 // Interface for model processors
 interface ModelProcessor {
-  processVideo(s3Path: string, question: string): Promise<string>;
+  processVideo(s3Path: string, question: string, videoMetadata?: any): Promise<string>;
 }
 
 // Factory function to get the appropriate model processor
@@ -83,11 +302,11 @@ function getModelProcessor(model?: string): ModelProcessor {
     default:
       // Default behavior: use Qwen-VL if external endpoint exists, otherwise Nova
       return {
-        processVideo: async (s3Path: string, question: string) => {
+        processVideo: async (s3Path: string, question: string, videoMetadata?: any) => {
           if (EXTERNAL_VIDEO_UNDERSTANDING_ENDPOINT) {
-            return processVideoWithQwenVL(s3Path, question);
+            return processVideoWithQwenVL(s3Path, question, videoMetadata);
           } else {
-            return processVideoWithNova(s3Path, question);
+            return processVideoWithNova(s3Path, question, videoMetadata);
           }
         }
       };
@@ -177,7 +396,16 @@ async function updateSession(sessionId: string, updates: Partial<SessionData>): 
 }
 
 // Helper function to process video with Nova
-async function processVideoWithNova(s3Path: string, question: string): Promise<string> {
+async function processVideoWithNova(s3Path: string, question: string, videoMetadata?: any): Promise<string> {
+  // Get video metadata if not provided
+  videoMetadata = videoMetadata || {
+    duration: 0,
+    fps: 1,
+    startTime: '00:00:00'
+  };
+  
+  // Enhance the prompt based on question type
+  const enhancedPrompt = enhancePrompt(question, videoMetadata);
   try {
     // Parse S3 path
     let bucket = VIDEO_BUCKET;
@@ -225,7 +453,7 @@ async function processVideoWithNova(s3Path: string, question: string): Promise<s
               }
             },
             {
-              text: question
+              text: enhancedPrompt
             }
           ]
         }
@@ -263,7 +491,16 @@ async function processVideoWithNova(s3Path: string, question: string): Promise<s
 }
 
 // Helper function to process video with Qwen-VL
-async function processVideoWithQwenVL(s3Path: string, question: string): Promise<string> {
+async function processVideoWithQwenVL(s3Path: string, question: string, videoMetadata?: any): Promise<string> {
+  // Get video metadata if not provided
+  videoMetadata = videoMetadata || {
+    duration: 0,
+    fps: 1,
+    startTime: '00:00:00'
+  };
+  
+  // Enhance the prompt based on question type
+  const enhancedPrompt = enhancePrompt(question, videoMetadata);
   try {
     // Parse S3 path
     let bucket = VIDEO_BUCKET;
@@ -287,7 +524,7 @@ async function processVideoWithQwenVL(s3Path: string, question: string): Promise
     // Create URL with query parameters
     const url = new URL(`${EXTERNAL_VIDEO_UNDERSTANDING_ENDPOINT}/predict`);
     url.searchParams.append('url', s3Uri);
-    url.searchParams.append('prompt', question);
+    url.searchParams.append('prompt', enhancedPrompt);
     url.searchParams.append('input_type', 'video');
     
     console.log(`Making request to Qwen-VL endpoint: ${url.toString()}`);
@@ -428,12 +665,21 @@ export async function streamHandler(event: APIGatewayProxyEvent): Promise<Lambda
         console.error('No video_s3_path found in video details');
         throw new Error('Video S3 path not found in metadata');
       }
+      // Extract video metadata
+      const videoMetadata = {
+        duration: videoDetails.videoDuration || 0,
+        fps: videoDetails.videoFps || 1,
+        startTime: '00:00:00'
+      };
+      
+      console.log('Video metadata:', JSON.stringify(videoMetadata, null, 2));
+      
       // Get the appropriate model processor based on the selected model
       const modelProcessor = getModelProcessor(session.model);
       console.log(`Using model: ${session.model || 'default'}`);
       
-      // Process the video with the selected model
-      const response = await modelProcessor.processVideo(videoS3Path, session.question);
+      // Process the video with the selected model and enhanced prompt
+      const response = await modelProcessor.processVideo(videoS3Path, session.question, videoMetadata);
       
       // In a real implementation, we would stream chunks as they become available
       // For this implementation, we'll simulate streaming with chunks

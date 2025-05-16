@@ -47,9 +47,13 @@ interface ChatMessage {
 
 // Sample questions for the input box
 const SAMPLE_QUESTIONS = [
+  "Generate hashtags and topics",
   "Summarize this video",
-  "What happens in this video?",
-  "What are highlighted moments of this video?"
+  "What are highlighted moments of this video",
+  "Chapterize this video",
+  "Classify this video based on Youtube categories, Output as JSON format",
+  "What audience is the video suitable for, and why",
+  "Break down the video by main event and timestamp"
 ];
 
 // Available AI models for video understanding
