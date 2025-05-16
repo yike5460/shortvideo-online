@@ -667,8 +667,9 @@ export async function streamHandler(event: APIGatewayProxyEvent): Promise<Lambda
       }
       // Extract video metadata
       const videoMetadata = {
-        duration: videoDetails.videoDuration || 0,
-        fps: videoDetails.videoFps || 1,
+        duration: videoDetails.video_duration || '00:00:00',  // Keep as string format since that's what's in DynamoDB
+        // TODO: Note we don't have the fps in the metadata, which need to be calculated from the video duration and the number of frames dynamically, we use 1 as default for now
+        fps: videoDetails.video_fps || 1,
         startTime: '00:00:00'
       };
       
