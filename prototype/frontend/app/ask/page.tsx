@@ -5,6 +5,8 @@ import './styles.css'
 import { useAuth } from '@/lib/auth/AuthContext'
 import { useSearchParams } from 'next/navigation'
 import { VideoResult } from '@/types'
+import VideoChapters, { isChapterResponse, debugChapterParsing } from '@/components/VideoChapters'
+import ReactMarkdown from 'react-markdown'
 
 // API configuration
 const API_ENDPOINT = process.env.NEXT_PUBLIC_API_URL
@@ -14,6 +16,7 @@ interface VideoThumbnail {
   id: string;
   title: string;
   thumbnailUrl: string;
+  videoPreviewUrl?: string;
   duration: string;
   indexId: string;
 }
@@ -86,6 +89,8 @@ export default function AskPage() {
   const dropdownRef = useRef<HTMLDivElement>(null)
   const modelDropdownRef = useRef<HTMLDivElement>(null)
   const [selectedModel, setSelectedModel] = useState<string>('qwen-vl-2.5')
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const [isVideoModalOpen, setIsVideoModalOpen] = useState(false)
 
   // Initialize selectedIndexId from URL parameter and fetch indexes on mount
   useEffect(() => {
@@ -199,6 +204,7 @@ export default function AskPage() {
           id: video.id,
           title: video.title || 'Untitled Video',
           thumbnailUrl: video.videoThumbnailUrl || '',
+          videoPreviewUrl: video.videoPreviewUrl || '',
           duration: video.videoDuration || '00:00',
           indexId: video.indexId || 'videos'
         }));
@@ -324,7 +330,11 @@ export default function AskPage() {
             const updated = [...prev];
             const lastMessage = updated[updated.length - 1];
             if (lastMessage && lastMessage.type === 'assistant') {
+              // Append the new text
               lastMessage.content += data.text;
+              
+              // Log for debugging
+              console.log("Updated content:", lastMessage.content);
             }
             return updated;
           });
@@ -338,6 +348,23 @@ export default function AskPage() {
       eventSource.addEventListener('complete', () => {
         setIsComplete(true);
         setIsProcessing(false);
+        
+        // Log the final content for debugging
+        setChatMessages(prev => {
+          const updated = [...prev];
+          const lastMessage = updated[updated.length - 1];
+          if (lastMessage && lastMessage.type === 'assistant') {
+            console.log("Final content on completion:", lastMessage.content);
+            
+            // Debug chapter parsing
+            if (isChapterResponse(lastMessage.content)) {
+              console.log("Content is a chapter response");
+              debugChapterParsing(lastMessage.content);
+            }
+          }
+          return updated;
+        });
+        
         eventSource.close();
         eventSourceRef.current = null;
       });
@@ -428,8 +455,8 @@ export default function AskPage() {
   }
 
   return (
-    <div className="container mx-auto p-4">
-      <h1 className="text-2xl font-bold mb-6">Ask About Your Videos</h1>
+    <div className="container mx-auto p-4 pb-0 flex flex-col min-h-screen">
+      <h1 className="text-2xl font-bold mb-4">Ask About Your Videos</h1>
       
       {error && (
         <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
@@ -437,7 +464,7 @@ export default function AskPage() {
         </div>
       )}
       
-      <div className="flex flex-col gap-6">
+      <div className="flex flex-col gap-4 flex-grow pb-4">
         {/* Index Selection */}
         <div className="bg-white rounded-lg shadow-md p-6">
           <h2 className="text-lg font-medium mb-4">Select an Index</h2>
@@ -545,13 +572,13 @@ export default function AskPage() {
         </div>
         
         {/* Chatbot UI */}
-        <div className="bg-white rounded-lg shadow-md p-6">
-          <h2 className="text-lg font-medium mb-4">
+        <div className="bg-white rounded-lg shadow-md p-4 flex-grow flex flex-col mb-0">
+          <h2 className="text-lg font-medium mb-2">
             Chat with {selectedVideo ? `"${selectedVideo.title}"` : 'your video'}
           </h2>
           
           {/* Chat container with message history */}
-          <div className="chat-container">
+          <div className="chat-container flex-grow">
             <div 
               ref={chatContainerRef}
               className="chat-messages"
@@ -576,7 +603,44 @@ export default function AskPage() {
                     }`}
                   >
                     <div className="chat-message-content">
-                      {message.content || (
+                      {message.content ? (
+                        message.type === 'assistant' && isComplete && isChapterResponse(message.content) ? (
+                          <VideoChapters
+                            content={message.content}
+                            videoThumbnailUrl={selectedVideo?.thumbnailUrl}
+                            onPlayChapter={(time) => {
+                              // Open video modal
+                              setIsVideoModalOpen(true);
+                              
+                              // Convert timestamp to seconds for seeking
+                              const timeComponents = time.split(':').map(Number);
+                              let seconds = 0;
+                              
+                              if (timeComponents.length === 3) {
+                                // Format: HH:MM:SS
+                                seconds = timeComponents[0] * 3600 + timeComponents[1] * 60 + timeComponents[2];
+                              } else if (timeComponents.length === 2) {
+                                // Format: MM:SS
+                                seconds = timeComponents[0] * 60 + timeComponents[1];
+                              }
+                              
+                              // Use setTimeout to ensure the video is loaded before seeking
+                              setTimeout(() => {
+                                if (videoRef.current) {
+                                  videoRef.current.currentTime = seconds;
+                                  videoRef.current.play().catch(err => {
+                                    console.error("Error playing video:", err);
+                                  });
+                                }
+                              }, 500);
+                            }}
+                          />
+                        ) : (
+                          <div className="message-text">
+                            <ReactMarkdown>{message.content}</ReactMarkdown>
+                          </div>
+                        )
+                      ) : (
                         message.type === 'assistant' && !isComplete && (
                           <div className="typing-animation">
                             <span className="dot"></span>
@@ -713,6 +777,41 @@ export default function AskPage() {
           </div>
         </div>
       </div>
+      
+      {/* Video Modal for playing chapters */}
+      {selectedVideo && (
+        <div className={`fixed inset-0 z-50 flex items-center justify-center ${isVideoModalOpen ? 'block' : 'hidden'}`}>
+          <div className="fixed inset-0 bg-black bg-opacity-75" onClick={() => setIsVideoModalOpen(false)}></div>
+          <div className="relative z-10 bg-white rounded-lg shadow-xl max-w-4xl w-full">
+            <div className="absolute top-4 right-4 z-10">
+              <button
+                type="button"
+                className="rounded-full bg-white bg-opacity-80 p-2 text-gray-600 hover:bg-opacity-100 hover:text-gray-900 focus:outline-none"
+                onClick={() => setIsVideoModalOpen(false)}
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            
+            <div className="aspect-video bg-black">
+              <video
+                ref={videoRef}
+                src={selectedVideo.videoPreviewUrl || ''}
+                className="w-full h-full"
+                controls
+                autoPlay
+                poster={selectedVideo.thumbnailUrl}
+              />
+            </div>
+            
+            <div className="p-4">
+              <h3 className="text-xl font-semibold">{selectedVideo.title}</h3>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
