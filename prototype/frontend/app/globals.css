@@ -59,4 +59,28 @@ body {
 
 .animate-ping-slow {
   animation: ping-slow 1s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+/* Add animation keyframes for fadeInUp */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fadeInUp {
+  animation: fadeInUp 0.5s forwards;
+}
+
+.animation-delay-100 {
+  animation-delay: 0.1s;
+}
+
+.animation-delay-200 {
+  animation-delay: 0.2s;
 } 

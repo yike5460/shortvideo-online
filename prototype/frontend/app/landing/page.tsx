@@ -46,7 +46,7 @@ export default function LandingPage() {
                 transition={{ duration: 0.5 }}
                 className="text-2xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-purple-600"
               >
-                VideoSearch
+                Know Your Moments
               </motion.div>
             </div>
             <div className="flex items-center">
@@ -201,12 +201,53 @@ export default function LandingPage() {
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.5, duration: 0.8 }}
               >
-                <div className="relative aspect-video bg-gradient-to-br from-indigo-100 to-purple-100">
-                  {/* Replace with your actual product screenshot/demo */}
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <svg className="h-20 w-20 text-indigo-500" fill="currentColor" viewBox="0 0 20 20">
-                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clipRule="evenodd" />
-                    </svg>
+                <div className="relative">
+                  {/* Single video thumbnail background */}
+                  <div className="aspect-video relative">
+                    <Image 
+                      src="/images/thumbnails/video-thumbnail.png" 
+                      alt="Video search demo" 
+                      width={800} 
+                      height={450}
+                      className="object-cover w-full h-full"
+                    />
+                    <div className="absolute inset-0 bg-black bg-opacity-30 flex items-center justify-center">
+                      <span className="text-xs text-white bg-black bg-opacity-70 px-2 py-1 rounded absolute bottom-2 right-2">05:24</span>
+                    </div>
+                  </div>
+                  
+                  {/* Overlay with search results demo */}
+                  <div className="absolute inset-0 bg-gradient-to-b from-transparent to-indigo-900 bg-opacity-80 flex flex-col justify-end p-4">
+                    <div className="bg-white bg-opacity-90 rounded-lg p-3 mb-3 shadow-lg transform translate-y-4 opacity-0 animate-fadeInUp">
+                      <div className="flex items-start">
+                        <div className="h-8 w-8 rounded-full bg-indigo-100 flex items-center justify-center flex-shrink-0">
+                          <svg className="h-4 w-4 text-indigo-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                        </div>
+                        <div className="ml-3">
+                          <p className="text-xs font-medium text-gray-900">Found at 01:24</p>
+                          <p className="text-xs text-gray-600">Brand logo appears on screen with product launch announcement</p>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <div className="bg-white bg-opacity-90 rounded-lg p-3 shadow-lg transform translate-y-0 animate-fadeInUp animation-delay-100">
+                      <div className="flex items-center">
+                        <div className="relative h-10 w-16 flex-shrink-0 rounded overflow-hidden">
+                          <Image 
+                            src="/images/thumbnails/video-thumbnail-01.png" 
+                            alt="Result thumbnail" 
+                            fill
+                            className="object-cover"
+                          />
+                        </div>
+                        <div className="ml-3">
+                          <p className="text-xs font-medium text-gray-900">Product Demo</p>
+                          <p className="text-xs text-gray-600">2 matching segments found</p>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </motion.div>
@@ -260,9 +301,9 @@ export default function LandingPage() {
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                   </svg>
                 </div>
-                <h3 className="text-xl font-medium text-gray-900">Natural Language Search</h3>
+                <h3 className="text-xl font-medium text-gray-900">Multimodal Embedding Engine</h3>
                 <p className="mt-2 text-base text-gray-600">
-                  Search through videos using conversational language queries and get precise timestamp results.
+                  Our advanced system processes both visual elements (objects, actions, text, logos) and audio components (speech, music, ambient sounds) for granular, precise video analysis.
                 </p>
               </motion.div>
 
@@ -280,9 +321,9 @@ export default function LandingPage() {
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
                   </svg>
                 </div>
-                <h3 className="text-xl font-medium text-gray-900">Visual Recognition</h3>
+                <h3 className="text-xl font-medium text-gray-900">Any-to-Any Search Precision</h3>
                 <p className="mt-2 text-base text-gray-600">
-                  Identify objects, faces, scenes, and text inside videos with advanced AI visual recognition.
+                  Search for brands, logos, or specific moments across modalities. Use images to find video segments, text to locate audio moments, or audio to discover relevant visual scenes.
                 </p>
               </motion.div>
 
@@ -300,9 +341,9 @@ export default function LandingPage() {
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
                   </svg>
                 </div>
-                <h3 className="text-xl font-medium text-gray-900">Content Insights</h3>
+                <h3 className="text-xl font-medium text-gray-900">Long-Form Video Understanding</h3>
                 <p className="mt-2 text-base text-gray-600">
-                  Get detailed analytics and insights about your video content automatically.
+                  Get accurate temporal grounding with precise timestamps. Generate coherent summaries, perform Q&A, and pinpoint specific moments in lengthy videos with contextual awareness.
                 </p>
               </motion.div>
             </div>
@@ -447,7 +488,7 @@ export default function LandingPage() {
                   <span className="text-indigo-600 font-bold">JD</span>
                 </div>
                 <div className="ml-4">
-                  <h4 className="text-lg font-medium text-gray-900">John Doe</h4>
+                  <h4 className="text-lg font-medium text-gray-900">John Doe (Mocked User)</h4>
                   <p className="text-sm text-gray-600">Video Editor</p>
                 </div>
               </div>
@@ -469,7 +510,7 @@ export default function LandingPage() {
                   <span className="text-indigo-600 font-bold">AS</span>
                 </div>
                 <div className="ml-4">
-                  <h4 className="text-lg font-medium text-gray-900">Alice Smith</h4>
+                  <h4 className="text-lg font-medium text-gray-900">Alice Smith (Mocked User)</h4>
                   <p className="text-sm text-gray-600">Content Creator</p>
                 </div>
               </div>
@@ -491,7 +532,7 @@ export default function LandingPage() {
                   <span className="text-indigo-600 font-bold">RJ</span>
                 </div>
                 <div className="ml-4">
-                  <h4 className="text-lg font-medium text-gray-900">Robert Johnson</h4>
+                  <h4 className="text-lg font-medium text-gray-900">Robert Johnson (Mocked User)</h4>
                   <p className="text-sm text-gray-600">Marketing Director</p>
                 </div>
               </div>
@@ -550,7 +591,7 @@ export default function LandingPage() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
             <div>
-              <h3 className="text-xl font-bold mb-4">VideoSearch</h3>
+              <h3 className="text-xl font-bold mb-4">Know Your Moments</h3>
               <p className="text-gray-400">
                 The most advanced video search platform powered by AI. Made with <HeartIcon />
               </p>
@@ -572,19 +613,19 @@ export default function LandingPage() {
                     <path d="M2.003 5.884L10 9.882l7.997-3.998A2 2 0 0016 4H4a2 2 0 00-1.997 1.884z" />
                     <path d="M18 8.118l-8 4-8-4V14a2 2 0 002 2h12a2 2 0 002-2V8.118z" />
                   </svg>
-                  support@videosearch.com
+                  support@knowyourmoments.com
                 </li>
                 <li className="flex items-center text-gray-400">
                   <svg className="h-5 w-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
                     <path fillRule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clipRule="evenodd" />
                   </svg>
-                  123 AI Avenue, Tech City
+                  Beijing, China
                 </li>
               </ul>
             </div>
           </div>
           <div className="mt-8 pt-8 border-t border-gray-800 text-center text-gray-400 text-sm">
-            <p>© 2023 VideoSearch. All rights reserved.</p>
+            <p>© 2025 Know Your Moments. All rights reserved.</p>
           </div>
         </div>
       </footer>

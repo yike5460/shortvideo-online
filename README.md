@@ -1154,6 +1154,15 @@ flowchart TD
 
 
 Backend:
+- [ ] Web rendering and prompt optimization for video understanding per cases:
+"Generate hashtags and topics", - ongoing
+"Summarize this video", - done
+"What are highlighted moments of this video", - ongoing
+"Chapterize this video", - done
+"Classify this video based on Youtube categories, Output as JSON format", - ongoing
+"What audience is the video suitable for, and why", - ongoing
+"Break down the video by main event and timestamp"
+
 - [ ] Add index deletion using /indexes/{indexId} DELETE
 - [ ] Optimize video merge performance for 10+ clips
 - [ ] Test for cross account access for S3 connector
@@ -1162,7 +1171,6 @@ Backend:
 - [ ] Overall cache for the query in video search and video understanding, aiming to achieve "consistent time-to-first-token (TTFT) latency for videos up to 15 minutes" in duration and "superior response times for extended content ranging from 30 to 60 minutes in length" when compared against other leading models like OpenAI's GPT-4o and Google's Gemini 1.5 Pro
 
 Frontend:
-- [ ] Deep Search feature, deprecate for now
 - [ ] Display video cards in the search page before user user actually performs the search, and offer the option to generate video summary for each video to guide the user what keywords to use for the initial video search
 - [ ] Add pagination with icons for the video page, currently only max 20 videos are displayed
 - [ ] Adjust the position of the ellipsis button from top right of video panel to the top right of the panel below
