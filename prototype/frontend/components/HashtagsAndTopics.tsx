@@ -23,12 +23,13 @@ function parseHashtagsAndTopics(content: string): { hashtags: string[], topics: 
   const hashtags: string[] = [];
   let topics = '';
   
-  // Extract hashtags section
+  // Extract hashtags section - first pattern looks for ## Hashtags followed by newline
   const hashtagsMatch = content.match(/## Hashtags\s*\n([\s\S]*?)(?=##|$)/);
   console.log('Hashtags regex match:', hashtagsMatch);
   
-  // Try alternative regex if the first one fails
-  const altHashtagsMatch = content.match(/## Hashtags([\s\S]*?)(?=##|$)/);
+  // Try alternative regex if the first one fails - this handles different whitespace patterns
+  // We're now capturing the content after "## Hashtags" more carefully
+  const altHashtagsMatch = content.match(/## Hashtags\s*([\s\S]*?)(?=##|$)/);
   console.log('Alternative hashtags regex match:', altHashtagsMatch);
   
   if (hashtagsMatch && hashtagsMatch[1]) {
@@ -47,12 +48,13 @@ function parseHashtagsAndTopics(content: string): { hashtags: string[], topics: 
     }
   }
   
-  // Extract topics section
+  // Extract topics section - first pattern looks for ## Topics followed by newline
   const topicsMatch = content.match(/## Topics\s*\n([\s\S]*?)(?=##|$)/);
   console.log('Topics regex match:', topicsMatch);
   
-  // Try alternative regex if the first one fails
-  const altTopicsMatch = content.match(/## Topics([\s\S]*?)(?=##|$)/);
+  // Try alternative regex if the first one fails - this handles different whitespace patterns
+  // Similar improvement for Topics capture
+  const altTopicsMatch = content.match(/## Topics\s*([\s\S]*?)(?=##|$)/);
   console.log('Alternative topics regex match:', altTopicsMatch);
   
   if (topicsMatch && topicsMatch[1]) {

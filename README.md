@@ -1174,8 +1174,8 @@ Backend:
 "What are highlighted moments of this video", - done
 "Chapterize this video", - done
 "Classify this video based on Youtube categories, Output as JSON format", - done
-"What audience is the video suitable for, and why", - ongoing
-"Break down the video by main event and timestamp"
+"What audience is the video suitable for, and why", - done
+"Break down the video by main event and timestamp", - done
 
 - [ ] Add index deletion using /indexes/{indexId} DELETE
 - [ ] Optimize video merge performance for 10+ clips
