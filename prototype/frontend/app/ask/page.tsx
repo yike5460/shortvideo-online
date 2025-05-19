@@ -5,7 +5,8 @@ import './styles.css'
 import { useAuth } from '@/lib/auth/AuthContext'
 import { useSearchParams } from 'next/navigation'
 import { VideoResult } from '@/types'
-import VideoChapters, { isChapterResponse, debugChapterParsing } from '@/components/VideoChapters'
+import VideoChapters, { isChapterResponse, isHighlightResponse, debugChapterParsing } from '@/components/VideoChapters'
+import HashtagsAndTopics, { isHashtagsResponse } from '@/components/HashtagsAndTopics'
 import ReactMarkdown from 'react-markdown'
 
 // API configuration
@@ -330,8 +331,16 @@ export default function AskPage() {
             const updated = [...prev];
             const lastMessage = updated[updated.length - 1];
             if (lastMessage && lastMessage.type === 'assistant') {
-              // Append the new text
-              lastMessage.content += data.text;
+              // Append the new text, ensuring proper spacing
+              // If the last message content doesn't end with a space and the new text doesn't start with a space,
+              // add a space between them to prevent word concatenation
+              const needsSpace = lastMessage.content.length > 0 &&
+                                !lastMessage.content.endsWith(' ') &&
+                                !data.text.startsWith(' ') &&
+                                !lastMessage.content.endsWith('\n') &&
+                                !data.text.startsWith('\n');
+              
+              lastMessage.content += (needsSpace ? ' ' : '') + data.text;
               
               // Log for debugging
               console.log("Updated content:", lastMessage.content);
@@ -356,10 +365,15 @@ export default function AskPage() {
           if (lastMessage && lastMessage.type === 'assistant') {
             console.log("Final content on completion:", lastMessage.content);
             
-            // Debug chapter parsing
+            // Debug response type detection
             if (isChapterResponse(lastMessage.content)) {
               console.log("Content is a chapter response");
               debugChapterParsing(lastMessage.content);
+            } else if (isHighlightResponse(lastMessage.content)) {
+              console.log("Content is a highlight response");
+              debugChapterParsing(lastMessage.content); // We can reuse the debug function
+            } else if (isHashtagsResponse(lastMessage.content)) {
+              console.log("Content is a hashtags response");
             }
           }
           return updated;
@@ -634,7 +648,42 @@ export default function AskPage() {
                                 }
                               }, 500);
                             }}
+                            type="chapter"
                           />
+                        ) : message.type === 'assistant' && isComplete && isHighlightResponse(message.content) ? (
+                          <VideoChapters
+                            content={message.content}
+                            videoThumbnailUrl={selectedVideo?.thumbnailUrl}
+                            onPlayChapter={(time) => {
+                              // Open video modal
+                              setIsVideoModalOpen(true);
+                              
+                              // Convert timestamp to seconds for seeking
+                              const timeComponents = time.split(':').map(Number);
+                              let seconds = 0;
+                              
+                              if (timeComponents.length === 3) {
+                                // Format: HH:MM:SS
+                                seconds = timeComponents[0] * 3600 + timeComponents[1] * 60 + timeComponents[2];
+                              } else if (timeComponents.length === 2) {
+                                // Format: MM:SS
+                                seconds = timeComponents[0] * 60 + timeComponents[1];
+                              }
+                              
+                              // Use setTimeout to ensure the video is loaded before seeking
+                              setTimeout(() => {
+                                if (videoRef.current) {
+                                  videoRef.current.currentTime = seconds;
+                                  videoRef.current.play().catch(err => {
+                                    console.error("Error playing video:", err);
+                                  });
+                                }
+                              }, 500);
+                            }}
+                            type="highlight"
+                          />
+                        ) : message.type === 'assistant' && isComplete && isHashtagsResponse(message.content) ? (
+                          <HashtagsAndTopics content={message.content} />
                         ) : (
                           <div className="message-text">
                             <ReactMarkdown>{message.content}</ReactMarkdown>

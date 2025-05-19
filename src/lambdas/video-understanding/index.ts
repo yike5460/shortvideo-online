@@ -94,19 +94,27 @@ function enhancePrompt(question: string, videoMetadata: any): string {
   
   switch (questionType) {
     case QuestionType.HIGHLIGHTS:
-      return `Please describe the video content and identify key events or actions in shots granularity with precise timestamps.
-FPS sampling rate: ${optimalFps.toFixed(4)}
-Video start time: ${startTime}
+      return `Please identify key moments or highlights in this video with precise timestamps.
 Video duration: ${formatTime(duration)}
+FPS: ${optimalFps}
+Video start time: ${startTime}
 
-For each shot, use the format: [MM:SS - MM:SS] Description of the shot.
-Ensure each timestamp is accurate to the content being described.
-Don't miss any shots and details in the video.
+For each highlight:
+1. Provide a concise, descriptive title
+2. Include start and end timestamps in [MM:SS] format
+3. Keep the description to a single concise sentence
 
-For example:
-[00:00:00 - 00:01:00] A person is walking down a street.
-[00:01:00 - 00:02:00] A car drives by.
-[00:02:00 - 00:03:00] A person is talking on the phone.
+Format your response EXACTLY as follows:
+
+## Highlight 1: [Title]
+[00:00 - MM:SS]
+Brief single-sentence description of this highlight.
+
+## Highlight 2: [Title]
+[MM:SS - MM:SS]
+Brief single-sentence description of this highlight.
+
+Note that highlights may be non-consecutive moments in the video.
 
 Original question: ${question}`;
     
@@ -154,27 +162,22 @@ Original question: ${question}`;
     
     case QuestionType.HASHTAGS:
       return `Please generate relevant hashtags and topics for this video.
-Watch the video carefully and identify:
-1. The main subject matter
-2. Key themes and concepts
-3. Notable objects, people, or activities
-4. Style, mood, or aesthetic elements
-5. Trending or evergreen topics related to the content
-
-Format your response as:
-
-## Hashtags
-#hashtag1 #hashtag2 #hashtag3 (provide at least 10 relevant hashtags)
-
-## Topics
-- Main topic 1
-- Main topic 2
-- Main topic 3 (provide 5-7 main topics)
-
-## Keywords
-keyword1, keyword2, keyword3 (provide 10-15 keywords)
-
-Original question: ${question}`;
+      Watch the video carefully and identify:
+      1. The main subject matter
+      2. Key themes and concepts
+      3. Notable objects, people, or activities
+      4. Style, mood, or aesthetic elements
+      5. Trending or evergreen topics related to the content
+      
+      Format your response EXACTLY as follows:
+      
+      ## Hashtags
+      #hashtag1 #hashtag2 #hashtag3 #hashtag4 #hashtag5 #hashtag6 #hashtag7 #hashtag8 #hashtag9 #hashtag10
+      
+      ## Topics
+      A single concise sentence that captures the main topic of the video
+      
+      Original question: ${question}`;
     
     case QuestionType.AUDIENCE:
       return `Please analyze this video and determine what audience it is most suitable for, and explain why.
@@ -235,8 +238,12 @@ Your summary should include:
 4. The overall structure and flow
 5. Any conclusions or calls to action
 
-Format your response as a well-structured summary with paragraphs covering different aspects of the content.
-Include a brief introduction and conclusion.
+Format your response as a concise, well-structured summary without any markdown symbols. Use clear paragraphs with:
+- A brief introduction
+- Main content organized by key points
+- A short conclusion
+
+Keep the summary to the point and focused on the most important aspects of the video.
 
 Original question: ${question}`;
     
@@ -739,22 +746,37 @@ export async function streamHandler(event: APIGatewayProxyEvent): Promise<Lambda
 // Helper function to simulate streaming chunks
 function simulateStreamingChunks(fullResponse: string): string[] {
   // In a real implementation, this would be replaced with actual streaming from Nova
-  const words = fullResponse.split(' ');
+  
+  // Normalize the text to ensure consistent spacing
+  const normalizedText = fullResponse.replace(/\s+/g, ' ').trim();
+  
+  // Create chunks by character count while preserving complete words and ensuring proper spacing
   const chunks = [];
-  let currentChunk = '';
+  let startIndex = 0;
+  const avgChunkSize = 30; // Average characters per chunk
   
-  for (const word of words) {
-    currentChunk += word + ' ';
+  while (startIndex < normalizedText.length) {
+    // Determine a random chunk size (characters)
+    const chunkSize = avgChunkSize + Math.floor(Math.random() * 20);
     
-    // Create chunks of roughly 5-10 words
-    if (currentChunk.split(' ').length > 5 + Math.floor(Math.random() * 5)) {
-      chunks.push(currentChunk.trim());
-      currentChunk = '';
+    // Find the end of the current chunk, ensuring we don't cut words in half
+    let endIndex = Math.min(startIndex + chunkSize, normalizedText.length);
+    
+    // If we're not at the end of the text, find a good breaking point (space)
+    if (endIndex < normalizedText.length) {
+      // Look for the last space within our chunk size
+      const lastSpaceIndex = normalizedText.lastIndexOf(' ', endIndex);
+      if (lastSpaceIndex > startIndex) {
+        endIndex = lastSpaceIndex + 1; // Include the space
+      }
     }
-  }
-  
-  if (currentChunk) {
-    chunks.push(currentChunk.trim());
+    
+    // Extract the chunk and add it to our chunks array
+    const chunk = normalizedText.substring(startIndex, endIndex);
+    chunks.push(chunk);
+    
+    // Move to the next chunk's starting position
+    startIndex = endIndex;
   }
   
   return chunks;

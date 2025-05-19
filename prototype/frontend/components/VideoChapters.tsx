@@ -1,7 +1,7 @@
 import React from 'react';
 
-// Interface for parsed chapters
-interface Chapter {
+// Interface for parsed chapters or highlights
+interface ContentItem {
   title: string;
   startTime: string;
   endTime: string;
@@ -10,7 +10,7 @@ interface Chapter {
 }
 
 // Function to parse markdown chapters into structured data
-function parseChapters(content: string): Chapter[] {
+function parseChapters(content: string): ContentItem[] {
   console.log("Parsing chapters from content:", content);
   
   // Normalize content: fix potential issues with whitespace and newlines
@@ -21,7 +21,7 @@ function parseChapters(content: string): Chapter[] {
   
   console.log("Normalized content:", normalizedContent);
   
-  const chapters: Chapter[] = [];
+  const chapters: ContentItem[] = [];
   
   // Try multiple parsing strategies
   
@@ -118,7 +118,7 @@ function parseChapters(content: string): Chapter[] {
       console.log("Trying parsing strategy 3");
       
       const lines = normalizedContent.split('\n');
-      let currentChapter: Partial<Chapter> | null = null;
+      let currentChapter: Partial<ContentItem> | null = null;
       
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i].trim();
@@ -241,6 +241,7 @@ interface VideoChaptersProps {
   content: string;
   videoThumbnailUrl?: string;
   onPlayChapter?: (time: string) => void;
+  type?: 'chapter' | 'highlight'; // New prop to determine the content type
 }
 
 // Function to detect if a message contains chapters
@@ -254,53 +255,132 @@ export function isChapterResponse(content: string): boolean {
   return hasChapterHeaders && hasTimestamps;
 }
 
-// Debug function to log chapter parsing results
-export function debugChapterParsing(content: string): void {
-  console.log("Content to parse:", content);
-  console.log("Content length:", content.length);
-  console.log("Is chapter response:", isChapterResponse(content));
+// Function to detect if a message contains highlights
+export function isHighlightResponse(content: string): boolean {
+  // Check for at least one highlight header
+  const hasHighlightHeaders = (content.match(/##\s+Highlight\s+\d+:/gi)?.length ?? 0) >= 1;
   
-  // Check for chapter headers
-  const chapterHeaders = content.match(/##\s+Chapter\s+\d+:/gi);
-  console.log("Chapter headers found:", chapterHeaders);
+  // Additional check: must have at least one timestamp pattern
+  const hasTimestamps = (content.match(/\[\d{2}:\d{2}(?::\d{2})?\s*-\s*\d{2}:\d{2}(?::\d{2})?\]/gi)?.length ?? 0) >= 1;
+  
+  return hasHighlightHeaders && hasTimestamps;
+}
+
+// Function to parse highlights (similar to parseChapters but for highlights)
+function parseHighlights(content: string): ContentItem[] {
+  console.log("Parsing highlights from content:", content);
+  
+  // Normalize content: fix potential issues with whitespace and newlines
+  const normalizedContent = content
+    .replace(/\r\n/g, '\n')  // Normalize line endings
+    .replace(/\n{3,}/g, '\n\n')  // Reduce multiple newlines
+    .trim();
+  
+  console.log("Normalized content:", normalizedContent);
+  
+  const highlights: ContentItem[] = [];
+  
+  // Try multiple parsing strategies
+  
+  // Strategy 1: Extract highlights using regex pattern for the entire highlight structure
+  try {
+    console.log("Trying parsing strategy 1 for highlights");
+    const highlightRegex = /##\s+Highlight\s+\d+:[\s\n]*([^\n\[]+)[\s\n]*\[(\d{2}:\d{2}(?::\d{2})?)\s*-\s*(\d{2}:\d{2}(?::\d{2})?)\][\s\n]*([\s\S]*?)(?=##\s+Highlight|$)/gi;
+    
+    let match;
+    while ((match = highlightRegex.exec(normalizedContent)) !== null) {
+      const title = match[1]?.trim() || '';
+      const startTime = match[2]?.trim() || '00:00';
+      const endTime = match[3]?.trim() || '00:00';
+      const description = match[4]?.trim() || '';
+      
+      console.log(`Found highlight: "${title}" [${startTime} - ${endTime}]`);
+      
+      if (title) {
+        highlights.push({
+          title,
+          startTime,
+          endTime,
+          description
+        });
+      }
+    }
+  } catch (error) {
+    console.error("Error in parsing strategy 1 for highlights:", error);
+  }
+  
+  // Add fallback strategies similar to parseChapters if needed
+  // ...
+  
+  console.log(`Parsed ${highlights.length} highlights:`, highlights);
+  return highlights;
+}
+
+// Debug function to log content parsing results
+export function debugContentParsing(content: string, type: 'chapter' | 'highlight' = 'chapter'): void {
+  console.log(`Content to parse as ${type}:`, content);
+  console.log("Content length:", content.length);
+  
+  if (type === 'chapter') {
+    console.log("Is chapter response:", isChapterResponse(content));
+    // Check for chapter headers
+    const chapterHeaders = content.match(/##\s+Chapter\s+\d+:/gi);
+    console.log("Chapter headers found:", chapterHeaders);
+  } else {
+    console.log("Is highlight response:", isHighlightResponse(content));
+    // Check for highlight headers
+    const highlightHeaders = content.match(/##\s+Highlight\s+\d+:/gi);
+    console.log("Highlight headers found:", highlightHeaders);
+  }
   
   // Check for timestamps
   const timestamps = content.match(/\[\d{2}:\d{2}(?::\d{2})?\s*-\s*\d{2}:\d{2}(?::\d{2})?\]/gi);
   console.log("Timestamps found:", timestamps);
   
-  // Parse and log chapters
-  const chapters = parseChapters(content);
-  console.log("Parsed chapters:", chapters);
+  // Parse and log content
+  const items = type === 'chapter' ? parseChapters(content) : parseHighlights(content);
+  console.log(`Parsed ${items.length} ${type}s:`, items);
 }
 
-const VideoChapters: React.FC<VideoChaptersProps> = ({ content, videoThumbnailUrl, onPlayChapter }) => {
-  const [parsedContent, setParsedContent] = React.useState<Chapter[]>([]);
+// For backward compatibility
+export function debugChapterParsing(content: string): void {
+  debugContentParsing(content, 'chapter');
+}
+
+// Debug function for highlights
+export function debugHighlightParsing(content: string): void {
+  debugContentParsing(content, 'highlight');
+}
+
+const VideoChapters: React.FC<VideoChaptersProps> = ({ content, videoThumbnailUrl, onPlayChapter, type = 'chapter' }) => {
+  const [parsedContent, setParsedContent] = React.useState<ContentItem[]>([]);
   const [parseAttempted, setParseAttempted] = React.useState(false);
   
-  // Parse chapters when content is complete (when streaming is done)
+  // Parse content when complete (when streaming is done)
   React.useEffect(() => {
     // Only parse if we have content
     if (content) {
-      console.log("Attempting to parse chapters from content");
+      console.log(`Attempting to parse ${type} from content`);
       
       try {
-        const chapters = parseChapters(content);
-        setParsedContent(chapters);
+        // Use the appropriate parsing function based on the type
+        const items = type === 'chapter' ? parseChapters(content) : parseHighlights(content);
+        setParsedContent(items);
         setParseAttempted(true);
         
         // Debug logging
-        if (chapters.length === 0) {
-          console.log("No chapters parsed from content");
+        if (items.length === 0) {
+          console.log(`No ${type}s parsed from content`);
           console.log("Content:", content);
         } else {
-          console.log(`Parsed ${chapters.length} chapters:`, chapters);
+          console.log(`Parsed ${items.length} ${type}s:`, items);
         }
       } catch (error) {
-        console.error("Error parsing chapters:", error);
+        console.error(`Error parsing ${type}s:`, error);
         setParseAttempted(true);
       }
     }
-  }, [content]);
+  }, [content, type]);
   
   // If no chapters were parsed, return the original content
   if (parsedContent.length === 0) {

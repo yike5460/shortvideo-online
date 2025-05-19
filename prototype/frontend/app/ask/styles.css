@@ -602,3 +602,47 @@ textarea#question:focus {
     padding-bottom: 56.25%; /* 16:9 aspect ratio */
   }
 }
+
+/* Hashtags and Topics styling */
+.hashtags-and-topics {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  width: 100%;
+}
+
+.hashtags-section, .topics-section {
+  padding: 1rem;
+  border-radius: 0.5rem;
+  background-color: #f9fafb;
+}
+
+.section-title {
+  font-size: 1.125rem;
+  font-weight: 600;
+  margin-bottom: 1rem;
+  color: #111827;
+  display: flex;
+  align-items: center;
+}
+
+.hashtags-container {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.hashtag-pill {
+  background-color: #f3f4f6;
+  color: #4b5563;
+  padding: 0.5rem 1rem;
+  border-radius: 9999px;
+  font-size: 0.875rem;
+  display: inline-block;
+}
+
+.topics-content {
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: #374151;
+}

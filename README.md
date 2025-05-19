@@ -488,28 +488,36 @@ The OpenSearch schema supports:
 Query Process:
 ```mermaid
 flowchart LR
+    %% AOSS is now defined outside the subgraph
+    AOSS[(AOSS<br>Vector Store)]
+
     subgraph EmbeddingModels["Embedding Models (Own Model)"]
         direction TB
-        VE[Video Embedding Model] --> |Output: Video Embedding| AOSS
-        BCE[BCE] --> |Output: Text Embedding| AOSS
+        VE[Video Embedding Model]
+        BCE[Text/Audio Embedding Model]
     end
+
+    %% Outputs from Embedding Models to AOSS
+    VE --> |Output: Video Embedding| AOSS
+    BCE --> |Output: Text/Audio Embedding| AOSS
 
     Whisper["Whisper<br>(External Vendor)"]
 
     %% Text Query Paths
-    TQ[Text Query] --> |Video Space| VE
-    TQ --> |Audio Space| BCE
+    TQ[Text Query] --> |Video Space Query| VE
+    TQ --> |Audio/Text Space Query| BCE
 
     %% Audio Query Paths
-    AQ[Audio Query] --> |Input: Audio| Whisper --> |Video Space| BCE
-    Whisper --> |Audio Space| VE
+    AQ[Audio Query] --> |Input: Audio| Whisper
+    Whisper --> |Output: Transcript| BCE
 
     %% Image Query Paths
     IQ[Image Query] --> |Input: Image| VE
 
     %% Video Query Paths
-    VQ[Video Query] --> |Video Space| VE
-    VQ --> |Audio Space| BCE
+    VQ[Video Query] --> |Video Space Query| VE
+    VQ --> |Audio/Text Space Query| BCE
+
 ```
 
 Indexing Process:
@@ -989,7 +997,7 @@ Response: {
 
 #### Storage Structure
 ```
-s3://bucket-name/
+S3://bucket-name/
 ├── RawVideos/
 │   └── YYYY-MM-DD/
 │       └── video index/
@@ -1003,17 +1011,23 @@ s3://bucket-name/
 │   └── YYYY-MM-DD/
 │       └── video index/
 │           ├── video_id 1/
-|           |   └── segments/
-|           |        └── abc_001.mp4
-|           |        └── abc_001.jpg (thumbnail)
-|           |        └── abc_002.mp4
-|           |        └── abc_002.jpg (thumbnail)
+|           |   ├── segments/
+|           |   |    ├── abc_001.mp4
+|           |   |    ├── abc_001.jpg (thumbnail)
+|           |   |    ├── abc_002.mp4
+|           |   |    └── abc_002.jpg (thumbnail)
+|           |   └── merged/
+|           |        ├── merged_123456.mp4
+|           |        └── merged_123456.jpg (thumbnail)
 |           └── video_id 2/
-|               └── segments/
-|                   └── def_001.mp4
-|                   └── def_001.jpg (thumbnail)
-|                   └── def_002.mp4
-|                   └── def_002.jpg (thumbnail)
+|               ├── segments/
+|               |    ├── def_001.mp4
+|               |    ├── def_001.jpg (thumbnail)
+|               |    ├── def_002.mp4
+|               |    └── def_002.jpg (thumbnail)
+|               └── merged/
+|                    ├── merged_789012.mp4
+|                    └── merged_789012.jpg (thumbnail)
 ```
 
 ## Video Processing Features
