@@ -1169,11 +1169,11 @@ flowchart TD
 
 Backend:
 - [ ] Web rendering and prompt optimization for video understanding per cases:
-"Generate hashtags and topics", - ongoing
+"Generate hashtags and topics", - done
 "Summarize this video", - done
-"What are highlighted moments of this video", - ongoing
+"What are highlighted moments of this video", - done
 "Chapterize this video", - done
-"Classify this video based on Youtube categories, Output as JSON format", - ongoing
+"Classify this video based on Youtube categories, Output as JSON format", - done
 "What audience is the video suitable for, and why", - ongoing
 "Break down the video by main event and timestamp"
 

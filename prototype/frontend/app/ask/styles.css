@@ -646,3 +646,102 @@ textarea#question:focus {
   line-height: 1.5;
   color: #374151;
 }
+
+/* JSON Display styles */
+.json-display {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  width: 100%;
+  padding: 1rem;
+  border-radius: 0.5rem;
+  background-color: #f9fafb;
+}
+
+.json-content {
+  font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+  font-size: 1rem;
+  line-height: 1.5;
+  color: #111827;
+}
+
+.json-content .text-purple-600 {
+  color: #7c3aed;
+}
+
+.json-content .text-green-600 {
+  color: #059669;
+}
+
+.json-content .text-gray-500 {
+  color: #6b7280;
+}
+
+/* Timeline Display styles */
+.timeline-display {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  width: 100%;
+  padding: 1rem;
+  border-radius: 0.5rem;
+  background-color: #f9fafb;
+}
+
+.timeline-title {
+  font-size: 1.125rem;
+  font-weight: 600;
+  margin-bottom: 1rem;
+  color: #111827;
+}
+
+.timeline-list {
+  list-style-type: none;
+  padding: 0;
+  margin: 0;
+}
+
+.timeline-item {
+  display: flex;
+  align-items: flex-start;
+  margin-bottom: 0.75rem;
+  padding-left: 1.5rem;
+  position: relative;
+}
+
+.timeline-item::before {
+  content: "•";
+  position: absolute;
+  left: 0;
+  color: #6366f1;
+  font-size: 1.5rem;
+  line-height: 1;
+}
+
+.timeline-timestamp {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 0.5rem;
+  color: #6366f1;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.timestamp-separator {
+  margin: 0 0.25rem;
+  color: #9ca3af;
+}
+
+.timeline-description {
+  color: #374151;
+}
+
+@media (max-width: 640px) {
+  .timeline-item {
+    flex-direction: column;
+  }
+  
+  .timeline-timestamp {
+    margin-bottom: 0.25rem;
+  }
+}

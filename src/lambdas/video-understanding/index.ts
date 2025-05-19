@@ -139,24 +139,16 @@ Brief description of this chapter's content.
 Original question: ${question}`;
     
     case QuestionType.CLASSIFICATION:
-      return `Please classify this video based on YouTube categories and output the result in JSON format.
-Analyze the video content carefully and determine the most appropriate YouTube categories.
+      return `Please classify this video based on YouTube categories and output the result in a simple JSON format.
+Analyze the video content carefully and determine the most appropriate YouTube category.
 
-Your response should be in valid JSON format like this:
+Your response should be ONLY a valid JSON object with a single "category" key-value pair like this:
 {
-  "primaryCategory": "string",
-  "secondaryCategories": ["string", "string"],
-  "tags": ["string", "string", "string"],
-  "contentRating": "string",
-  "reasoning": "string"
+  "category": "Art & Craft"
 }
 
-Where:
-- primaryCategory: The main YouTube category this video belongs to
-- secondaryCategories: Array of other relevant categories
-- tags: Array of relevant tags for this video
-- contentRating: Age appropriateness (e.g., "General", "Teen", "Mature")
-- reasoning: Brief explanation of why these categories were chosen
+Do not include any explanations, markdown formatting, or additional text before or after the JSON.
+The output should be a valid JSON that can be directly parsed.
 
 Original question: ${question}`;
     
@@ -180,7 +172,7 @@ Original question: ${question}`;
       Original question: ${question}`;
     
     case QuestionType.AUDIENCE:
-      return `Please analyze this video and determine what audience it is most suitable for, and explain why.
+      return `Please analyze this video and determine what audience it is most suitable for.
 Consider the following factors:
 1. Age appropriateness
 2. Content complexity
@@ -190,19 +182,22 @@ Consider the following factors:
 6. Cultural context
 7. Prerequisites (knowledge or experience needed)
 
-Format your response as:
+Format your response in an extremely concise, to-the-point manner without any markdown symbols or formatting. Structure your response EXACTLY as follows with each section on its own line:
 
-## Primary Audience
-Describe the main audience this video is best suited for
+Primary Audience: [Describe the main audience this video is best suited for in 1 sentence]
 
-## Secondary Audiences
-List any other audiences that might find value in this content
+Secondary Audiences: [List any other audiences that might find value in this content in 1 sentence]
 
-## Reasoning
-Provide a detailed explanation of why this video is suitable for these audiences, citing specific elements from the video
+Content Advisories: [Note any content that might be inappropriate for certain viewers, if applicable, or "None" if there are no advisories]
 
-## Content Advisories
-Note any content that might be inappropriate or challenging for certain viewers
+For example:
+Primary Audience: Young children and nature enthusiasts\n
+
+Secondary Audiences: Educators, parents, and anyone interested in wildlife observation\n
+
+Content Advisories: None
+
+Keep your response clear, direct, and brief. Do not include any reasoning or explanations about why the video is suitable for these audiences. Do not use any special formatting or symbols.
 
 Original question: ${question}`;
     
@@ -212,15 +207,18 @@ Video duration: ${formatTime(duration)}
 
 Create a detailed timeline of the video, identifying:
 1. All major events, scenes, or segments
-2. Precise start and end timestamps for each event
+2. Precise start and end timestamps for each event in [MM:SS] format
 3. Brief descriptions of what happens in each segment
 
-Format your response as:
+Format your response as a bullet list with timestamps and descriptions. Do not include any markdown formatting symbols like "##" or section headers.
 
-## Timeline
-[00:00 - MM:SS] Description of first event
-[MM:SS - MM:SS] Description of second event
-[MM:SS - MM:SS] Description of third event
+The output should look like this:
+
+The video can be broken down into main events and timestamps as follows:
+
+• [00:00 - 00:05] Description of first event
+• [00:05 - 00:10] Description of second event
+• [00:10 - 00:15] Description of third event
 ...and so on
 
 Be comprehensive and don't miss any significant moments or transitions in the video.
@@ -747,8 +745,12 @@ export async function streamHandler(event: APIGatewayProxyEvent): Promise<Lambda
 function simulateStreamingChunks(fullResponse: string): string[] {
   // In a real implementation, this would be replaced with actual streaming from Nova
   
+  console.log('Original response before normalization:', fullResponse);
+  
   // Normalize the text to ensure consistent spacing
   const normalizedText = fullResponse.replace(/\s+/g, ' ').trim();
+  
+  console.log('Normalized response:', normalizedText);
   
   // Create chunks by character count while preserving complete words and ensuring proper spacing
   const chunks = [];

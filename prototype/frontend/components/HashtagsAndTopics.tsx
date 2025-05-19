@@ -6,19 +6,42 @@ interface HashtagsAndTopicsProps {
 
 // Function to detect if content is a hashtags response
 export function isHashtagsResponse(content: string): boolean {
-  return content.includes('## Hashtags') && content.includes('## Topics');
+  const result = content.includes('## Hashtags') && content.includes('## Topics');
+  console.log('isHashtagsResponse check:', {
+    content,
+    hasHashtags: content.includes('## Hashtags'),
+    hasTopics: content.includes('## Topics'),
+    result
+  });
+  return result;
 }
 
 // Function to parse hashtags and topics
 function parseHashtagsAndTopics(content: string): { hashtags: string[], topics: string } {
+  console.log('Parsing hashtags and topics from:', content);
+  
   const hashtags: string[] = [];
   let topics = '';
   
   // Extract hashtags section
   const hashtagsMatch = content.match(/## Hashtags\s*\n([\s\S]*?)(?=##|$)/);
+  console.log('Hashtags regex match:', hashtagsMatch);
+  
+  // Try alternative regex if the first one fails
+  const altHashtagsMatch = content.match(/## Hashtags([\s\S]*?)(?=##|$)/);
+  console.log('Alternative hashtags regex match:', altHashtagsMatch);
+  
   if (hashtagsMatch && hashtagsMatch[1]) {
     // Extract all hashtags (words starting with #)
     const hashtagMatches = hashtagsMatch[1].match(/#\w+/g);
+    console.log('Extracted hashtags:', hashtagMatches);
+    if (hashtagMatches) {
+      hashtags.push(...hashtagMatches);
+    }
+  } else if (altHashtagsMatch && altHashtagsMatch[1]) {
+    // Try with alternative match
+    const hashtagMatches = altHashtagsMatch[1].match(/#\w+/g);
+    console.log('Extracted hashtags (alt):', hashtagMatches);
     if (hashtagMatches) {
       hashtags.push(...hashtagMatches);
     }
@@ -26,10 +49,19 @@ function parseHashtagsAndTopics(content: string): { hashtags: string[], topics: 
   
   // Extract topics section
   const topicsMatch = content.match(/## Topics\s*\n([\s\S]*?)(?=##|$)/);
+  console.log('Topics regex match:', topicsMatch);
+  
+  // Try alternative regex if the first one fails
+  const altTopicsMatch = content.match(/## Topics([\s\S]*?)(?=##|$)/);
+  console.log('Alternative topics regex match:', altTopicsMatch);
+  
   if (topicsMatch && topicsMatch[1]) {
     topics = topicsMatch[1].trim();
+  } else if (altTopicsMatch && altTopicsMatch[1]) {
+    topics = altTopicsMatch[1].trim();
   }
   
+  console.log('Parsed result:', { hashtags, topics });
   return { hashtags, topics };
 }
 

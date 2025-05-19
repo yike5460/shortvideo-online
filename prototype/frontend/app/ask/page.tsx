@@ -7,6 +7,8 @@ import { useSearchParams } from 'next/navigation'
 import { VideoResult } from '@/types'
 import VideoChapters, { isChapterResponse, isHighlightResponse, debugChapterParsing } from '@/components/VideoChapters'
 import HashtagsAndTopics, { isHashtagsResponse } from '@/components/HashtagsAndTopics'
+import JsonDisplay, { isJsonResponse } from '@/components/JsonDisplay'
+import TimelineDisplay, { isTimelineResponse } from '@/components/TimelineDisplay'
 import ReactMarkdown from 'react-markdown'
 
 // API configuration
@@ -374,6 +376,12 @@ export default function AskPage() {
               debugChapterParsing(lastMessage.content); // We can reuse the debug function
             } else if (isHashtagsResponse(lastMessage.content)) {
               console.log("Content is a hashtags response");
+            } else if (isJsonResponse(lastMessage.content)) {
+              console.log("Content is a JSON response");
+              console.log("JSON content:", lastMessage.content);
+            } else if (isTimelineResponse(lastMessage.content)) {
+              console.log("Content is a timeline response");
+              console.log("Timeline content:", lastMessage.content);
             }
           }
           return updated;
@@ -684,6 +692,10 @@ export default function AskPage() {
                           />
                         ) : message.type === 'assistant' && isComplete && isHashtagsResponse(message.content) ? (
                           <HashtagsAndTopics content={message.content} />
+                        ) : message.type === 'assistant' && isComplete && isJsonResponse(message.content) ? (
+                          <JsonDisplay content={message.content} />
+                        ) : message.type === 'assistant' && isComplete && isTimelineResponse(message.content) ? (
+                          <TimelineDisplay content={message.content} />
                         ) : (
                           <div className="message-text">
                             <ReactMarkdown>{message.content}</ReactMarkdown>
