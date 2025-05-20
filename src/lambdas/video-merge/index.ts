@@ -14,6 +14,27 @@ import { SQSClient, SendMessageCommand, DeleteMessageCommand } from '@aws-sdk/cl
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, PutCommand, GetCommand, UpdateCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 
+/**
+ * Sanitize a name for use in file paths and S3 keys
+ * Removes special characters, replaces spaces with underscores, and enforces length limits
+ */
+function sanitizeFileName(name: string): string {
+  if (!name) return '';
+  
+  // Replace any characters that aren't alphanumeric, underscore, dash, or space
+  // with underscores, then replace multiple spaces with a single underscore
+  let sanitized = name
+    .replace(/[^\w\s-]/g, '_')
+    .replace(/\s+/g, '_');
+    
+  // Ensure the name doesn't exceed 100 characters, which is a reasonable limit for most file systems
+  if (sanitized.length > 100) {
+    sanitized = sanitized.substring(0, 100);
+  }
+  
+  return sanitized;
+}
+
 // Initialize clients
 const s3 = new S3Client({});
 const sqs = new SQSClient({});
@@ -44,6 +65,9 @@ interface MergeJob {
     mergedVideoUrl?: string;
     thumbnailUrl?: string;
     duration?: number;
+    customName?: string;
+    mergedVideoS3Path?: string;
+    mergedThumbnailS3Path?: string;
   };
   errorMessage?: string; // Changed from error to errorMessage
   ttl?: number; // Time-to-live for automatic cleanup
@@ -286,8 +310,11 @@ async function _performVideoMerge(params: {
     const sortedSegments = [...segments];
     
     // Create a merged segment name if not provided
-    const mergedSegmentName = mergedName || `merged_${jobId}`;
+    const originalMergedName = mergedName || `merged_${jobId}`;
+    const mergedSegmentName = sanitizeFileName(originalMergedName);
     const mergedFilename = `${mergedSegmentName}.mp4`;
+    
+    console.log(`Using merged name: ${originalMergedName} (sanitized: ${mergedSegmentName})`);
     
     // Get the first segment to extract timestamp and path components
     const firstSegment = sortedSegments[0];
@@ -474,7 +501,8 @@ async function _performVideoMerge(params: {
       thumbnailUrl: mergedThumbnailUrl,
       duration,
       mergedVideoS3Path,
-      mergedThumbnailS3Path
+      mergedThumbnailS3Path,
+      customName: originalMergedName
     };
     
     // Calculate merged segment metadata
@@ -486,7 +514,7 @@ async function _performVideoMerge(params: {
     const segmentDuration = duration;
     
     // Create merged segment object
-    const mergedSegment = {
+    const mergedSegment: VideoSegment = {
       segment_id: mergedSegmentId,
       video_id: parentVideoId,
       start_time: startTime,
@@ -496,8 +524,10 @@ async function _performVideoMerge(params: {
       segment_video_preview_url: mergedVideoUrl,
       segment_video_thumbnail_s3_path: mergedThumbnailS3Path,
       segment_video_thumbnail_url: mergedThumbnailUrl,
+      segment_name: originalMergedName,
+      segment_file_name: mergedSegmentName,
       segment_visual: {
-        segment_visual_description: `Merged clip from ${segments.length} segments`
+        segment_visual_description: `Merged clip: ${originalMergedName} (${segments.length} segments)`
       }
     };
     
@@ -900,7 +930,7 @@ async function handleMergeRequest(event: APIGatewayProxyEvent): Promise<LambdaRe
       // Create merge parameters
       mergeParams = {
         items,
-        mergedName,
+        mergedName: mergedName ? mergedName.trim() : undefined, // Sanitize by trimming whitespace
         mergeOptions,
         jobId,
         userId
@@ -933,7 +963,7 @@ async function handleMergeRequest(event: APIGatewayProxyEvent): Promise<LambdaRe
           transitionType: (mergeOptions?.transition || 'cut') as 'cut' | 'fade' | 'dissolve',
           transitionDuration: mergeOptions?.transitionDuration || 500
         })),
-        mergedName,
+        mergedName: mergedName ? mergedName.trim() : undefined, // Sanitize by trimming whitespace
         mergeOptions: {
           resolution: (mergeOptions?.resolution || '720p') as '720p' | '1080p',
           defaultTransition: (mergeOptions?.transition || 'cut') as 'cut' | 'fade' | 'dissolve',
@@ -957,7 +987,8 @@ async function handleMergeRequest(event: APIGatewayProxyEvent): Promise<LambdaRe
         message: 'Merge job created and queued',
         jobId,
         userId,  // Include userId in response for frontend polling
-        status: 'queued'
+        status: 'queued',
+        customName: mergeParams.mergedName // Include the custom name in the response
       })
     };
   } catch (error) {

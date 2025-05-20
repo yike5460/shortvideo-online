@@ -23,6 +23,11 @@ export interface VideoMetadata {
   segment_count?: number;           // Number of detected segments
   job_id?: string;                  // Job ID for the video processing
   
+  is_merged?: boolean;              // Flag to identify if this is a merged video
+  merged_name?: string;             // Original custom name for merged videos
+  merged_file_name?: string;        // Sanitized file name for merged videos
+  parent_video_id?: string;         // Original video ID for merged videos
+  
   video_metadata?: SearchMetadata;  // Quick search metadata
   video_segments?: VideoSegment[];  // Video segments
   merged_segments?: VideoSegment[]; // Merged video segments
@@ -61,6 +66,8 @@ export interface VideoSegment {
   segment_video_preview_url?: string; // Pre-signed URL for thumbnail (video thumbnail)
   segment_video_thumbnail_s3_path?: string; // S3 path to thumbnail (image)
   segment_video_thumbnail_url?: string;     // Pre-signed URL for thumbnail (image thumbnail)
+  segment_name?: string;      // Custom name for merged segments (original user input)
+  segment_file_name?: string; // Sanitized file name used for storage (for merged segments)
   confidence?: number;        // Confidence score for the segment
   segment_audio?: {
     segment_audio_transcript?: string;     // Raw transcript text
@@ -199,5 +206,34 @@ export interface VideoResult {
   indexId: string;
   parentVideoId?: string;    // For merged segments to reference original video
   isMerged?: boolean;        // Flag to identify merged segments
+  customName?: string;       // Custom name for merged videos (original user input)
+  fileName?: string;         // Sanitized file name used for storage (for merged videos)
   video_objects?: TimestampedLabel[]; // Add filtered video objects with categories and aliases
+}
+
+// Define status types for merge jobs
+export type MergeJobStatus = 'queued' | 'processing' | 'completed' | 'failed';
+
+// Define merge job result interface
+export interface MergeJobResult {
+  mergedVideoUrl?: string;      // Pre-signed URL for the merged video
+  thumbnailUrl?: string;        // Pre-signed URL for the thumbnail
+  duration?: number;            // Duration of the merged video in milliseconds
+  customName?: string;          // Original custom name provided by the user
+  mergedVideoS3Path?: string;   // S3 path to the merged video
+  mergedThumbnailS3Path?: string; // S3 path to the thumbnail
+  mergedSegment?: VideoSegment; // The merged segment data
+}
+
+// Define merge job interface
+export interface MergeJob {
+  jobId: string;               // Unique identifier for the job
+  userId: string;              // User who created the job
+  status: MergeJobStatus;      // Current status of the job
+  progress: number;            // Progress percentage (0-100)
+  createdAt: string;           // ISO timestamp when job was created
+  completedAt?: string;        // ISO timestamp when job was completed
+  mergeParams: any;            // Original merge parameters
+  result?: MergeJobResult;     // Result data when job is completed
+  errorMessage?: string;       // Error message if job failed
 }

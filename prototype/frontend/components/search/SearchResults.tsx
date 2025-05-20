@@ -47,6 +47,9 @@ export default function SearchResults({
   // State to track selected segments for each video
   const [selectedSegments, setSelectedSegments] = useState<Record<string, VideoSegment[]>>({})
   
+  // State to track custom merge names for each video
+  const [mergeNames, setMergeNames] = useState<Record<string, string>>({})
+  
   // State to track if a merge operation is in progress
   const [isMerging, setIsMerging] = useState(false)
   const [mergedSegment, setMergedSegment] = useState<VideoSegment | null>(null)
@@ -59,6 +62,7 @@ export default function SearchResults({
     progress?: number,
     videoId?: string,
     indexId?: string,
+    video_id?: string,
     result?: {
       mergedVideoUrl?: string,
       thumbnailUrl?: string,
@@ -81,6 +85,19 @@ export default function SearchResults({
       }
     };
   }, []);
+
+  // Debug merged segment and merge status when they change
+  useEffect(() => {
+    if (mergedSegment && isMerging) {
+      console.log('Merged segment updated:', { 
+        mergedSegment, 
+        mergeStatus, 
+        isMerging,
+        videoIdMatches: results.some(r => r.id === mergedSegment.video_id),
+        mergeStatusVideoIdMatches: mergeStatus.video_id ? results.some(r => r.id === mergeStatus.video_id) : false
+      });
+    }
+  }, [mergedSegment, mergeStatus, isMerging, results]);
 
   const getAverageConfidence = useCallback((searchConfidence: number): number => {
     return searchConfidence;
@@ -235,8 +252,6 @@ export default function SearchResults({
     });
   }, [addToast]);
   
-  // This function has been replaced by the mergeUtility
-  
   // Helper function to merge selected segments for a video
   const mergeSegments = useCallback(async (video: VideoResult, segments: VideoSegment[]) => {
     if (segments.length < 2) {
@@ -259,17 +274,17 @@ export default function SearchResults({
       // Assuming segment_id format is [videoId]_segment_[segmentNumber]
       const extractedVideoId = segmentIds[0].split('_segment_')[0];
       
-      // Create a merged name based on timestamp and selected segment count
-      const mergedName = `merged_${segments.length}_clips_${Date.now()}`;
+      // Use custom merge name if provided, otherwise create a default name
+      const customMergeName = mergeNames[video.id];
+      const mergedName = customMergeName 
+        ? customMergeName.replace(/[^\w\s-]/g, '_') // Replace invalid characters
+        : `merged_${segments.length}_clips_${Date.now()}`;
       
       // Use the selected index from searchOptions if available, otherwise fall back to video.indexId
       const indexId = searchOptions.selectedIndex || video.indexId;
       
       console.log('Merging segments:', segmentIds, 'into', mergedName, ' video id:', extractedVideoId, ' video index:', indexId, ' user id:', userId);
 
-      // Show processing toast
-      addToast('info', 'Starting merge process. This may take a minute...');
-      
       // Create merge parameters
       const mergeParams = {
         indexId,
@@ -300,8 +315,8 @@ export default function SearchResults({
       // Display the temporary merged segment
       setMergedSegment(tempMergedSegment);
       
-      // Clear selected segments after initiating merge
-      clearSelectedSegments(video.id);
+      // Do NOT clear selected segments - keep the operation panel visible
+      // clearSelectedSegments(video.id);
       
       // Initiate merge job
       const jobId = await mergeUtility.initiateVideoMerge(mergeParams);
@@ -313,7 +328,8 @@ export default function SearchResults({
         jobId,
         progress: 0,
         videoId: extractedVideoId,
-        indexId
+        indexId,
+        video_id: video.id
       });
       
       // Update the merged segment with the job ID
@@ -340,6 +356,7 @@ export default function SearchResults({
             progress: 100,
             videoId: extractedVideoId,
             indexId,
+            video_id: video.id,
             result
           });
           
@@ -347,7 +364,7 @@ export default function SearchResults({
           if (result) {
             const updatedMergedSegment = {
               segment_id: `merged_${jobId}`,
-              video_id: extractedVideoId,
+              video_id: video.id, // CRITICAL: Must match the original video.id for UI conditions
               start_time: 0,
               end_time: result.duration || 0,
               duration: result.duration || 0,
@@ -360,48 +377,31 @@ export default function SearchResults({
             
             setMergedSegment(updatedMergedSegment);
           }
-          
-          // Show success toast with action to view merged video
-          addToast('success', `Successfully merged ${segments.length} clips`, {
-            duration: 8000, // 8 seconds
-            action: {
-              label: 'View merged video',
-              onClick: () => {
-                // Navigate to the videos page with the merged video
-                window.location.href = `/videos?indexId=${encodeURIComponent(indexId)}&videoId=${encodeURIComponent(extractedVideoId)}`;
-              }
-            }
-          });
         },
         onFailed: (error) => {
           // Update status to failed
           setMergeStatus({
             status: 'failed',
-            message: `Failed to merge: ${error}`,
-            jobId
+            message: `Failed to merge: ${typeof error === 'string' ? error : 'Unknown error'}`,
+            video_id: video.id
           });
-          
-          // Show error toast
-          addToast('error', `Failed to merge segments: ${error}`);
         }
       });
       
     } catch (error) {
       console.error('Error merging segments:', error);
       
-      // Show error toast
-      addToast('error', `Failed to merge segments: ${error instanceof Error ? error.message : 'Unknown error'}`);
-      
       // Update merge status
       setMergeStatus({
         status: 'failed',
-        message: `Failed to merge: ${error instanceof Error ? error.message : 'Unknown error'}`
+        message: `Failed to merge: ${typeof error === 'string' ? error : 'Unknown error'}`,
+        video_id: video.id
       });
       
       // Reset merging state
       setIsMerging(false);
     }
-  }, [clearSelectedSegments, searchOptions, addToast, userId]);
+  }, [clearSelectedSegments, searchOptions, userId, mergeNames]);
   
   // Helper function to download selected segments
   const downloadSelectedSegments = useCallback((video: VideoResult, segments: VideoSegment[]) => {
@@ -861,19 +861,32 @@ export default function SearchResults({
                         addToast('error', 'Please select at least 2 clips to merge');
                       }
                     }}
-                    className={`inline-flex items-center gap-1 px-3 py-1 text-sm font-medium rounded-md transition-colors ${
-                      mergeStatus.status === 'initiating' || mergeStatus.status === 'processing'
-                        ? 'bg-yellow-500 cursor-not-allowed'
-                        : 'bg-gray-600 hover:bg-gray-700 text-white'
+                    className={`inline-flex items-center gap-1 px-3 py-1 text-sm font-medium rounded-md transition-all ${
+                      (mergeStatus.status === 'initiating' || mergeStatus.status === 'processing') && mergeStatus.video_id === result.id
+                        ? 'bg-fuchsia-600 text-white animate-pulse shadow-md'
+                        : mergeStatus.status === 'completed' && mergeStatus.video_id === result.id
+                          ? 'bg-green-600 hover:bg-green-700 text-white'
+                          : mergeStatus.status === 'failed' && mergeStatus.video_id === result.id
+                            ? 'bg-red-600 hover:bg-red-700 text-white'
+                            : 'bg-gray-600 hover:bg-gray-700 text-white'
                     }`}
-                    disabled={selectedSegments[result.id].length < 2 ||
-                             mergeStatus.status === 'initiating' ||
-                             mergeStatus.status === 'processing'}
+                    disabled={(mergeStatus.status === 'initiating' || mergeStatus.status === 'processing') && 
+                             (mergeStatus.video_id === result.id || selectedSegments[result.id].length < 2)}
                   >
-                    {mergeStatus.status === 'initiating' || mergeStatus.status === 'processing' ? (
+                    {(mergeStatus.status === 'initiating' || mergeStatus.status === 'processing') && mergeStatus.video_id === result.id ? (
                       <>
                         <ArrowPathIcon className="h-4 w-4 animate-spin" />
                         {mergeStatus.progress ? `Processing ${mergeStatus.progress}%` : 'Processing...'}
+                      </>
+                    ) : mergeStatus.status === 'completed' && mergeStatus.video_id === result.id ? (
+                      <>
+                        <CheckIcon className="h-4 w-4" />
+                        Merged
+                      </>
+                    ) : mergeStatus.status === 'failed' && mergeStatus.video_id === result.id ? (
+                      <>
+                        <ExclamationCircleIcon className="h-4 w-4" />
+                        Failed
                       </>
                     ) : (
                       <>
@@ -955,6 +968,53 @@ export default function SearchResults({
                 </div>
               </div>
               
+              {/* Custom name input for merged clips */}
+              <div className="mb-4 flex items-center justify-between">
+                <div className="flex items-center gap-2 w-1/2">
+                  <label htmlFor={`merge-name-${result.id}`} className="text-sm font-medium text-gray-700 whitespace-nowrap">
+                    Merged Name:
+                  </label>
+                  <div className="relative flex-1 max-w-xs">
+                    <input
+                      id={`merge-name-${result.id}`}
+                      type="text"
+                      placeholder={`merged_${selectedSegments[result.id].length}_clips`}
+                      value={mergeNames[result.id] || ''}
+                      onChange={(e) => {
+                        const newName = e.target.value;
+                        setMergeNames(prev => ({
+                          ...prev,
+                          [result.id]: newName
+                        }));
+                      }}
+                      className="w-full py-1 px-3 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      disabled={(mergeStatus.status === 'initiating' || mergeStatus.status === 'processing') && mergeStatus.video_id === result.id}
+                    />
+                    {mergeNames[result.id] && (
+                      <button
+                        onClick={() => setMergeNames(prev => {
+                          const newNames = {...prev};
+                          delete newNames[result.id];
+                          return newNames;
+                        })}
+                        className="absolute right-2 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                        aria-label="Clear merge name"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    )}
+                  </div>
+                </div>
+                
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-gray-500">
+                    {selectedSegments[result.id].length} clips selected
+                  </span>
+                </div>
+              </div>
+              
               {/* Selected clips timeline */}
               <div className="relative h-8 bg-gray-100 rounded-md overflow-hidden mb-2">
                 {selectedSegments[result.id].map((segment, index) => {
@@ -976,75 +1036,157 @@ export default function SearchResults({
               
               {/* Merged segment preview if available */}
               {isMerging && mergedSegment && mergedSegment.video_id === result.id && (
-                <div className="bg-fuchsia-50 border border-fuchsia-200 rounded-md p-3 mt-3">
-                  <div className="flex items-center justify-between mb-2">
-                    <h5 className="text-sm font-medium text-fuchsia-800">
+                <div className="bg-fuchsia-50 border border-fuchsia-200 rounded-md p-4 mt-4 shadow-md">
+                  <div className="flex items-center justify-between mb-3">
+                    <h5 className="text-base font-medium text-fuchsia-800 flex items-center gap-2">
+                      {mergeStatus.status === 'completed' 
+                        ? <CheckIcon className="h-5 w-5 text-green-500" />
+                        : mergeStatus.status === 'failed'
+                          ? <ExclamationCircleIcon className="h-5 w-5 text-red-500" />
+                          : <ArrowPathIcon className="h-5 w-5 text-fuchsia-600 animate-spin" />}
                       {mergeStatus.status === 'completed' 
                         ? 'Merge Complete'
                         : mergeStatus.status === 'failed'
                           ? 'Merge Failed'
-                          : 'Merged Clip Preview'}
+                          : 'Merging Clips...'}
                     </h5>
                     <button 
                       onClick={() => setIsMerging(false)}
                       className="text-fuchsia-700 hover:text-fuchsia-900"
                     >
-                      <span className="text-xs">Close</span>
+                      <span className="text-xs font-medium">Close</span>
                     </button>
                   </div>
-                  <div className="flex gap-3">
-                    <div className="w-24 h-16 bg-gray-200 rounded overflow-hidden">
-                      <img 
-                        src={mergedSegment.segment_video_thumbnail_url || result.videoThumbnailUrl} 
-                        alt="Merged clip preview"
-                        className="w-full h-full object-cover"
-                      />
-                    </div>
-                    <div>
-                      <div className="text-xs text-gray-600 mb-1">
-                        {formatTimeDisplay(mergedSegment.start_time)} - {formatTimeDisplay(mergedSegment.end_time)}
-                        ({formatTimeDisplay(mergedSegment.duration)} duration)
-                      </div>
-                      <div className="text-sm text-gray-700">
-                        {mergedSegment.segment_visual?.segment_visual_description || "Merged clip"}
-                      </div>
-                      
-                      {/* Add progress bar when processing */}
-                      {mergeStatus.status === 'processing' && (
-                        <div className="mt-2">
-                          <div className="w-full bg-gray-200 rounded-full h-2.5">
-                            <div
-                              className="bg-fuchsia-600 h-2.5 rounded-full transition-all duration-500 ease-in-out"
-                              style={{ width: `${mergeStatus.progress || 0}%` }}
-                            ></div>
+                  
+                  {mergeStatus.status === 'completed' && mergeStatus.video_id === result.id ? (
+                    <>
+                      <div className="flex items-start gap-3">
+                        <div className="w-1/4 min-w-[120px] max-w-[180px]">
+                          <div className="aspect-video bg-gray-200 rounded-md overflow-hidden relative group">
+                            <img 
+                              src={mergedSegment.segment_video_thumbnail_url || result.videoThumbnailUrl} 
+                              alt="Merged clip preview"
+                              className="w-full h-full object-cover"
+                            />
+                            <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent p-1">
+                              <div className="text-white text-xs font-medium">
+                                {formatTimeDisplay(mergedSegment.duration || 0)}
+                              </div>
+                            </div>
                           </div>
-                          <p className="text-xs text-gray-600 mt-1 text-center">
-                            {mergeStatus.progress || 0}% complete
-                          </p>
+                          <div className="flex mt-1 gap-1">
+                            {mergeStatus.result?.mergedVideoUrl ? (
+                              <a 
+                                href={mergeStatus.result.mergedVideoUrl}
+                                className="flex-1 inline-flex items-center justify-center gap-1 px-2 py-1 bg-green-600 hover:bg-green-700 text-white text-xs font-medium rounded-md transition-colors"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                              >
+                                <VideoCameraIcon className="h-3 w-3" />
+                                Play
+                              </a>
+                            ) : null}
+                            {(mergeStatus.videoId && mergeStatus.indexId) ? (
+                              <a 
+                                href={`/videos?indexId=${encodeURIComponent(mergeStatus.indexId || '')}&videoId=${encodeURIComponent(mergeStatus.videoId || '')}`}
+                                className="flex-1 inline-flex items-center justify-center gap-1 px-2 py-1 bg-gray-600 hover:bg-gray-700 text-white text-xs font-medium rounded-md transition-colors"
+                              >
+                                <ArrowRightIcon className="h-3 w-3" />
+                                Library
+                              </a>
+                            ) : null}
+                          </div>
                         </div>
-                      )}
-                      
-                      {/* Show view video link when merge completes */}
-                      {mergeStatus.status === 'completed' && mergeStatus.videoId && mergeStatus.indexId && (
-                        <div className="mt-2">
-                          <a 
-                            href={`/videos?indexId=${encodeURIComponent(mergeStatus.indexId)}&videoId=${encodeURIComponent(mergeStatus.videoId)}`}
-                            className="inline-flex items-center gap-1 text-sm font-medium text-green-600 hover:text-green-800"
-                          >
-                            <ArrowRightIcon className="h-4 w-4" />
-                            View merged video
-                          </a>
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 mb-1">
+                            <div className="text-sm font-medium text-gray-700 truncate">
+                              {mergeNames[result.id] || mergedSegment.segment_id?.split('_').slice(1).join('_') || 'merged-clip'}
+                            </div>
+                            <div className="flex flex-wrap gap-1">
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-green-100 text-green-800 text-xs font-medium rounded-full">
+                                <CheckIcon className="h-3 w-3" />
+                                Complete
+                              </span>
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-gray-100 text-gray-800 text-xs font-medium rounded-full">
+                                {mergedSegment.segment_visual?.segment_visual_description?.match(/\d+/) || '?'} clips
+                              </span>
+                            </div>
+                          </div>
+                          <div className="text-xs text-gray-600">
+                            <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 items-center">
+                              <div className="font-medium">Source:</div>
+                              <div className="truncate">{result.title}</div>
+                              {mergeStatus.result?.mergedVideoUrl && (
+                                <>
+                                  <div className="font-medium">Link:</div>
+                                  <div className="truncate">
+                                    <a 
+                                      href={mergeStatus.result.mergedVideoUrl} 
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="text-indigo-600 hover:text-indigo-800"
+                                    >
+                                      Download video
+                                    </a>
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                          </div>
                         </div>
-                      )}
-                      
-                      {/* Show error message when merge fails */}
-                      {mergeStatus.status === 'failed' && (
-                        <div className="mt-2 text-sm text-red-500">
+                      </div>
+                    </>
+                  ) : mergeStatus.status === 'failed' ? (
+                    <div className="flex gap-3">
+                      <div className="w-20 h-16 bg-gray-200 rounded-md overflow-hidden flex items-center justify-center text-gray-400">
+                        <ExclamationCircleIcon className="h-6 w-6" />
+                      </div>
+                      <div className="flex-1">
+                        <div className="text-sm text-red-700 mb-1 font-medium">
+                          Merge Operation Failed
+                        </div>
+                        <div className="text-xs text-gray-600 mb-1">
+                          Please try again or select different clips to merge.
+                        </div>
+                        <div className="text-xs text-red-500 p-1.5 bg-red-50 border border-red-100 rounded">
                           {mergeStatus.message}
                         </div>
-                      )}
+                      </div>
                     </div>
-                  </div>
+                  ) : (
+                    <div className="flex gap-3">
+                      <div className="w-20 h-16 bg-gray-200 rounded-md overflow-hidden">
+                        <img 
+                          src={mergedSegment.segment_video_thumbnail_url || result.videoThumbnailUrl} 
+                          alt="Merged clip preview"
+                          className="w-full h-full object-cover"
+                        />
+                      </div>
+                      <div className="flex-1">
+                        <div className="text-sm text-gray-700 mb-1 font-medium">
+                          {mergedSegment.segment_visual?.segment_visual_description || "Merged clip"}
+                        </div>
+                        <div className="text-xs text-gray-600 mb-1">
+                          {formatTimeDisplay(mergedSegment.start_time)} - {formatTimeDisplay(mergedSegment.end_time)}
+                          {mergedSegment.duration ? ` (${formatTimeDisplay(mergedSegment.duration)} duration)` : ''}
+                        </div>
+                        
+                        {/* Add progress bar when processing */}
+                        <div className="mt-1">
+                          <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
+                            <div
+                              className="bg-fuchsia-600 h-2 rounded-full transition-all duration-500 ease-in-out"
+                              style={{ width: `${mergeStatus.progress || 0}%` }}
+                            >
+                            </div>
+                          </div>
+                          <p className="text-xs text-gray-600 mt-0.5">
+                            {mergeStatus.message || `Processing... ${mergeStatus.progress || 0}%`}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1069,6 +1211,8 @@ export default function SearchResults({
     selectAllMatchedSegments,
     isMerging,
     mergedSegment,
+    mergeStatus,
+    mergeNames,
     searchOptions
   ])
 
