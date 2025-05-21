@@ -746,18 +746,40 @@ export default function VideosPage() {
   
 
   // Handle delete index
-  const handleDeleteIndex = () => {
+  const handleDeleteIndex = async () => {
     if (!selectedIndexId) return;
     
-    // In a real app, you would call your API here
     if (confirm(`Are you sure you want to delete this index? This action cannot be undone.`)) {
-      console.log(`Deleting index with ID: ${selectedIndexId}`);
-      
-      // Remove the index from the list
-      setIndexes(prevIndexes => prevIndexes.filter(index => index.id !== selectedIndexId));
-      
-      // Reset selected index
-      setSelectedIndexId(null);
+      try {
+        setIsLoading(true);
+        
+        // Make API call to delete the index
+        const response = await fetch(`${API_ENDPOINT}/indexes/${selectedIndexId}`, {
+          method: 'DELETE',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(state.session ? { 'Authorization': `Bearer ${state.session.token}` } : {})
+          }
+        });
+        
+        if (!response.ok) {
+          throw new Error(`Failed to delete index: ${response.statusText}`);
+        }
+        
+        const result = await response.json();
+        console.log(`Successfully deleted index: ${selectedIndexId}`, result);
+        
+        // Remove the index from the list
+        setIndexes(prevIndexes => prevIndexes.filter(index => index.id !== selectedIndexId));
+        
+        // Reset selected index
+        setSelectedIndexId(null);
+      } catch (error) {
+        console.error('Error deleting index:', error);
+        setError(error instanceof Error ? error.message : 'Failed to delete index');
+      } finally {
+        setIsLoading(false);
+      }
     }
   };
   

@@ -1153,12 +1153,33 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
               // Filter by validation if needed
               let finalResults = enhancedResults;
               if (searchQuery.minConfidence > 0) {
-                // Keep only videos that have at least one segment with good validation confidence
-                finalResults = enhancedResults.filter(video => 
-                  video.segments.some(segment => 
-                    ((segment as EnhancedVideoSegment).validationConfidence || 0) >= searchQuery.minConfidence
-                  )
-                );
+                console.log(`Applying minConfidence filter: ${searchQuery.minConfidence}`);
+                
+                // First, log segments with their confidence scores before filtering
+                enhancedResults.forEach(video => {
+                  console.log(`Video ${video.id} has ${video.segments.length} segments before filtering`);
+                  video.segments.forEach(segment => {
+                    console.log(`Segment ${segment.segment_id}: confidence=${segment.confidence}, validationConfidence=${(segment as EnhancedVideoSegment).validationConfidence}`);
+                  });
+                });
+                
+                // Filter at both segment and video levels:
+                // 1. For each video, keep only segments with validationConfidence >= minConfidence
+                // 2. Then keep only videos that still have at least one segment after filtering
+                finalResults = enhancedResults
+                  .map(video => ({
+                    ...video,
+                    segments: video.segments.filter(segment =>
+                      ((segment as EnhancedVideoSegment).validationConfidence || 0) >= searchQuery.minConfidence
+                    )
+                  }))
+                  .filter(video => video.segments.length > 0);
+                
+                // Log the results after filtering
+                console.log(`After filtering: ${finalResults.length} videos remain`);
+                finalResults.forEach(video => {
+                  console.log(`Video ${video.id} has ${video.segments.length} segments after filtering`);
+                });
               }
               
               return {

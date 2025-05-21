@@ -1,12 +1,18 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { 
-  DynamoDBDocumentClient, 
-  PutCommand, 
-  GetCommand, 
-  DeleteCommand, 
-  ScanCommand 
+import {
+  DynamoDBDocumentClient,
+  PutCommand,
+  GetCommand,
+  DeleteCommand,
+  ScanCommand
 } from '@aws-sdk/lib-dynamodb';
+import {
+  S3Client,
+  DeleteObjectCommand,
+  DeleteObjectsCommand,
+  ListObjectsV2Command
+} from '@aws-sdk/client-s3';
 import { Client } from '@opensearch-project/opensearch';
 import { defaultProvider } from '@aws-sdk/credential-provider-node';
 import { AwsSigv4Signer } from '@opensearch-project/opensearch/aws';
@@ -16,6 +22,9 @@ import { OpenSearchHit } from '../../types/common';
 // Initialize clients
 const dynamoClient = new DynamoDBClient({endpoint: process.env.INDEXES_TABLE_DYNAMODB_DNS_NAME});
 const docClient = DynamoDBDocumentClient.from(dynamoClient);
+
+// Initialize S3 client
+const s3Client = new S3Client({ region: process.env.AWS_REGION || 'us-east-1' });
 
 const openSearch = new Client({
   ...AwsSigv4Signer({
@@ -542,9 +551,62 @@ async function handleDeleteIndex(event: APIGatewayProxyEvent): Promise<APIGatewa
 
     // Get the first item to find the OpenSearch index name
     const firstItem = scanResult.Items[0];
-    const openSearchIndexName = firstItem.indexId || indexId;
+    const openSearchIndexName = firstItem.openSearchIndexName || firstItem.indexId || indexId;
     
-    // Delete the index from OpenSearch
+    // Step 1: Query OpenSearch to get all videos in the index and their S3 paths
+    let s3PathsToDelete: string[] = [];
+    let videoIds: string[] = [];
+    
+    try {
+      // Get all videos in the index with their S3 paths
+      const { body: searchResult } = await openSearch.search({
+        index: openSearchIndexName,
+        body: {
+          query: { match_all: {} },
+          _source: [
+            'video_id',
+            'video_s3_path',
+            'video_thumbnail_s3_path',
+            'video_segments'
+          ],
+          size: 1000 // Adjust based on expected number of videos
+        }
+      });
+      
+      // Extract S3 paths from search results
+      if (searchResult && searchResult.hits && searchResult.hits.hits) {
+        searchResult.hits.hits.forEach((hit: OpenSearchHit) => {
+          const source = hit._source;
+          videoIds.push(source.video_id);
+          
+          // Add main video S3 path
+          if (source.video_s3_path) {
+            s3PathsToDelete.push(source.video_s3_path);
+          }
+          
+          // Add thumbnail S3 path
+          if (source.video_thumbnail_s3_path) {
+            s3PathsToDelete.push(source.video_thumbnail_s3_path);
+          }
+          
+          // Add segment S3 paths
+          if (source.video_segments && Array.isArray(source.video_segments)) {
+            source.video_segments.forEach((segment: any) => {
+              if (segment.segment_s3_path) {
+                s3PathsToDelete.push(segment.segment_s3_path);
+              }
+            });
+          }
+        });
+      }
+      
+      console.log(`Found ${videoIds.length} videos and ${s3PathsToDelete.length} S3 paths to delete`);
+    } catch (searchError) {
+      console.warn(`Error querying OpenSearch for videos in index ${openSearchIndexName}:`, searchError);
+      // Continue even if search fails, we'll delete what we can
+    }
+    
+    // Step 2: Delete the index from OpenSearch
     try {
       await openSearch.indices.delete({
         index: openSearchIndexName
@@ -555,14 +617,85 @@ async function handleDeleteIndex(event: APIGatewayProxyEvent): Promise<APIGatewa
       // Continue even if OpenSearch delete fails
     }
     
-    // Delete all entries for this indexId from DynamoDB
+    // Step 3: Delete S3 files
+    const s3DeleteResults = {
+      deleted: 0,
+      failed: 0,
+      skipped: 0
+    };
+    
+    if (s3PathsToDelete.length > 0) {
+      try {
+        // Group S3 paths by bucket for batch deletion
+        const pathsByBucket: Record<string, string[]> = {};
+        
+        s3PathsToDelete.forEach(path => {
+          // Parse S3 URI (s3://bucket-name/key)
+          const match = path.match(/^s3:\/\/([^\/]+)\/(.+)$/);
+          if (match) {
+            const [, bucket, key] = match;
+            if (!pathsByBucket[bucket]) {
+              pathsByBucket[bucket] = [];
+            }
+            pathsByBucket[bucket].push(key);
+          } else {
+            console.warn(`Skipping S3 path: ${path}`);
+            s3DeleteResults.skipped++;
+          }
+        });
+        
+        // Delete objects in batches by bucket
+        const s3DeletePromises = Object.entries(pathsByBucket).map(async ([bucket, keys]) => {
+          // AWS S3 DeleteObjects can handle up to 1000 keys at once
+          const batchSize = 1000;
+          
+          for (let i = 0; i < keys.length; i += batchSize) {
+            const batch = keys.slice(i, i + batchSize);
+            
+            try {
+              const deleteParams = {
+                Bucket: bucket,
+                Delete: {
+                  Objects: batch.map(key => ({ Key: key })),
+                  Quiet: false
+                }
+              };
+              
+              const deleteResult = await s3Client.send(new DeleteObjectsCommand(deleteParams));
+              
+              if (deleteResult.Deleted) {
+                s3DeleteResults.deleted += deleteResult.Deleted.length;
+              }
+              
+              if (deleteResult.Errors) {
+                s3DeleteResults.failed += deleteResult.Errors.length;
+                deleteResult.Errors.forEach(error => {
+                  console.error(`Failed to delete S3 object: ${error.Key}, Error: ${error.Code} - ${error.Message}`);
+                });
+              }
+            } catch (batchError) {
+              console.error(`Error deleting batch of S3 objects from bucket ${bucket}:`, batchError);
+              s3DeleteResults.failed += batch.length;
+            }
+          }
+        });
+        
+        await Promise.all(s3DeletePromises);
+        console.log(`S3 deletion results: ${s3DeleteResults.deleted} deleted, ${s3DeleteResults.failed} failed, ${s3DeleteResults.skipped} skipped`);
+      } catch (s3Error) {
+        console.error('Error during S3 deletion:', s3Error);
+        // Continue even if S3 deletion fails
+      }
+    }
+    
+    // Step 4: Delete all entries for this indexId from DynamoDB
     console.log(`Deleting ${scanResult.Items.length} items from DynamoDB for indexId ${indexId}`);
     
     const deletePromises = scanResult.Items.map(async (item) => {
       try {
         await docClient.send(new DeleteCommand({
           TableName: process.env.INDEXES_TABLE,
-          Key: { 
+          Key: {
             indexId: indexId,
             videoId: item.videoId
           }
@@ -577,12 +710,25 @@ async function handleDeleteIndex(event: APIGatewayProxyEvent): Promise<APIGatewa
     const results = await Promise.all(deletePromises);
     const successful = results.filter(r => r.success).length;
     
+    // Step 5: Clean up local storage (this happens on the client side)
+    // The frontend will handle clearing any local storage related to this index
+    
     return {
       statusCode: STATUS_CODES.OK,
       headers: corsHeaders,
       body: JSON.stringify({
-        message: `Index deleted successfully. Removed ${successful} of ${scanResult.Items.length} items.`,
-        indexId
+        message: `Index deleted successfully. Removed ${successful} of ${scanResult.Items.length} DynamoDB items and ${s3DeleteResults.deleted} S3 files.`,
+        indexId,
+        deletionDetails: {
+          dynamoDB: {
+            deleted: successful,
+            failed: scanResult.Items.length - successful
+          },
+          openSearch: {
+            deleted: 1
+          },
+          s3: s3DeleteResults
+        }
       })
     };
   } catch (error) {
@@ -590,7 +736,7 @@ async function handleDeleteIndex(event: APIGatewayProxyEvent): Promise<APIGatewa
     return {
       statusCode: STATUS_CODES.INTERNAL_SERVER_ERROR,
       headers: corsHeaders,
-      body: JSON.stringify({ 
+      body: JSON.stringify({
         error: 'Failed to delete index',
         details: error instanceof Error ? error.message : 'Unknown error'
       })
