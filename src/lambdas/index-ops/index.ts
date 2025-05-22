@@ -575,25 +575,44 @@ async function handleDeleteIndex(event: APIGatewayProxyEvent): Promise<APIGatewa
       
       // Extract S3 paths from search results
       if (searchResult && searchResult.hits && searchResult.hits.hits) {
+        console.log(`Found ${searchResult.hits.hits.length} videos in OpenSearch index ${openSearchIndexName}`);
+        
         searchResult.hits.hits.forEach((hit: OpenSearchHit) => {
           const source = hit._source;
           videoIds.push(source.video_id);
           
+          console.log(`Processing video ${source.video_id} for S3 paths`);
+          console.log(`Source fields: ${JSON.stringify(Object.keys(source))}`);
+          
           // Add main video S3 path
           if (source.video_s3_path) {
+            console.log(`Found video_s3_path: ${source.video_s3_path}`);
             s3PathsToDelete.push(source.video_s3_path);
           }
           
           // Add thumbnail S3 path
           if (source.video_thumbnail_s3_path) {
+            console.log(`Found video_thumbnail_s3_path: ${source.video_thumbnail_s3_path}`);
             s3PathsToDelete.push(source.video_thumbnail_s3_path);
           }
           
           // Add segment S3 paths
           if (source.video_segments && Array.isArray(source.video_segments)) {
-            source.video_segments.forEach((segment: any) => {
+            console.log(`Found ${source.video_segments.length} segments`);
+            
+            source.video_segments.forEach((segment: any, idx: number) => {
+              console.log(`Segment ${idx} fields: ${JSON.stringify(Object.keys(segment))}`);
+              
+              // Check for segment_s3_path (original field name)
               if (segment.segment_s3_path) {
+                console.log(`Found segment_s3_path: ${segment.segment_s3_path}`);
                 s3PathsToDelete.push(segment.segment_s3_path);
+              }
+              
+              // Also check for segment_video_s3_path (likely field name based on user example)
+              if (segment.segment_video_s3_path) {
+                console.log(`Found segment_video_s3_path: ${segment.segment_video_s3_path}`);
+                s3PathsToDelete.push(segment.segment_video_s3_path);
               }
             });
           }
@@ -629,6 +648,8 @@ async function handleDeleteIndex(event: APIGatewayProxyEvent): Promise<APIGatewa
         // Group S3 paths by bucket for batch deletion
         const pathsByBucket: Record<string, string[]> = {};
         
+        console.log(`Processing ${s3PathsToDelete.length} S3 paths for deletion`);
+        
         s3PathsToDelete.forEach(path => {
           // Parse S3 URI (s3://bucket-name/key)
           const match = path.match(/^s3:\/\/([^\/]+)\/(.+)$/);
@@ -638,11 +659,24 @@ async function handleDeleteIndex(event: APIGatewayProxyEvent): Promise<APIGatewa
               pathsByBucket[bucket] = [];
             }
             pathsByBucket[bucket].push(key);
+            console.log(`Added S3 path with s3:// prefix: bucket=${bucket}, key=${key}`);
           } else {
-            console.warn(`Skipping S3 path: ${path}`);
-            s3DeleteResults.skipped++;
+            // For paths without s3:// prefix, use the default bucket
+            const defaultBucket = process.env.VIDEO_BUCKET;
+            if (defaultBucket) {
+              if (!pathsByBucket[defaultBucket]) {
+                pathsByBucket[defaultBucket] = [];
+              }
+              pathsByBucket[defaultBucket].push(path);
+              console.log(`Added S3 path without s3:// prefix to default bucket ${defaultBucket}: ${path}`);
+            } else {
+              console.warn(`Skipping S3 path (no default bucket available): ${path}`);
+              s3DeleteResults.skipped++;
+            }
           }
         });
+        
+        console.log(`Grouped S3 paths by bucket: ${JSON.stringify(Object.keys(pathsByBucket).map(bucket => `${bucket}: ${pathsByBucket[bucket].length} paths`))}`);
         
         // Delete objects in batches by bucket
         const s3DeletePromises = Object.entries(pathsByBucket).map(async ([bucket, keys]) => {
