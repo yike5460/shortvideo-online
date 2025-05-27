@@ -389,15 +389,112 @@ async function _performVideoMerge(params: {
     // Merge video segments using FFmpeg
     const mergedVideoPath = `${tempDir}/merge_${jobId}/merged_output.mp4`;
     
-    // FFmpeg command to concatenate videos
-    const ffmpegArgs = [
-      '-f', 'concat',            // Use concat demuxer
-      '-safe', '0',              // Don't validate filenames
-      '-i', concatFilePath,      // Input file listing segments
-      '-c:v', 'copy',            // Copy video codec without re-encoding
-      '-c:a', 'copy',            // Copy audio codec without re-encoding
-      mergedVideoPath            // Output file
-    ];
+    // Determine if we need to use complex filtering for transitions or resolution
+    // Complex filtering is needed when:
+    // 1. Default transition is not 'cut' (requires xfade filter)
+    // 2. Resolution is not '720p' (requires scaling)
+    // 3. Any segment has a non-cut transition type
+    const needsComplexFiltering =
+      mergeOptions.defaultTransition !== 'cut' ||
+      mergeOptions.resolution !== '720p' ||
+      sortedSegments.some(s => s.transitionType && s.transitionType !== 'cut');
+    
+    let ffmpegArgs: string[] = [];
+    
+    if (needsComplexFiltering) {
+      console.log('Using complex filtering for transitions and/or resolution');
+      
+      // For transitions and resolution changes, we need to decode and re-encode
+      const inputs: string[] = [];
+      const filterComplex: string[] = [];
+      
+      // Add each input file
+      for (let i = 0; i < downloadedSegments.length; i++) {
+        inputs.push('-i', downloadedSegments[i]);
+      }
+      
+      // Create filter complex string for transitions
+      let lastOutput = '0:v';
+      
+      for (let i = 0; i < sortedSegments.length - 1; i++) {
+        const segment = sortedSegments[i];
+        const nextSegment = sortedSegments[i + 1];
+        
+        // Get transition type and duration for this segment
+        const transitionType = segment.transitionType || mergeOptions.defaultTransition;
+        const transitionDuration = segment.transitionDuration || mergeOptions.defaultTransitionDuration;
+        
+        // Skip complex filtering for 'cut' transitions
+        if (transitionType === 'cut') {
+          if (i === 0) {
+            // For the first segment with cut transition, just use it directly
+            // No filter needed yet, we'll use this as the base for concatenation
+            continue;
+          }
+          
+          // For subsequent segments with cut transition, concatenate with the previous output
+          filterComplex.push(`[${lastOutput}][${i+1}:v]concat=n=2:v=1:a=0[v${i+1}]`);
+          lastOutput = `v${i+1}`;
+        } else {
+          // For fade/dissolve transitions, use xfade filter
+          const xfadeType = transitionType === 'fade' ? 'fade' : 'dissolve';
+          const durationSec = transitionDuration / 1000; // Convert ms to seconds
+          
+          if (i === 0) {
+            // For the first segment, we need to set up the initial input
+            // The offset determines when the transition starts:
+            // segment.duration/1000 - durationSec means the transition starts at the end of the first clip
+            filterComplex.push(`[0:v][1:v]xfade=transition=${xfadeType}:duration=${durationSec}:offset=${segment.duration/1000 - durationSec}[v1]`);
+            lastOutput = 'v1';
+          } else {
+            // For subsequent segments, use the previous output as the first input
+            // and the next segment as the second input
+            filterComplex.push(`[${lastOutput}][${i+1}:v]xfade=transition=${xfadeType}:duration=${durationSec}:offset=${durationSec}[v${i+1}]`);
+            lastOutput = `v${i+1}`;
+          }
+        }
+      }
+      
+      // Add scaling filter for resolution at the end of the video processing chain
+      // This ensures the final output is at the requested resolution
+      const resolution = mergeOptions.resolution === '720p' ? '1280:720' : '1920:1080';
+      filterComplex.push(`[${lastOutput}]scale=${resolution}[vout]`);
+      
+      // Combine all audio streams into a single output stream
+      // This creates a simple concatenation of all audio tracks
+      const audioFilters: string[] = [];
+      for (let i = 0; i < downloadedSegments.length; i++) {
+        audioFilters.push(`[${i}:a]`);
+      }
+      filterComplex.push(`${audioFilters.join('')}concat=n=${downloadedSegments.length}:v=0:a=1[aout]`);
+      
+      // Build the complete FFmpeg command with filter complex
+      // -filter_complex: Defines the complex filtering operations
+      // -map: Maps the output streams to the final file
+      // -c:v libx264: Use H.264 codec for video
+      // -preset medium: Balance between encoding speed and compression efficiency
+      // -c:a aac: Use AAC codec for audio
+      ffmpegArgs = [
+        ...inputs,
+        '-filter_complex', filterComplex.join(';'),
+        '-map', '[vout]',
+        '-map', '[aout]',
+        '-c:v', 'libx264',
+        '-preset', 'medium',
+        '-c:a', 'aac',
+        mergedVideoPath
+      ];
+    } else {
+      // Use simple concatenation for 'cut' transitions (current implementation)
+      ffmpegArgs = [
+        '-f', 'concat',            // Use concat demuxer
+        '-safe', '0',              // Don't validate filenames
+        '-i', concatFilePath,      // Input file listing segments
+        '-c:v', 'copy',            // Copy video codec without re-encoding
+        '-c:a', 'copy',            // Copy audio codec without re-encoding
+        mergedVideoPath            // Output file
+      ];
+    }
     
     console.log(`Running FFmpeg command: ffmpeg ${ffmpegArgs.join(' ')}`);
     

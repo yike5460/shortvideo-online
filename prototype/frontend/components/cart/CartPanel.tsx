@@ -42,6 +42,7 @@ export const CartPanel: React.FC<CartPanelProps> = ({ isOpen, onClose, className
   const [selectedItems, setSelectedItems] = useState<Record<string, boolean>>({});
   const [isMerging, setIsMerging] = useState(false);
   const [mergeProgress, setMergeProgress] = useState(0);
+  const [customMergeName, setCustomMergeName] = useState<string>('');
   const [draggedItem, setDraggedItem] = useState<number | null>(null);
   const [dragOverItem, setDragOverItem] = useState<number | null>(null);
   
@@ -106,12 +107,17 @@ export const CartPanel: React.FC<CartPanelProps> = ({ isOpen, onClose, className
       // Use the selectedIndex if available, otherwise fall back to the item's indexId
       const indexId = firstItem.selectedIndex || firstItem.indexId;
       
+      // Use custom merge name if provided, otherwise use default
+      const mergedName = customMergeName.trim()
+        ? customMergeName.trim()
+        : `cart_merged_${Date.now()}`;
+      
       // Create merge parameters
       const mergeParams = {
         indexId,
         videoId: extractedVideoId,
         segmentIds,
-        mergedName: `cart_merged_${Date.now()}`,
+        mergedName,
         userId,
         mergeOptions: {
           resolution: mergeOptions.resolution,
@@ -154,6 +160,7 @@ export const CartPanel: React.FC<CartPanelProps> = ({ isOpen, onClose, className
           
           setIsMerging(false);
           setMergeProgress(0);
+          setCustomMergeName(''); // Clear the custom merge name after successful merge
         },
         onFailed: (error) => {
           addToast('error', `Failed to merge segments: ${error}`);
@@ -414,6 +421,16 @@ export const CartPanel: React.FC<CartPanelProps> = ({ isOpen, onClose, className
                   step="100"
                   value={mergeOptions.defaultTransitionDuration}
                   onChange={(e) => updateMergeOptions({defaultTransitionDuration: parseInt(e.target.value)})}
+                  className="w-full text-sm border border-gray-300 rounded-md p-1"
+                />
+              </div>
+              <div className="mt-2">
+                <label className="block text-xs text-gray-500 mb-1">Merged Clip Name</label>
+                <input
+                  type="text"
+                  placeholder={`cart_merged_${Date.now()}`}
+                  value={customMergeName}
+                  onChange={(e) => setCustomMergeName(e.target.value)}
                   className="w-full text-sm border border-gray-300 rounded-md p-1"
                 />
               </div>

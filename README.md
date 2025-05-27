@@ -1166,9 +1166,8 @@ flowchart TD
 
 ## TODO
 
-
 Backend:
-- [ ] Web rendering and prompt optimization for video understanding per cases:
+- [X] Web rendering and prompt optimization for video understanding per cases:
 "Generate hashtags and topics", - done
 "Summarize this video", - done
 "What are highlighted moments of this video", - done

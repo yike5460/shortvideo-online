@@ -732,7 +732,7 @@ async function validateVideos(videosWithScores: [string, number][], textDescript
 
 // Update the transform function to normalize OpenSearch confidence scores, such score is relative and per index and per query, calculated using TF-IDF by default
 const transformSearchResults = async (hits: any[]): Promise<VideoResult[]> => {
-  
+
   // Find the max video score for normalization across all videos
   const maxVideoScore = Math.max(...hits.map(hit => hit._score || 0));
   
@@ -980,6 +980,7 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
           query: {
             nested: {
               path: "video_segments",
+              score_mode: "max", // The presence of at least one highly relevant segment makes the entire video highly relevant, regardless of other, less relevant segments it might also contain.
               query: {
                 function_score: {
                   query: {
