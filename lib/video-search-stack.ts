@@ -23,6 +23,7 @@ import { S3EventSource, SnsEventSource, SqsEventSource } from 'aws-cdk-lib/aws-l
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import { S3ConnectorStack } from './s3-connector-stack';
 import { VideoUnderstandingStack } from './video-understanding-stack';
+import { StrandsAgentConstruct } from './strands-agent-stack';
 
 interface VideoSearchStackProps extends cdk.StackProps {
   maxAzs: number;
@@ -56,6 +57,7 @@ export class VideoSearchStack extends cdk.Stack {
   private readonly identityPool: cognito.CfnIdentityPool;
   private readonly s3ConnectorStack?: S3ConnectorStack;
   private readonly videoUnderstandingStack?: VideoUnderstandingStack;
+  private readonly strandsAgentConstruct?: StrandsAgentConstruct;
   constructor(scope: Construct, id: string, props: VideoSearchStackProps) {
     super(scope, id, props);
 
@@ -129,9 +131,17 @@ export class VideoSearchStack extends cdk.Stack {
     // Create Video Understanding stack
     this.videoUnderstandingStack = this.createVideoUnderstandingStack(api, deploymentEnv);
 
+    // Create Strands Agent construct
+    this.strandsAgentConstruct = this.createStrandsAgentConstruct(api, deploymentEnv);
+
     // Set up permissions
     // this.setupPermissions(lambdaFunctions, this.videoEmbeddingService, this.rekognitionTopic, this.indexesTable);
     this.setupPermissions(lambdaFunctions, this.rekognitionTopic, this.indexesTable);
+    
+    // Set up permissions for Strands Agent
+    if (this.strandsAgentConstruct) {
+      this.setupStrandsAgentPermissions(deploymentEnv);
+    }
 
     // Create stack outputs
     this.createStackOutputs(api);
@@ -1488,6 +1498,24 @@ export class VideoSearchStack extends cdk.Stack {
       value: this.identityPool.ref,
       description: 'Cognito Identity Pool ID',
     });
+
+    // Add Strands Agent outputs if available
+    if (this.strandsAgentConstruct) {
+      new cdk.CfnOutput(this, 'StrandsAgentClusterName', {
+        value: this.strandsAgentConstruct.agentCluster.clusterName,
+        description: 'ECS Cluster name for Strands Agent',
+      });
+
+      new cdk.CfnOutput(this, 'AutoCreateJobsTableName', {
+        value: this.strandsAgentConstruct.jobsTable.tableName,
+        description: 'DynamoDB table for auto-create jobs',
+      });
+
+      new cdk.CfnOutput(this, 'AgentJobQueueUrl', {
+        value: this.strandsAgentConstruct.jobQueue.queueUrl,
+        description: 'SQS queue URL for agent jobs',
+      });
+    }
   }
 
   private createCognitoResources(stage: string): { 
@@ -1706,5 +1734,87 @@ export class VideoSearchStack extends cdk.Stack {
       deploymentEnvironment: deploymentEnv,
       externalVideoUnderstandingEndpoint: this.externalVideoUnderstandingEndpoint || ''
     });
+  }
+  
+  private createStrandsAgentConstruct(api: apigateway.RestApi, deploymentEnv: string): StrandsAgentConstruct {
+    return new StrandsAgentConstruct(this, 'StrandsAgentConstruct', {
+      vpc: this.vpc,
+      openSearchEndpoint: `https://${this.openSearchCollection.attrId}.${this.region}.aoss.amazonaws.com`,
+      videoBucket: this.videoBucket.bucketName,
+      indexesTable: this.indexesTable,
+      api: api,
+      dynamodbEndpoint: this.dynamodbEndpoint,
+      deploymentEnvironment: deploymentEnv
+    });
+  }
+
+  private setupStrandsAgentPermissions(stage: string): void {
+    if (!this.strandsAgentConstruct) return;
+
+    // Grant S3 permissions to Strands Agent Lambda functions
+    this.videoBucket.grantReadWrite(this.strandsAgentConstruct.autoCreateLambda);
+    this.videoBucket.grantRead(this.strandsAgentConstruct.mcpServerLambda);
+
+    // Grant DynamoDB permissions
+    this.indexesTable.grantReadData(this.strandsAgentConstruct.autoCreateLambda);
+    this.indexesTable.grantReadData(this.strandsAgentConstruct.mcpServerLambda);
+
+    // Grant OpenSearch permissions
+    const openSearchPolicy = new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'aoss:APIAccessAll',
+        'aoss:CreateCollection',
+        'aoss:ListCollections',
+        'aoss:GetCollection',
+        'aoss:BatchGetCollection',
+        'aoss:UpdateCollection',
+        'aoss:DeleteCollection',
+        'aoss:CreateAccessPolicy',
+        'aoss:CreateSecurityPolicy',
+        'aoss:UpdateSecurityPolicy',
+        'aoss:GetSecurityPolicy',
+        'aoss:CreateAccessPolicy',
+        'aoss:GetAccessPolicy',
+        'aoss:UpdateAccessPolicy',
+        'es:ESHttp*'
+      ],
+      resources: [
+        `arn:aws:aoss:${this.region}:${this.account}:collection/*`,
+        `arn:aws:aoss:${this.region}:${this.account}:security-policy/*`,
+        `arn:aws:aoss:${this.region}:${this.account}:access-policy/*`
+      ]
+    });
+
+    this.strandsAgentConstruct.autoCreateLambda.addToRolePolicy(openSearchPolicy);
+    this.strandsAgentConstruct.mcpServerLambda.addToRolePolicy(openSearchPolicy);
+
+    // Update OpenSearch access policies to include Strands Agent Lambda roles
+    const strandsAgentAccessPolicy = new opensearchserverless.CfnAccessPolicy(this, 'StrandsAgentAccessPolicy', {
+      name: `strands-agent-access-${stage}`,
+      type: 'data',
+      policy: JSON.stringify([{
+        Rules: [{
+          ResourceType: 'index',
+          Resource: [
+            `index/video-search-${stage}-knn/*`
+          ],
+          Permission: [
+            'aoss:ReadDocument',
+            'aoss:WriteDocument',
+            'aoss:CreateIndex',
+            'aoss:DeleteIndex',
+            'aoss:UpdateIndex',
+            'aoss:DescribeIndex'
+          ]
+        }],
+        Principal: [
+          this.strandsAgentConstruct.autoCreateLambda.role?.roleArn || '',
+          this.strandsAgentConstruct.mcpServerLambda.role?.roleArn || ''
+        ].filter(Boolean)
+      }])
+    });
+
+    strandsAgentAccessPolicy.addDependency(this.openSearchCollection);
   }
 }
