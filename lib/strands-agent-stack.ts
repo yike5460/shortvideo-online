@@ -1,7 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
-import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
@@ -164,67 +163,44 @@ export class StrandsAgentConstruct extends Construct {
         INDEXES_TABLE: props.indexesTable.tableName,
         JOB_QUEUE_URL: this.jobQueue.queueUrl,
         BEDROCK_REGION: cdk.Stack.of(this).region,
-        MCP_SERVER_URL: `https://${cdk.Stack.of(this).region}.amazonaws.com/lambda/mcp`,
+        MCP_SERVER_URL: `${props.api.url}mcp`,
       },
     });
 
-    container.addPortMappings({
-      containerPort: 8080,
-      protocol: ecs.Protocol.TCP,
-    });
+    // No port mappings needed - container only polls SQS and makes outbound API calls
 
-    // Create Application Load Balancer
-    const alb = new elbv2.ApplicationLoadBalancer(this, 'StrandsAgentALB', {
-      vpc: props.vpc,
-      internetFacing: false, // Internal ALB
-      loadBalancerName: 'strands-agent-alb',
-    });
-
-    // Create target group
-    const targetGroup = new elbv2.ApplicationTargetGroup(this, 'StrandsAgentTargetGroup', {
-      port: 8080,
-      protocol: elbv2.ApplicationProtocol.HTTP,
-      vpc: props.vpc,
-      targetType: elbv2.TargetType.IP,
-      healthCheck: {
-        path: '/health',
-        healthyHttpCodes: '200',
-        interval: cdk.Duration.seconds(30),
-        timeout: cdk.Duration.seconds(5),
-        healthyThresholdCount: 2,
-        unhealthyThresholdCount: 3,
-      },
-    });
-
-    // Create listener
-    alb.addListener('StrandsAgentListener', {
-      port: 80,
-      protocol: elbv2.ApplicationProtocol.HTTP,
-      defaultTargetGroups: [targetGroup],
-    });
-
-    // Create Fargate service
+    // Create Fargate service (no ALB needed - container polls SQS internally)
     this.agentService = new ecs.FargateService(this, 'StrandsAgentService', {
       cluster: this.agentCluster,
       taskDefinition: taskDefinition,
       desiredCount: 1,
       assignPublicIp: false,
       serviceName: 'strands-agent-service',
+      // No health check grace period needed since no ALB
     });
 
-    // Attach service to target group
-    this.agentService.attachToApplicationTargetGroup(targetGroup);
-
-    // Create Auto Scaling
+    // Create Auto Scaling based on SQS queue depth and CPU utilization
     const scaling = this.agentService.autoScaleTaskCount({
       minCapacity: 1,
       maxCapacity: 10,
     });
 
+    // Scale based on CPU utilization for processing-intensive video operations
     scaling.scaleOnCpuUtilization('CpuScaling', {
       targetUtilizationPercent: 70,
       scaleInCooldown: cdk.Duration.minutes(5),
       scaleOutCooldown: cdk.Duration.minutes(2),
+    });
+
+    // Scale based on SQS queue depth - scale out when messages are waiting
+    scaling.scaleOnMetric('SqsQueueDepthScaling', {
+      metric: this.jobQueue.metricApproximateNumberOfMessagesVisible(),
+      scalingSteps: [
+        { upper: 0, change: -1 },    // Scale down when no messages
+        { lower: 1, change: +1 },    // Scale up when messages are waiting
+        { lower: 5, change: +2 },    // Scale up faster with more messages
+      ],
+      adjustmentType: cdk.aws_applicationautoscaling.AdjustmentType.CHANGE_IN_CAPACITY,
     });
 
     // Create Lambda security group
@@ -264,8 +240,8 @@ export class StrandsAgentConstruct extends Construct {
       environment: {
         JOBS_TABLE: this.jobsTable.tableName,
         JOB_QUEUE_URL: this.jobQueue.queueUrl,
-        AGENT_ENDPOINT: alb.loadBalancerDnsName,
         INDEXES_TABLE_DYNAMODB_DNS_NAME: dynamoDbEndpointDnsHttp,
+        // No AGENT_ENDPOINT needed - AutoCreate Lambda only manages jobs in DynamoDB/SQS
       },
       bundling: {
         minify: true,

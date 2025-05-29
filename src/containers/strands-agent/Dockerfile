@@ -18,9 +18,9 @@ COPY . .
 # Expose port
 EXPOSE 8080
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+# Health check with aggressive settings for faster failure detection
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=2 \
     CMD curl -f http://localhost:8080/health || exit 1
 
-# Run the application
-CMD ["python", "main.py"]
+# Run the application using uvicorn directly
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080", "--log-level", "info"]

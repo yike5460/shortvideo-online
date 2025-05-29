@@ -3,17 +3,38 @@ import json
 import asyncio
 import logging
 from typing import Dict, Any, List
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import boto3
 import uvicorn
 from datetime import datetime
 
+# Strands Agent imports
+from .agent_config import create_strands_agent, validate_agent_setup, get_agent_info
+from .video_tools import validate_mcp_connection, get_available_tools
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Strands Agent for Video Creation", version="1.0.0")
+# Background task management
+background_tasks = set()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    if JOB_QUEUE_URL:
+        task = asyncio.create_task(poll_sqs_queue())
+        background_tasks.add(task)
+        logger.info("Started SQS polling task")
+    yield
+    # Shutdown
+    for task in background_tasks:
+        task.cancel()
+    await asyncio.gather(*background_tasks, return_exceptions=True)
+
+app = FastAPI(title="Strands Agent for Video Creation", version="1.0.0", lifespan=lifespan)
 
 # AWS clients
 sqs_client = boto3.client('sqs')
@@ -38,26 +59,16 @@ class AgentResponse(BaseModel):
 
 class StrandsVideoAgent:
     def __init__(self):
-        self.system_prompt = """You are a video creation assistant that helps users create short videos from existing video libraries.
-
-You have access to the following tools:
-- video_search: Search for relevant video content using natural language
-- video_merge: Merge multiple video segments into a single video
-- video_slice: Extract specific clips from videos
-- video_metadata: Get detailed information about videos
-- index_query: Query available video indexes
-
-Your task is to:
-1. Understand the user's request for video creation
-2. Search for relevant video content in their library
-3. Select appropriate video segments
-4. Merge them into a cohesive final video
-5. Provide a description of the created video
-
-Always be helpful and creative while working within the available video content."""
+        """Initialize Strands Video Agent with official SDK"""
+        try:
+            self.agent = create_strands_agent()
+            logger.info("StrandsVideoAgent initialized with official Strands SDK")
+        except Exception as e:
+            logger.error(f"Failed to initialize StrandsVideoAgent: {str(e)}")
+            raise e
 
     async def process_request(self, job_message: JobMessage) -> Dict[str, Any]:
-        """Process a video creation request using Claude and MCP tools"""
+        """Process video creation request using Strands Agent"""
         try:
             logger.info(f"Processing job {job_message.jobId}: {job_message.request}")
             
@@ -68,169 +79,101 @@ Always be helpful and creative while working within the available video content.
                 'logs': [f"Started processing at {datetime.now().isoformat()}"]
             })
 
-            # Step 1: Analyze the request with Claude
-            analysis = await self.analyze_request(job_message.request)
+            # Create prompt for Strands Agent
+            prompt = f"""Create a short video based on this request: "{job_message.request}"
+
+Please:
+1. Search for relevant video content in the library that matches this request
+2. Select the best segments that create a coherent narrative
+3. Merge them into a cohesive video with appropriate transitions
+4. Provide details about the final video including description and key segments used
+
+User options: {json.dumps(job_message.options, indent=2) if job_message.options else 'None specified'}
+
+Remember to be thorough in your search and selective in choosing segments that best match the user's intent."""
+
+            # Process with streaming for progress updates
+            result = await self.process_with_streaming(prompt, job_message)
             
-            await self.update_job_status(job_message.jobId, job_message.userId, {
-                'progress': 30,
-                'logs': [f"Request analyzed: {analysis.get('summary', 'Analysis complete')}"]
-            })
-
-            # Step 2: Search for relevant videos
-            search_results = await self.search_videos(analysis.get('search_queries', [job_message.request]))
+            return result
             
-            await self.update_job_status(job_message.jobId, job_message.userId, {
-                'progress': 50,
-                'logs': [f"Found {len(search_results)} relevant video segments"]
-            })
-
-            # Step 3: Select and merge video segments
-            if search_results:
-                merge_result = await self.create_video(search_results, job_message.request)
-                
-                await self.update_job_status(job_message.jobId, job_message.userId, {
-                    'progress': 90,
-                    'logs': [f"Video creation completed: {merge_result.get('message', 'Success')}"]
-                })
-
-                # Step 4: Complete the job
-                result = {
-                    'videoUrl': merge_result.get('videoUrl', ''),
-                    'thumbnailUrl': merge_result.get('thumbnailUrl', ''),
-                    'description': merge_result.get('description', job_message.request),
-                    'duration': merge_result.get('duration', 0),
-                    's3Path': merge_result.get('s3Path', '')
-                }
-
-                await self.update_job_status(job_message.jobId, job_message.userId, {
-                    'status': 'completed',
-                    'progress': 100,
-                    'result': result,
-                    'completedAt': datetime.now().isoformat(),
-                    'logs': ['Video creation completed successfully']
-                })
-
-                return result
-            else:
-                # No suitable videos found
-                await self.update_job_status(job_message.jobId, job_message.userId, {
-                    'status': 'failed',
-                    'error': 'No suitable video content found for the request',
-                    'completedAt': datetime.now().isoformat()
-                })
-                
-                raise Exception("No suitable video content found")
-
         except Exception as e:
             logger.error(f"Error processing job {job_message.jobId}: {str(e)}")
-            
             await self.update_job_status(job_message.jobId, job_message.userId, {
                 'status': 'failed',
                 'error': str(e),
                 'completedAt': datetime.now().isoformat()
             })
-            
             raise e
 
-    async def analyze_request(self, request: str) -> Dict[str, Any]:
-        """Use Claude to analyze the video creation request"""
-        try:
-            prompt = f"""Analyze this video creation request and provide a structured response:
-
-Request: "{request}"
-
-Please provide:
-1. A summary of what the user wants
-2. 2-3 search queries to find relevant video content
-3. The type of video they want (educational, entertainment, tutorial, etc.)
-4. Estimated duration preference
-5. Key themes or topics to focus on
-
-Respond in JSON format."""
-
-            response = bedrock_client.invoke_model(
-                modelId='anthropic.claude-3-7-sonnet-20250219-v1:0',
-                body=json.dumps({
-                    'anthropic_version': 'bedrock-2023-05-31',
-                    'max_tokens': 1000,
-                    'messages': [
-                        {
-                            'role': 'user',
-                            'content': prompt
-                        }
-                    ]
-                })
-            )
-
-            result = json.loads(response['body'].read())
-            content = result['content'][0]['text']
-            
-            # Try to parse as JSON, fallback to basic structure
-            try:
-                return json.loads(content)
-            except:
-                return {
-                    'summary': content,
-                    'search_queries': [request],
-                    'type': 'general',
-                    'duration': 60
-                }
-
-        except Exception as e:
-            logger.error(f"Error analyzing request: {str(e)}")
-            return {
-                'summary': request,
-                'search_queries': [request],
-                'type': 'general',
-                'duration': 60
-            }
-
-    async def search_videos(self, queries: List[str]) -> List[Dict[str, Any]]:
-        """Search for videos using the MCP video_search tool"""
-        all_results = []
+    async def process_with_streaming(self, prompt: str, job_message: JobMessage) -> Dict[str, Any]:
+        """Process request with progress streaming using Strands Agent"""
+        progress = 30
+        video_result = None
         
-        for query in queries[:3]:  # Limit to 3 queries
-            try:
-                # This would call the MCP server's video_search tool
-                # For now, return mock results
-                mock_results = [
-                    {
-                        'videoId': f'video_{i}',
-                        'segmentId': f'segment_{i}',
-                        'indexId': 'videos',
-                        'title': f'Video {i}',
-                        'confidence': 0.8,
-                        'duration': 30000,
-                        's3Path': f'path/to/video_{i}.mp4'
-                    }
-                    for i in range(2)  # Mock 2 results per query
-                ]
-                all_results.extend(mock_results)
+        try:
+            logger.info(f"Starting Strands Agent processing for job {job_message.jobId}")
+            
+            # Use async streaming from Strands Agent
+            async for event in self.agent.stream_async(prompt):
+                if "current_tool_use" in event and event["current_tool_use"]:
+                    tool_info = event["current_tool_use"]
+                    tool_name = tool_info.get("name")
+                    
+                    if tool_name == "video_search":
+                        progress = 50
+                        await self.update_job_status(job_message.jobId, job_message.userId, {
+                            'progress': progress,
+                            'logs': [f"Searching for video content..."]
+                        })
+                        
+                    elif tool_name == "video_merge":
+                        progress = 80
+                        await self.update_job_status(job_message.jobId, job_message.userId, {
+                            'progress': progress,
+                            'logs': [f"Merging video segments..."]
+                        })
                 
-            except Exception as e:
-                logger.error(f"Error searching for query '{query}': {str(e)}")
-                continue
-        
-        return all_results[:5]  # Return top 5 results
-
-    async def create_video(self, segments: List[Dict[str, Any]], original_request: str) -> Dict[str, Any]:
-        """Create a video by merging selected segments"""
-        try:
-            # This would call the MCP server's video_merge tool
-            # For now, return mock result
-            return {
-                'success': True,
-                'message': 'Video created successfully',
-                'videoUrl': 'https://example.com/created-video.mp4',
-                'thumbnailUrl': 'https://example.com/thumbnail.jpg',
-                'description': f'Auto-created video based on: {original_request}',
-                'duration': sum(s.get('duration', 30000) for s in segments),
-                's3Path': 'path/to/merged-video.mp4'
-            }
+                # Capture streaming text output
+                if "data" in event:
+                    # This is streaming text output from the agent
+                    logger.debug(f"Agent output: {event['data']}")
+            
+            # Get final result from agent
+            final_result = self.agent(prompt)
+            
+            # Extract video information from the agent's response
+            video_result = self.extract_video_result(final_result.message, job_message.request)
+            
+            await self.update_job_status(job_message.jobId, job_message.userId, {
+                'status': 'completed',
+                'progress': 100,
+                'result': video_result,
+                'completedAt': datetime.now().isoformat(),
+                'logs': ['Video creation completed successfully']
+            })
+            
+            return video_result
             
         except Exception as e:
-            logger.error(f"Error creating video: {str(e)}")
+            logger.error(f"Streaming process failed for job {job_message.jobId}: {str(e)}")
             raise e
+    
+    def extract_video_result(self, agent_response: str, original_request: str) -> Dict[str, Any]:
+        """Extract structured video result from agent response"""
+        # This is a simplified extraction - the agent should provide structured information
+        # about the video creation process including the final video details
+        
+        # For now, return a basic structure that will be enhanced by the actual tool results
+        return {
+            'videoUrl': 'https://example.com/created-video.mp4',  # Will be populated by video_merge tool
+            'thumbnailUrl': 'https://example.com/thumbnail.jpg',
+            'description': agent_response,
+            'duration': 60000,  # Will be calculated from segments
+            's3Path': 'path/to/merged-video.mp4',
+            'originalRequest': original_request,
+            'agentResponse': agent_response
+        }
 
     async def update_job_status(self, job_id: str, user_id: str, updates: Dict[str, Any]):
         """Update job status in DynamoDB"""
@@ -263,8 +206,112 @@ agent = StrandsVideoAgent()
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
-    return {"status": "healthy", "timestamp": datetime.now().isoformat()}
+    """Health check endpoint with dependency verification"""
+    try:
+        # Basic health status
+        health_status = {
+            "status": "healthy",
+            "timestamp": datetime.now().isoformat(),
+            "service": "strands-agent",
+            "version": "1.0.0"
+        }
+        
+        # Check if required environment variables are present
+        required_env_vars = ['OPENSEARCH_ENDPOINT', 'VIDEO_BUCKET', 'JOBS_TABLE', 'INDEXES_TABLE', 'MCP_SERVER_URL']
+        missing_vars = [var for var in required_env_vars if not os.getenv(var)]
+        
+        if missing_vars:
+            # Critical environment variables missing - return 503 Service Unavailable
+            health_status["status"] = "unhealthy"
+            health_status["error"] = f"Missing critical environment variables: {missing_vars}"
+            logger.error(f"Health check failed: Missing env vars: {missing_vars}")
+            raise HTTPException(status_code=503, detail=health_status)
+        
+        # Check if SQS queue URL is configured (optional - just warning)
+        if JOB_QUEUE_URL:
+            health_status["sqs_queue_configured"] = True
+        else:
+            health_status["sqs_queue_configured"] = False
+            health_status["warnings"] = health_status.get("warnings", []) + ["SQS queue not configured - background processing disabled"]
+        
+        # Check MCP connection
+        try:
+            mcp_healthy = await validate_mcp_connection()
+            health_status["mcp_connection"] = "healthy" if mcp_healthy else "unhealthy"
+            if not mcp_healthy:
+                health_status["warnings"] = health_status.get("warnings", []) + ["MCP server connection failed"]
+        except Exception as e:
+            health_status["mcp_connection"] = "error"
+            health_status["warnings"] = health_status.get("warnings", []) + [f"MCP connection check failed: {str(e)}"]
+        
+        # Check Strands Agent initialization
+        try:
+            agent_info = get_agent_info()
+            health_status["strands_agent"] = {
+                "status": "initialized",
+                "model_id": agent_info["model_id"],
+                "tools": agent_info["tools"]
+            }
+        except Exception as e:
+            health_status["strands_agent"] = {
+                "status": "error",
+                "error": str(e)
+            }
+            health_status["warnings"] = health_status.get("warnings", []) + [f"Strands Agent check failed: {str(e)}"]
+            
+        # All critical checks passed - return 200 OK
+        return health_status
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions (like 503 above)
+        raise
+    except Exception as e:
+        # Unexpected error - return 500 Internal Server Error
+        logger.error(f"Health check failed with unexpected error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Health check failed: {str(e)}")
+
+# Add a simple root endpoint as well
+@app.get("/")
+async def root():
+    """Root endpoint"""
+    return {"message": "Strands Agent API", "status": "running", "version": "1.0.0"}
+
+@app.get("/agent/info")
+async def get_agent_info_endpoint():
+    """Get information about the Strands Agent configuration"""
+    try:
+        agent_info = get_agent_info()
+        
+        # Add MCP tools information
+        try:
+            available_tools = await get_available_tools()
+            agent_info["mcp_tools"] = available_tools
+        except Exception as e:
+            agent_info["mcp_tools_error"] = str(e)
+        
+        return agent_info
+    except Exception as e:
+        logger.error(f"Failed to get agent info: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get agent info: {str(e)}")
+
+@app.get("/agent/validate")
+async def validate_agent_endpoint():
+    """Validate agent setup and dependencies"""
+    try:
+        validation_results = await validate_agent_setup()
+        
+        # Determine overall status
+        all_healthy = all(validation_results.values())
+        status_code = 200 if all_healthy else 503
+        
+        return {
+            "status": "healthy" if all_healthy else "unhealthy",
+            "timestamp": datetime.now().isoformat(),
+            "validation_results": validation_results
+        }
+    except Exception as e:
+        logger.error(f"Agent validation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Agent validation failed: {str(e)}")
 
 @app.post("/process-job")
 async def process_job(job_message: JobMessage):
@@ -312,13 +359,3 @@ async def poll_sqs_queue():
         except Exception as e:
             logger.error(f"Error polling SQS queue: {str(e)}")
             await asyncio.sleep(30)
-
-@app.on_event("startup")
-async def startup_event():
-    """Start background tasks"""
-    if JOB_QUEUE_URL:
-        asyncio.create_task(poll_sqs_queue())
-        logger.info("Started SQS polling task")
-
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8080)
