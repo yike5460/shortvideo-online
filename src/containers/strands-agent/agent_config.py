@@ -3,7 +3,7 @@ import logging
 from typing import Dict, Any
 from strands import Agent
 from strands.models import BedrockModel
-from .video_tools import video_search, video_merge, validate_mcp_connection
+from video_tools import video_search, video_merge, validate_mcp_connection
 
 logger = logging.getLogger(__name__)
 

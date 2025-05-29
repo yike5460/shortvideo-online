@@ -1,5 +1,5 @@
 from strands import tool
-from .mcp_client import HTTPMCPClient
+from mcp_client import HTTPMCPClient
 import os
 import logging
 from typing import List, Dict, Any, Optional

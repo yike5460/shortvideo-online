@@ -167,16 +167,19 @@ export class StrandsAgentConstruct extends Construct {
       },
     });
 
-    // No port mappings needed - container only polls SQS and makes outbound API calls
+    // Add port mapping back - container serves FastAPI endpoints for health checks
+    container.addPortMappings({
+      containerPort: 8080,
+      protocol: ecs.Protocol.TCP,
+    });
 
-    // Create Fargate service (no ALB needed - container polls SQS internally)
+    // Create Fargate service with CloudWatch monitoring
     this.agentService = new ecs.FargateService(this, 'StrandsAgentService', {
       cluster: this.agentCluster,
       taskDefinition: taskDefinition,
       desiredCount: 1,
       assignPublicIp: false,
       serviceName: 'strands-agent-service',
-      // No health check grace period needed since no ALB
     });
 
     // Create Auto Scaling based on SQS queue depth and CPU utilization

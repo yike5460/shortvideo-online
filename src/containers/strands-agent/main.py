@@ -11,8 +11,8 @@ import uvicorn
 from datetime import datetime
 
 # Strands Agent imports
-from .agent_config import create_strands_agent, validate_agent_setup, get_agent_info
-from .video_tools import validate_mcp_connection, get_available_tools
+from agent_config import create_strands_agent, validate_agent_setup, get_agent_info
+from video_tools import validate_mcp_connection, get_available_tools
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
