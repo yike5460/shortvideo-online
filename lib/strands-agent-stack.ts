@@ -163,7 +163,11 @@ export class StrandsAgentConstruct extends Construct {
         INDEXES_TABLE: props.indexesTable.tableName,
         JOB_QUEUE_URL: this.jobQueue.queueUrl,
         BEDROCK_REGION: cdk.Stack.of(this).region,
+        // Keep MCP server URL for future reference (currently commented out in code)
         MCP_SERVER_URL: `${props.api.url}mcp`,
+        // Add direct API endpoints for custom tools
+        VIDEO_SEARCH_API_URL: `${props.api.url}video-search`,
+        VIDEO_MERGE_API_URL: `${props.api.url}video-merge`,
       },
     });
 

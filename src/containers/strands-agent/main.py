@@ -10,9 +10,16 @@ import boto3
 import uvicorn
 from datetime import datetime
 
-# Strands Agent imports
-from agent_config import create_strands_agent, validate_agent_setup, get_agent_info
-from video_tools import validate_mcp_connection, get_available_tools
+# Strands Agent imports - Fix relative import issue
+try:
+    # Try relative imports first (for package mode)
+    from .agent_config import create_strands_agent, validate_agent_setup, get_agent_info
+    print("DEBUG: Successfully imported with relative imports")
+except ImportError as e:
+    print(f"DEBUG: Relative import failed: {e}")
+    # Fallback to absolute imports (for script mode)
+    from agent_config import create_strands_agent, validate_agent_setup, get_agent_info
+    print("DEBUG: Successfully imported with absolute imports")
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -234,30 +241,33 @@ async def health_check():
             health_status["sqs_queue_configured"] = False
             health_status["warnings"] = health_status.get("warnings", []) + ["SQS queue not configured - background processing disabled"]
         
-        # Check MCP connection
+        # Validate MCP connection and agent setup
         try:
-            mcp_healthy = await validate_mcp_connection()
-            health_status["mcp_connection"] = "healthy" if mcp_healthy else "unhealthy"
-            if not mcp_healthy:
-                health_status["warnings"] = health_status.get("warnings", []) + ["MCP server connection failed"]
+            validation_results = await validate_agent_setup()
+            health_status["mcp_validation"] = validation_results
+            
+            if not all(validation_results.values()):
+                health_status["warnings"] = health_status.get("warnings", []) + ["Some MCP validation checks failed"]
+                
         except Exception as e:
-            health_status["mcp_connection"] = "error"
-            health_status["warnings"] = health_status.get("warnings", []) + [f"MCP connection check failed: {str(e)}"]
+            health_status["mcp_validation"] = {"error": str(e)}
+            health_status["warnings"] = health_status.get("warnings", []) + [f"MCP validation failed: {str(e)}"]
         
-        # Check Strands Agent initialization
+        # Check Strands Agent configuration
         try:
             agent_info = get_agent_info()
             health_status["strands_agent"] = {
-                "status": "initialized",
+                "status": "configured",
                 "model_id": agent_info["model_id"],
-                "tools": agent_info["tools"]
+                "integration_type": agent_info["integration_type"],
+                "mcp_server_url": agent_info["mcp_server_url"]
             }
         except Exception as e:
             health_status["strands_agent"] = {
                 "status": "error",
                 "error": str(e)
             }
-            health_status["warnings"] = health_status.get("warnings", []) + [f"Strands Agent check failed: {str(e)}"]
+            health_status["warnings"] = health_status.get("warnings", []) + [f"Strands Agent info failed: {str(e)}"]
             
         # All critical checks passed - return 200 OK
         return health_status
@@ -282,12 +292,12 @@ async def get_agent_info_endpoint():
     try:
         agent_info = get_agent_info()
         
-        # Add MCP tools information
+        # Add MCP validation information
         try:
-            available_tools = await get_available_tools()
-            agent_info["mcp_tools"] = available_tools
+            validation_results = await validate_agent_setup()
+            agent_info["mcp_validation"] = validation_results
         except Exception as e:
-            agent_info["mcp_tools_error"] = str(e)
+            agent_info["mcp_validation_error"] = str(e)
         
         return agent_info
     except Exception as e:
