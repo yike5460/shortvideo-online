@@ -89,8 +89,23 @@ class StrandsVideoAgent:
             # Extract index from options or use default
             selected_index = job_message.options.get('selectedIndex', 'videos') if job_message.options else 'videos'
             
-            # Create prompt for Strands Agent with index specification
-            prompt = f"""Create a short video based on this request: "{job_message.request}"
+            # Check for fast mode to determine prompt style
+            use_fast_mode = job_message.options.get('fastMode', True) if job_message.options else True
+            
+            if use_fast_mode:
+                # Fast mode: Direct, action-oriented prompt
+                prompt = f"""EXECUTE IMMEDIATELY: Create video for "{job_message.request}"
+
+ACTIONS:
+1. video_search(query="{job_message.request}", indexes=["{selected_index}"], top_k=5)
+2. Select top 3 segments by confidence
+3. video_merge(segments=selected, output_name="auto_{job_message.jobId[:8]}", resolution="720p")
+
+INDEX: {selected_index}
+MODE: Direct execution, minimal cycles"""
+            else:
+                # Standard mode: Detailed, conversational prompt
+                prompt = f"""Create a short video based on this request: "{job_message.request}"
 
 Please search for videos using index '{selected_index}' and follow these steps:
 1. Search for relevant video content in the '{selected_index}' index that matches this request
@@ -118,12 +133,16 @@ Remember to be thorough in your search within the specified index and selective 
             raise e
 
     async def process_with_streaming(self, prompt: str, job_message: JobMessage) -> Dict[str, Any]:
-        """Process request with progress streaming using Strands Agent"""
+        """Process request with streaming using Strands Agent"""
         progress = 30
         video_result = None
         
         try:
-            logger.info(f"Starting Strands Agent processing for job {job_message.jobId}")
+            # Determine processing mode from prompt
+            is_fast_mode = "EXECUTE IMMEDIATELY" in prompt
+            mode_name = "fast mode" if is_fast_mode else "standard mode"
+            
+            logger.info(f"Starting Strands Agent processing for job {job_message.jobId} using {mode_name}")
             
             # Use async streaming from Strands Agent
             async for event in self.agent.stream_async(prompt):
@@ -135,19 +154,18 @@ Remember to be thorough in your search within the specified index and selective 
                         progress = 50
                         await self.update_job_status(job_message.jobId, job_message.userId, {
                             'progress': progress,
-                            'logs': [f"Searching for video content..."]
+                            'logs': [f"Searching for video content using {mode_name}..."]
                         })
                         
                     elif tool_name == "video_merge":
                         progress = 80
                         await self.update_job_status(job_message.jobId, job_message.userId, {
                             'progress': progress,
-                            'logs': [f"Merging video segments..."]
+                            'logs': [f"Merging video segments using {mode_name}..."]
                         })
                 
                 # Capture streaming text output
                 if "data" in event:
-                    # This is streaming text output from the agent
                     logger.debug(f"Agent output: {event['data']}")
             
             # Get final result from agent
@@ -155,19 +173,23 @@ Remember to be thorough in your search within the specified index and selective 
             
             # Extract video information from the agent's response
             video_result = self.extract_video_result(final_result.message, job_message.request)
+            video_result['processingMode'] = mode_name
             
             await self.update_job_status(job_message.jobId, job_message.userId, {
                 'status': 'completed',
                 'progress': 100,
                 'result': video_result,
                 'completedAt': datetime.now().isoformat(),
-                'logs': ['Video creation completed successfully']
+                'logs': [f'Video creation completed using {mode_name}']
             })
             
             return video_result
             
         except Exception as e:
             logger.error(f"Streaming process failed for job {job_message.jobId}: {str(e)}")
+            # Check if it's a throttling error
+            if "ThrottlingException" in str(e) or "Too many tokens" in str(e):
+                logger.error("Bedrock throttling detected - try using fast mode")
             raise e
     
     def extract_video_result(self, agent_response: str, original_request: str) -> Dict[str, Any]:

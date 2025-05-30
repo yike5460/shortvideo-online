@@ -25,7 +25,8 @@ export default function CreationForm({ onSubmit, isProcessing }: CreationFormPro
   const [options, setOptions] = useState<CreationOptions>({
     maxDuration: 60,
     preferredIndexes: ['videos'],
-    outputFormat: 'mp4'
+    outputFormat: 'mp4',
+    fastMode: true  // Default to fast mode to avoid throttling
   })
 
   // Fetch available indexes
@@ -238,6 +239,24 @@ export default function CreationForm({ onSubmit, isProcessing }: CreationFormPro
                 <option value="webm">WebM</option>
                 <option value="mov">MOV</option>
               </select>
+            </div>
+
+            <div>
+              <label className="flex items-center">
+                <input
+                  type="checkbox"
+                  checked={options.fastMode}
+                  onChange={(e) => setOptions(prev => ({ ...prev, fastMode: e.target.checked }))}
+                  className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
+                  disabled={isProcessing}
+                />
+                <span className="ml-2 text-sm font-medium text-gray-700">
+                  Fast Mode (Recommended)
+                </span>
+              </label>
+              <p className="mt-1 text-sm text-gray-500">
+                Uses direct tool execution to avoid throttling and reduce processing time
+              </p>
             </div>
           </div>
         )}

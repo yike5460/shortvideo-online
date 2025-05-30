@@ -23,6 +23,7 @@ export interface CreationOptions {
   preferredIndexes?: string[];
   selectedIndex?: string;
   outputFormat?: string;
+  fastMode?: boolean;
 }
 
 export interface CreateJobRequest {
