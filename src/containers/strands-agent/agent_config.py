@@ -18,8 +18,9 @@ def create_strands_agent() -> Agent:
     """Create Strands Agent with custom video tools"""
     
     try:
-        # Create Bedrock model with boto session
-        session = boto3.Session(region_name=os.getenv('AWS_REGION', 'us-east-1'))
+        # Create Bedrock model with boto session, fixed to region us-east-1 for now
+        # session = boto3.Session(region_name=os.getenv('AWS_REGION', 'us-east-1'))
+        session = boto3.Session(region_name='us-east-1')
         bedrock_model = BedrockModel(
             model_id="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
             boto_session=session,
@@ -103,7 +104,7 @@ Video merge jobs are processed asynchronously. Always provide the job ID and exp
 
 Be helpful, creative, and thorough in your responses."""
 
-async def validate_agent_setup() -> Dict[str, bool]:
+def validate_agent_setup() -> Dict[str, bool]:
     """Validate that all components needed for the agent are working"""
     validation_results = {
         'api_endpoints': False,
@@ -115,7 +116,7 @@ async def validate_agent_setup() -> Dict[str, bool]:
     try:
         # Test API endpoints
         logger.info("Validating API endpoints...")
-        api_validation = await validate_api_endpoints()
+        api_validation = validate_api_endpoints()
         validation_results['api_endpoints'] = all(api_validation.values())
         
         if validation_results['api_endpoints']:

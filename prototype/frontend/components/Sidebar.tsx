@@ -9,7 +9,7 @@ const navigation = [
   { name: 'Search', href: '/', icon: SearchIcon },
   { name: 'My Videos', href: '/videos', icon: VideoIcon },
   { name: 'Create Index', href: '/create', icon: PlusIcon },
-  { name: 'Auto Creation (Preview)', href: '/auto-create', icon: SparklesIcon },
+  { name: 'Agentic Creation (Preview)', href: '/auto-create', icon: SparklesIcon },
   { name: 'Ask', href: '/ask', icon: QuestionIcon },
 ]
 

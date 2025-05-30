@@ -2,8 +2,6 @@
 strands-agents==0.1.5
 # MCP client support (kept for future reference, currently commented out)
 mcp==1.9.1
-# HTTP client for direct API calls
-aiohttp
 # Existing dependencies
 fastapi
 uvicorn

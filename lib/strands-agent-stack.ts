@@ -105,6 +105,8 @@ export class StrandsAgentConstruct extends Construct {
       actions: [
         'bedrock:InvokeModel',
         'bedrock:InvokeModelWithResponseStream',
+        'bedrock:ListFoundationModels',
+        'bedrock:GetFoundationModel',
       ],
       resources: ['*'],
     }));
@@ -166,8 +168,8 @@ export class StrandsAgentConstruct extends Construct {
         // Keep MCP server URL for future reference (currently commented out in code)
         MCP_SERVER_URL: `${props.api.url}mcp`,
         // Add direct API endpoints for custom tools
-        VIDEO_SEARCH_API_URL: `${props.api.url}video-search`,
-        VIDEO_MERGE_API_URL: `${props.api.url}video-merge`,
+        VIDEO_SEARCH_API_URL: `${props.api.url}search`,
+        VIDEO_MERGE_API_URL: `${props.api.url}videos/merge`,
       },
     });
 
@@ -368,5 +370,56 @@ export class StrandsAgentConstruct extends Construct {
     // Add MCP server endpoint
     const mcpResource = api.root.addResource('mcp');
     addMethodWithCors(mcpResource, 'POST', this.mcpServerLambda);
+  }
+
+  /**
+   * Add CDK outputs for debugging
+   */
+  public addOutputs(): void {
+    // Output ECS cluster information
+    new cdk.CfnOutput(this, 'StrandsAgentClusterName', {
+      value: this.agentCluster.clusterName,
+      description: 'Name of the ECS cluster running Strands Agent',
+      exportName: 'StrandsAgentClusterName'
+    });
+
+    // Output ECS service information
+    new cdk.CfnOutput(this, 'StrandsAgentServiceName', {
+      value: this.agentService.serviceName,
+      description: 'Name of the ECS service running Strands Agent',
+      exportName: 'StrandsAgentServiceName'
+    });
+
+    // Output ECS service ARN for debugging
+    new cdk.CfnOutput(this, 'StrandsAgentServiceArn', {
+      value: this.agentService.serviceArn,
+      description: 'ARN of the ECS service running Strands Agent',
+      exportName: 'StrandsAgentServiceArn'
+    });
+
+    // Output CloudWatch log group for easy access
+    new cdk.CfnOutput(this, 'StrandsAgentLogGroupValue', {
+      value: '/ecs/strands-agent',
+      description: 'CloudWatch log group for Strands Agent container logs',
+      exportName: 'StrandsAgentLogGroup'
+    });
+
+    // Output AWS CLI commands for debugging
+    new cdk.CfnOutput(this, 'StrandsAgentDebugCommands', {
+      value: [
+        `# List running tasks:`,
+        // Extrac the latter part, e.g. strands-agent-cluster/8d09967c20f64ee497bf04d9256b4cb2"
+        `aws ecs list-tasks --cluster ${this.agentCluster.clusterName} --service-name ${this.agentService.serviceName}`,
+        `# Tail the logs:`,
+        `aws logs tail "/ecs/strands-agent" --log-stream-names "strands-agent/StrandsAgentContainer/<task-id>" --region ap-northeast-1 --follow`
+      ].join('\n'),
+      description: 'AWS CLI commands for debugging Strands Agent'
+    });
+
+    // Output container health check endpoint
+    new cdk.CfnOutput(this, 'StrandsAgentHealthCheck', {
+      value: 'http://container-ip:8080/health',
+      description: 'Health check endpoint for Strands Agent container (replace container-ip with actual IP)'
+    });
   }
 }

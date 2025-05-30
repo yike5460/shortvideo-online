@@ -21,6 +21,7 @@ export interface AutoCreateJob {
 export interface CreationOptions {
   maxDuration?: number;
   preferredIndexes?: string[];
+  selectedIndex?: string;
   outputFormat?: string;
 }
 

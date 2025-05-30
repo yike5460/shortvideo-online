@@ -1,7 +1,15 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { CreationOptions } from '@/lib/auto-create/types'
+
+// Add Index interface
+interface Index {
+  id: string;
+  name: string;
+  status: 'ready' | 'indexing' | 'error';
+  videoCount: number;
+}
 
 interface CreationFormProps {
   onSubmit: (request: string, options?: CreationOptions) => void;
@@ -11,11 +19,76 @@ interface CreationFormProps {
 export default function CreationForm({ onSubmit, isProcessing }: CreationFormProps) {
   const [request, setRequest] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
+  const [indexes, setIndexes] = useState<Index[]>([])
+  const [selectedIndex, setSelectedIndex] = useState<string>('videos')
+  const [isLoadingIndexes, setIsLoadingIndexes] = useState(false)
   const [options, setOptions] = useState<CreationOptions>({
     maxDuration: 60,
-    preferredIndexes: [],
+    preferredIndexes: ['videos'],
     outputFormat: 'mp4'
   })
+
+  // Fetch available indexes
+  useEffect(() => {
+    const fetchIndexes = async () => {
+      setIsLoadingIndexes(true)
+      try {
+        const API_ENDPOINT = process.env.NEXT_PUBLIC_API_URL
+        const response = await fetch(`${API_ENDPOINT}/indexes`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        })
+        
+        if (response.ok) {
+          const data = await response.json()
+          
+          // Transform data to Index format (similar to main page.tsx)
+          const indexMap = new Map()
+          data.forEach((item: any, i: number) => {
+            if (!indexMap.has(item.indexId)) {
+              indexMap.set(item.indexId, {
+                id: item.indexId || `index-${i}`,
+                name: `Index: ${item.indexId || 'Unknown'}`,
+                status: item.video_status === 'error' ? 'error' : 'ready',
+                videoCount: item.videoCount || 0
+              })
+            } else if (item.videoCount) {
+              const existing = indexMap.get(item.indexId)
+              existing.videoCount = item.videoCount
+              indexMap.set(item.indexId, existing)
+            }
+          })
+          
+          const transformedIndexes = Array.from(indexMap.values())
+          setIndexes(transformedIndexes)
+          
+          // Set default selected index if available
+          if (transformedIndexes.length > 0) {
+            const defaultIndex = transformedIndexes.find(idx => idx.id === 'videos') || transformedIndexes[0]
+            setSelectedIndex(defaultIndex.id)
+            setOptions(prev => ({ ...prev, preferredIndexes: [defaultIndex.id] }))
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching indexes:', error)
+      } finally {
+        setIsLoadingIndexes(false)
+      }
+    }
+    
+    fetchIndexes()
+  }, [])
+
+  // Update options when selected index changes
+  useEffect(() => {
+    setOptions(prev => ({
+      ...prev,
+      preferredIndexes: [selectedIndex],
+      selectedIndex: selectedIndex // Add this for the agent
+    }))
+  }, [selectedIndex])
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -60,6 +133,36 @@ export default function CreationForm({ onSubmit, isProcessing }: CreationFormPro
           />
           <p className="mt-1 text-sm text-gray-500">
             Be as specific as possible for better results
+          </p>
+        </div>
+
+        {/* Index Selection */}
+        <div>
+          <label htmlFor="indexSelect" className="block text-sm font-medium text-gray-700 mb-2">
+            Video Index *
+          </label>
+          <select
+            id="indexSelect"
+            value={selectedIndex}
+            onChange={(e) => setSelectedIndex(e.target.value)}
+            className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+            disabled={isProcessing || isLoadingIndexes}
+            required
+          >
+            {isLoadingIndexes ? (
+              <option value="">Loading indexes...</option>
+            ) : indexes.length > 0 ? (
+              indexes.map((index) => (
+                <option key={index.id} value={index.id}>
+                  {index.name} ({index.videoCount} videos)
+                </option>
+              ))
+            ) : (
+              <option value="videos">Default Index (videos)</option>
+            )}
+          </select>
+          <p className="mt-1 text-sm text-gray-500">
+            Select which video index to search for content
           </p>
         </div>
 

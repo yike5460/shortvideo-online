@@ -1,5 +1,5 @@
 from strands import tool
-import aiohttp
+import requests
 import os
 import logging
 from typing import List, Dict, Any, Optional
@@ -11,7 +11,7 @@ VIDEO_SEARCH_API_URL = os.getenv('VIDEO_SEARCH_API_URL')
 VIDEO_MERGE_API_URL = os.getenv('VIDEO_MERGE_API_URL')
 
 @tool
-async def video_search(
+def video_search(
     query: str,
     indexes: Optional[List[str]] = None,
     top_k: int = 5,
@@ -41,12 +41,22 @@ async def video_search(
         if not VIDEO_SEARCH_API_URL:
             raise ValueError("VIDEO_SEARCH_API_URL environment variable is not set")
         
-        logger.info(f"Searching videos with query: '{query}' in indexes: {indexes}")
+        # Handle indexes parameter - default to 'videos' if not provided
+        if not indexes:
+            indexes = ['videos']
+            logger.info(f"No indexes specified, defaulting to: {indexes}")
         
-        # Prepare search request matching the video-search Lambda API
+        logger.info(f"Searching videos with query: '{query}' in indexes: {indexes}")
+        logger.info(f"Search parameters - top_k: {top_k}, min_confidence: {min_confidence}")
+        
+        # Prepare search request matching the frontend API format (from page.tsx)
         search_request = {
             "searchType": "text",
             "searchQuery": query,
+            "selectedIndex": indexes[0] if indexes else "videos",
+            "advancedSearch": True,  # Enable advanced search like frontend
+            "skipValidation": False,  # Enable validation for better results
+            # Additional parameters for better search results
             "exactMatch": False,
             "topK": top_k,
             "weights": {
@@ -56,66 +66,64 @@ async def video_search(
                 "audio": 0.1
             },
             "minConfidence": min_confidence,
-            "selectedIndex": indexes[0] if indexes else "videos",
-            "advancedSearch": True,
             "visualSearch": True,
-            "audioSearch": True,
-            "skipValidation": False  # Enable validation for better results
+            "audioSearch": True
         }
         
-        # Make HTTP request to video search API
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                VIDEO_SEARCH_API_URL,
-                json=search_request,
-                headers={
-                    "Content-Type": "application/json",
-                    "Accept": "application/json"
-                }
-            ) as response:
-                if response.status == 200:
-                    results = await response.json()
-                    logger.info(f"Found {len(results)} video results for query: '{query}'")
-                    
-                    # Transform results to a more tool-friendly format
-                    formatted_results = []
-                    for video in results:
-                        # Extract segments from each video
-                        for segment in video.get('segments', []):
-                            formatted_results.append({
-                                'videoId': video.get('id'),
-                                'segmentId': segment.get('segment_id'),
-                                'indexId': video.get('indexId', 'videos'),
-                                'title': video.get('title', ''),
-                                'description': video.get('description', ''),
-                                'confidence': segment.get('confidence', 0),
-                                'duration': segment.get('duration', 0),
-                                'startTime': segment.get('start_time', 0),
-                                'endTime': segment.get('end_time', 0),
-                                's3Path': segment.get('segment_video_s3_path', ''),
-                                'videoUrl': segment.get('segment_video_preview_url', ''),
-                                'thumbnailUrl': segment.get('segment_video_thumbnail_url', ''),
-                                'videoTitle': video.get('title', ''),
-                                'videoDescription': video.get('description', '')
-                            })
-                    
-                    # Sort by confidence score (highest first)
-                    formatted_results.sort(key=lambda x: x.get('confidence', 0), reverse=True)
-                    
-                    logger.info(f"Returning {len(formatted_results)} formatted video segments")
-                    return formatted_results
-                    
-                else:
-                    error_text = await response.text()
-                    logger.error(f"Video search API failed: {response.status} - {error_text}")
-                    raise Exception(f"Video search failed: {response.status} - {error_text}")
+        # Make HTTP request to video search API using requests (synchronous)
+        response = requests.post(
+            VIDEO_SEARCH_API_URL,
+            json=search_request,
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            },
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            results = response.json()
+            logger.info(f"Found {len(results)} video results for query: '{query}'")
+            
+            # Transform results to a more tool-friendly format
+            formatted_results = []
+            for video in results:
+                # Extract segments from each video
+                for segment in video.get('segments', []):
+                    formatted_results.append({
+                        'videoId': video.get('id'),
+                        'segmentId': segment.get('segment_id'),
+                        'indexId': video.get('indexId', 'videos'),
+                        'title': video.get('title', ''),
+                        'description': video.get('description', ''),
+                        'confidence': segment.get('confidence', 0),
+                        'duration': segment.get('duration', 0),
+                        'startTime': segment.get('start_time', 0),
+                        'endTime': segment.get('end_time', 0),
+                        's3Path': segment.get('segment_video_s3_path', ''),
+                        'videoUrl': segment.get('segment_video_preview_url', ''),
+                        'thumbnailUrl': segment.get('segment_video_thumbnail_url', ''),
+                        'videoTitle': video.get('title', ''),
+                        'videoDescription': video.get('description', '')
+                    })
+            
+            # Sort by confidence score (highest first)
+            formatted_results.sort(key=lambda x: x.get('confidence', 0), reverse=True)
+            
+            logger.info(f"Returning {len(formatted_results)} formatted video segments")
+            return formatted_results
+            
+        else:
+            error_text = response.text
+            logger.error(f"Video search API failed: {response.status_code} - {error_text}")
+            raise Exception(f"Video search failed: {response.status_code} - {error_text}")
                     
     except Exception as e:
         logger.error(f"Video search failed for query '{query}': {str(e)}")
         raise Exception(f"Failed to search videos: {str(e)}")
 
 @tool
-async def video_merge(
+def video_merge(
     segments: List[Dict[str, Any]],
     output_name: str,
     resolution: str = "720p",
@@ -180,37 +188,38 @@ async def video_merge(
             }
         }
         
-        # Make HTTP request to video merge API
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                VIDEO_MERGE_API_URL,
-                json=merge_request,
-                headers={
-                    "Content-Type": "application/json",
-                    "Accept": "application/json"
-                }
-            ) as response:
-                if response.status == 200:
-                    result = await response.json()
-                    logger.info(f"Started video merge job: {result.get('jobId')} for '{output_name}'")
-                    
-                    # Return formatted response
-                    return {
-                        'success': True,
-                        'message': result.get('message', 'Video merge job created successfully'),
-                        'jobId': result.get('jobId'),
-                        'userId': result.get('userId'),
-                        'status': result.get('status', 'queued'),
-                        'customName': result.get('customName', output_name),
-                        'segmentCount': len(segments),
-                        'resolution': resolution,
-                        'transitionType': transition_type
-                    }
-                    
-                else:
-                    error_text = await response.text()
-                    logger.error(f"Video merge API failed: {response.status} - {error_text}")
-                    raise Exception(f"Video merge failed: {response.status} - {error_text}")
+        # Make HTTP request to video merge API using requests (synchronous)
+        response = requests.post(
+            VIDEO_MERGE_API_URL,
+            json=merge_request,
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            },
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            logger.info(f"Started video merge job: {result.get('jobId')} for '{output_name}'")
+            
+            # Return formatted response
+            return {
+                'success': True,
+                'message': result.get('message', 'Video merge job created successfully'),
+                'jobId': result.get('jobId'),
+                'userId': result.get('userId'),
+                'status': result.get('status', 'queued'),
+                'customName': result.get('customName', output_name),
+                'segmentCount': len(segments),
+                'resolution': resolution,
+                'transitionType': transition_type
+            }
+            
+        else:
+            error_text = response.text
+            logger.error(f"Video merge API failed: {response.status_code} - {error_text}")
+            raise Exception(f"Video merge failed: {response.status_code} - {error_text}")
                     
     except ValueError as e:
         logger.error(f"Video merge validation error: {str(e)}")
@@ -220,7 +229,7 @@ async def video_merge(
         raise Exception(f"Failed to merge videos: {str(e)}")
 
 # Utility function for validation
-async def validate_api_endpoints() -> Dict[str, bool]:
+def validate_api_endpoints() -> Dict[str, bool]:
     """Validate that API endpoints are accessible"""
     validation_results = {
         'video_search_api': False,
@@ -229,15 +238,13 @@ async def validate_api_endpoints() -> Dict[str, bool]:
     
     try:
         if VIDEO_SEARCH_API_URL:
-            async with aiohttp.ClientSession() as session:
-                # Try a simple OPTIONS request to check if endpoint is accessible
-                async with session.options(VIDEO_SEARCH_API_URL) as response:
-                    validation_results['video_search_api'] = response.status in [200, 204, 405]
+            # Try a simple OPTIONS request to check if endpoint is accessible
+            response = requests.options(VIDEO_SEARCH_API_URL, timeout=10)
+            validation_results['video_search_api'] = response.status_code in [200, 204, 405]
         
         if VIDEO_MERGE_API_URL:
-            async with aiohttp.ClientSession() as session:
-                async with session.options(VIDEO_MERGE_API_URL) as response:
-                    validation_results['video_merge_api'] = response.status in [200, 204, 405]
+            response = requests.options(VIDEO_MERGE_API_URL, timeout=10)
+            validation_results['video_merge_api'] = response.status_code in [200, 204, 405]
                     
     except Exception as e:
         logger.error(f"API endpoint validation failed: {str(e)}")

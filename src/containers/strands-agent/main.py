@@ -86,18 +86,22 @@ class StrandsVideoAgent:
                 'logs': [f"Started processing at {datetime.now().isoformat()}"]
             })
 
-            # Create prompt for Strands Agent
+            # Extract index from options or use default
+            selected_index = job_message.options.get('selectedIndex', 'videos') if job_message.options else 'videos'
+            
+            # Create prompt for Strands Agent with index specification
             prompt = f"""Create a short video based on this request: "{job_message.request}"
 
-Please:
-1. Search for relevant video content in the library that matches this request
+Please search for videos using index '{selected_index}' and follow these steps:
+1. Search for relevant video content in the '{selected_index}' index that matches this request
 2. Select the best segments that create a coherent narrative
 3. Merge them into a cohesive video with appropriate transitions
 4. Provide details about the final video including description and key segments used
 
 User options: {json.dumps(job_message.options, indent=2) if job_message.options else 'None specified'}
+Selected video index: {selected_index}
 
-Remember to be thorough in your search and selective in choosing segments that best match the user's intent."""
+Remember to be thorough in your search within the specified index and selective in choosing segments that best match the user's intent."""
 
             # Process with streaming for progress updates
             result = await self.process_with_streaming(prompt, job_message)
@@ -353,7 +357,9 @@ async def poll_sqs_queue():
                 try:
                     body = json.loads(message['Body'])
                     job_message = JobMessage(**body)
-                    
+                    logger.info(f"Processing job {job_message.jobId}: {job_message.request}")
+                    logger.info(f"Job message: {job_message}")
+
                     # Process the job
                     await agent.process_request(job_message)
                     

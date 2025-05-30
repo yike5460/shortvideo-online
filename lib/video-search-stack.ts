@@ -134,6 +134,11 @@ export class VideoSearchStack extends cdk.Stack {
     // Create Strands Agent construct
     this.strandsAgentConstruct = this.createStrandsAgentConstruct(api, deploymentEnv);
 
+    // Add Strands Agent debugging outputs
+    if (this.strandsAgentConstruct) {
+      this.strandsAgentConstruct.addOutputs();
+    }
+
     // Set up permissions
     // this.setupPermissions(lambdaFunctions, this.videoEmbeddingService, this.rekognitionTopic, this.indexesTable);
     this.setupPermissions(lambdaFunctions, this.rekognitionTopic, this.indexesTable);

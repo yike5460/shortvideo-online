@@ -103,7 +103,7 @@ export default function AutoCreatePage() {
         {/* Header */}
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-gray-900 mb-2">
-            Auto Creation (Preview)
+            Agentic Creation (Preview)
           </h1>
           <p className="text-gray-600">
             Create short videos using natural language. Describe what you want, and our AI will search your video library and create it for you.
