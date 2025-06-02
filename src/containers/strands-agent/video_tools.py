@@ -60,10 +60,11 @@ def video_search(
             "exactMatch": False,
             "topK": top_k,
             "weights": {
-                "text": 0.4,
-                "image": 0.3,
-                "video": 0.2,
-                "audio": 0.1
+                # Align with backend weights implementation in index.ts or video_search Lambda
+                "video": 0.5,
+                "audio": 0.5,
+                "text": 0,
+                "image": 0
             },
             "minConfidence": min_confidence,
             "visualSearch": True,
@@ -85,6 +86,10 @@ def video_search(
             results = response.json()
             logger.info(f"Found {len(results)} video results for query: '{query}'")
             
+            # Use the requested index as fallback instead of hardcoded 'videos'
+            requested_index = indexes[0] if indexes else 'videos'
+            logger.info(f"Using requested index '{requested_index}' as fallback for indexId")
+            
             # Transform results to a more tool-friendly format
             formatted_results = []
             for video in results:
@@ -93,7 +98,7 @@ def video_search(
                     formatted_results.append({
                         'videoId': video.get('id'),
                         'segmentId': segment.get('segment_id'),
-                        'indexId': video.get('indexId', 'videos'),
+                        'indexId': video.get('indexId', requested_index),  # Use requested index as fallback
                         'title': video.get('title', ''),
                         'description': video.get('description', ''),
                         'confidence': segment.get('confidence', 0),
@@ -187,7 +192,7 @@ def video_merge(
                 "defaultTransitionDuration": transition_duration
             }
         }
-        
+        logger.info(f"The video merge request is: {merge_request}")
         # Make HTTP request to video merge API using requests (synchronous)
         response = requests.post(
             VIDEO_MERGE_API_URL,

@@ -731,7 +731,7 @@ async function validateVideos(videosWithScores: [string, number][], textDescript
 }
 
 // Update the transform function to normalize OpenSearch confidence scores, such score is relative and per index and per query, calculated using TF-IDF by default
-const transformSearchResults = async (hits: any[]): Promise<VideoResult[]> => {
+const transformSearchResults = async (hits: any[], selectedIndex?: string): Promise<VideoResult[]> => {
 
   // Find the max video score for normalization across all videos
   const maxVideoScore = Math.max(...hits.map(hit => hit._score || 0));
@@ -865,7 +865,7 @@ const transformSearchResults = async (hits: any[]): Promise<VideoResult[]> => {
       size: hit._source.video_size || 0,
       segments: sortedSegments,
       searchConfidence: normalizedVideoScore,
-      indexId: hit._source.video_index || 'videos'
+      indexId: selectedIndex || hit._source.video_index || 'videos'  // Use selectedIndex from request first
       // Removed video_objects field - not needed in search results
     };
   }));
@@ -1068,7 +1068,7 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
           console.log(`k-NN search returned ${body.hits.total?.value || 0} results`);
           
           // Transform results to match VideoResult interface
-          const results: VideoResult[] = await transformSearchResults(body.hits.hits);
+          const results: VideoResult[] = await transformSearchResults(body.hits.hits, searchQuery.selectedIndex);
           
           // Apply minConfidence filtering in post-processing
           let filteredResults = results;

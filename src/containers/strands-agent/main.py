@@ -379,6 +379,7 @@ async def poll_sqs_queue():
                 try:
                     body = json.loads(message['Body'])
                     job_message = JobMessage(**body)
+                    logger.info(f"Received job message: {job_message}")
                     logger.info(f"Processing job {job_message.jobId}: {job_message.request}")
                     logger.info(f"Job message: {job_message}")
 

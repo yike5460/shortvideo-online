@@ -6,9 +6,9 @@ import { useAuth } from '@/lib/auth/AuthContext'
 import { cn } from '@/lib/utils'
 
 const navigation = [
-  { name: 'Search', href: '/', icon: SearchIcon },
-  { name: 'My Videos', href: '/videos', icon: VideoIcon },
   { name: 'Create Index', href: '/create', icon: PlusIcon },
+  { name: 'My Videos', href: '/videos', icon: VideoIcon },  
+  { name: 'Search', href: '/', icon: SearchIcon },
   { name: 'Agentic Creation (Preview)', href: '/auto-create', icon: SparklesIcon },
   { name: 'Ask', href: '/ask', icon: QuestionIcon },
 ]
