@@ -17,6 +17,7 @@ export interface MergeParams {
   indexId: string;
   videoId: string;
   segmentIds: string[];
+  segmentsData?: VideoSegment[];  // Add support for complete segment data
   mergedName?: string;
   userId?: string;
   mergeOptions?: MergeOptions;

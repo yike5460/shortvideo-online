@@ -172,13 +172,25 @@ def video_merge(
             if missing_fields:
                 raise ValueError(f"Segment {i+1} missing required fields: {missing_fields}")
         
-        # Prepare merge request matching the video-merge Lambda API
+        # Prepare merge request matching the video-merge Lambda API with complete segment data
         merge_request = {
             "items": [
                 {
                     "indexId": segment.get("indexId"),
                     "videoId": segment.get("videoId"),
                     "segmentId": segment.get("segmentId"),
+                    "segmentData": {
+                        "segment_id": segment.get("segmentId"),
+                        "video_id": segment.get("videoId"),
+                        "start_time": segment.get("startTime", 0),
+                        "end_time": segment.get("endTime", 0),
+                        "duration": segment.get("duration", 0),
+                        "segment_video_s3_path": segment.get("s3Path"),
+                        "segment_video_preview_url": segment.get("videoUrl"),
+                        "segment_video_thumbnail_s3_path": segment.get("thumbnailUrl", "").replace("segment_video_thumbnail_url", "segment_video_thumbnail_s3_path") if segment.get("thumbnailUrl") else None,
+                        "segment_video_thumbnail_url": segment.get("thumbnailUrl"),
+                        "confidence": segment.get("confidence", 0)
+                    },
                     "transitionType": transition_type,
                     "transitionDuration": transition_duration
                 }

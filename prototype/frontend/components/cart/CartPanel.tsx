@@ -100,9 +100,8 @@ export const CartPanel: React.FC<CartPanelProps> = ({ isOpen, onClose, className
       // Get segment IDs for the API call
       const segmentIds = selected.map(item => item.segment.segment_id!);
       
-      // Extract the actual video ID from the first segment ID
-      // Assuming segment_id format is [videoId]_segment_[segmentNumber]
-      const extractedVideoId = segmentIds[0].split('_segment_')[0];
+      // Use the video_id from the segment data (this is the correct OpenSearch document ID)
+      const extractedVideoId = selected[0].segment.video_id;
       
       // Use the selectedIndex if available, otherwise fall back to the item's indexId
       const indexId = firstItem.selectedIndex || firstItem.indexId;
@@ -112,11 +111,12 @@ export const CartPanel: React.FC<CartPanelProps> = ({ isOpen, onClose, className
         ? customMergeName.trim()
         : `cart_merged_${Date.now()}`;
       
-      // Create merge parameters
+      // Create merge parameters with complete segment data
       const mergeParams = {
         indexId,
         videoId: extractedVideoId,
         segmentIds,
+        segmentsData: selected.map(item => item.segment), // Pass complete segment data
         mergedName,
         userId,
         mergeOptions: {

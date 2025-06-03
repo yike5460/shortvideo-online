@@ -826,7 +826,7 @@ const transformSearchResults = async (hits: any[], selectedIndex?: string): Prom
       
       return {
         segment_id: segment.segment_id,
-        video_id: hit._id,
+        video_id: hit._source.video_id,
         start_time: segment.start_time,
         end_time: segment.end_time,
         duration: segment.duration,

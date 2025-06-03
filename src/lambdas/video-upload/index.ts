@@ -278,7 +278,7 @@ async function handleListVideos(event: APIGatewayProxyEvent): Promise<LambdaResp
     const sourceFields = [
       'video_id',
       'video_index',
-      'video_title', 
+      'video_title',
       'video_description',
       'video_s3_path',
       'video_preview_url',
@@ -289,6 +289,12 @@ async function handleListVideos(event: APIGatewayProxyEvent): Promise<LambdaResp
       'created_at',
       'video_thumbnail_s3_path',
       'video_thumbnail_url',
+      // Add merged video specific fields
+      'video_source',
+      'is_merged',
+      'merged_name',
+      'merged_file_name',
+      'parent_video_id',
       // Add video_objects fields for categories and aliases
       'video_objects.timestamp',
       'video_objects.labels.name',
@@ -302,7 +308,7 @@ async function handleListVideos(event: APIGatewayProxyEvent): Promise<LambdaResp
       sourceFields.push('merged_segments');
     }
     
-    // Create the search query
+    // Create the search query with proper filtering for merged videos
     const searchQuery = {
       index: searchIndex,
       body: {
@@ -310,7 +316,15 @@ async function handleListVideos(event: APIGatewayProxyEvent): Promise<LambdaResp
           bool: {
             must_not: [
               { term: { video_status: 'deleted' } }
-            ]
+            ],
+            // When includeMerged is true, include both regular and merged videos
+            // When includeMerged is false, exclude merged videos
+            ...(includeMerged ? {} : {
+              must_not: [
+                { term: { video_status: 'deleted' } },
+                { term: { video_source: 'merged' } }
+              ]
+            })
           }
         },
         size: pageSize,
@@ -319,6 +333,8 @@ async function handleListVideos(event: APIGatewayProxyEvent): Promise<LambdaResp
         _source: sourceFields
       }
     };
+    
+    console.log(`DEBUG: Search query for includeMerged=${includeMerged}:`, JSON.stringify(searchQuery, null, 2));
     
     // Try to sort by created_at, but don't fail if it doesn't exist
     try {
@@ -474,6 +490,9 @@ async function formatSearchResults(body: any, page: number, pageSize: number, fr
 
   // Process regular videos
   const videos: VideoResult[] = await Promise.all(body.hits.hits.map(async (hit: any) => {
+    // DEBUG: Log the video source to understand what we're processing
+    console.log(`DEBUG: Processing video ${hit._source.video_id} with video_source: ${hit._source.video_source}, is_merged: ${hit._source.is_merged}`);
+    
     // Use dummy s3 path for thumbnail if it doesn't exist, avoid error like "No value provided for input HTTP label: Key"
     const videoPreviewUrlValue = await refreshvideoPreviewUrl(hit._source.video_s3_path || 'dummy_s3_path');
     const thumbnailUrlValue = await refreshvideoPreviewUrl(hit._source.video_thumbnail_s3_path || 'dummy_s3_path');
@@ -481,6 +500,9 @@ async function formatSearchResults(body: any, page: number, pageSize: number, fr
     // Process video_objects with optimized filtering
     // Use default confidence threshold (95) and limit to top 3 labels per timestamp
     const filteredVideoObjects = processVideoObjects(hit._source.video_objects, 95, 3);
+    
+    // Determine the correct source based on video_source field
+    const videoSource = hit._source.video_source === 'merged' ? 'merged' as const : 'local' as const;
     
     return {
       // The id is the actual video_id, not the OpenSearch document ID
@@ -492,69 +514,35 @@ async function formatSearchResults(body: any, page: number, pageSize: number, fr
       videoThumbnailS3Path: hit._source.video_thumbnail_s3_path,
       videoThumbnailUrl: thumbnailUrlValue,
       videoDuration: hit._source.video_duration || '00:00:00',
-      source: 'local' as const,
+      source: videoSource, // Use the correct source based on video_source field
       uploadDate: hit._source.created_at,
       format: hit._source.video_type,
       status: hit._source.video_status,
       size: hit._source.video_size,
       indexId: hit._source.video_index || 'videos',
       segments: [],
-      video_objects: filteredVideoObjects // Add filtered video objects to the response
+      video_objects: filteredVideoObjects, // Add filtered video objects to the response
+      // Add merged video specific fields
+      isMerged: hit._source.is_merged || false,
+      parentVideoId: hit._source.parent_video_id,
+      customName: hit._source.merged_name
     };
   }));
 
-  // Process merged segments if requested
-  let mergedVideos: VideoResult[] = [];
-  if (includeMerged) {
-    // Get all docs that have merged_segments
-    const docsWithMergedSegments = body.hits.hits.filter((hit: any) => 
-      hit._source.merged_segments && Array.isArray(hit._source.merged_segments) && hit._source.merged_segments.length > 0
-    );
-    
-    if (docsWithMergedSegments.length > 0) {
-      // Extract and process all merged segments
-      for (const doc of docsWithMergedSegments) {
-        const parentVideoId = doc._source.video_id;
-        const indexId = doc._source.video_index || 'videos';
-        
-        // Convert each merged segment to a VideoResult
-        const docMergedVideos = await Promise.all(doc._source.merged_segments.map(async (segment: any) => {
-          // Generate fresh signed URLs
-          const videoUrl = await refreshvideoPreviewUrl(segment.segment_video_s3_path || 'dummy_s3_path');
-          const thumbnailUrl = await refreshvideoPreviewUrl(segment.segment_video_thumbnail_s3_path || 'dummy_s3_path');
-          
-          const title = segment.segment_visual?.segment_visual_description || 
-                       `Merged: ${doc._source.video_title || 'Untitled'} (${segment.start_time}-${segment.end_time})`;
-          
-          return {
-            id: segment.segment_id,
-            title: title,
-            description: segment.segment_visual?.segment_visual_description || '',
-            videoS3Path: segment.segment_video_s3_path,
-            videoPreviewUrl: videoUrl,
-            videoThumbnailS3Path: segment.segment_video_thumbnail_s3_path,
-            videoThumbnailUrl: thumbnailUrl,
-            // Duration is already in seconds, so convert to milliseconds for formatDuration
-            videoDuration: formatDuration(segment.duration) || '00:00:00',
-            source: 'merged' as const, // Add a new source type for merged segments
-            uploadDate: doc._source.updated_at || doc._source.created_at,
-            format: 'mp4',
-            status: 'ready' as VideoStatus, // Merged segments are always ready
-            size: 0, // We may not have size info for merged segments
-            indexId: indexId,
-            parentVideoId: parentVideoId, // Add reference to parent video
-            isMerged: true,  // Flag to identify as merged segment
-            segments: []
-          };
-        }));
-        
-        mergedVideos = [...mergedVideos, ...docMergedVideos];
-      }
-    }
-  }
+  // Since we're now including merged video documents directly in the search results,
+  // we don't need separate processing for merged segments
+  const allVideos = videos;
 
-  // Combine regular videos and merged segments
-  const allVideos = includeMerged ? [...videos, ...mergedVideos] : videos;
+  // DEBUG: Log the final results to understand duplication
+  console.log(`DEBUG: Final results - includeMerged: ${includeMerged}`);
+  console.log(`DEBUG: Total videos count: ${allVideos.length}`);
+  console.log(`DEBUG: Video sources breakdown:`, allVideos.map(v => ({ id: v.id, source: v.source, isMerged: v.isMerged })));
+  
+  // Count merged vs regular videos
+  const mergedCount = allVideos.filter(v => v.source === 'merged').length;
+  const regularCount = allVideos.filter(v => v.source === 'local').length;
+  console.log(`DEBUG: Regular videos count: ${regularCount}`);
+  console.log(`DEBUG: Merged videos count: ${mergedCount}`);
 
   return {
     statusCode: STATUS_CODES.OK,

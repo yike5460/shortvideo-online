@@ -94,6 +94,7 @@ interface MergeSegmentsRequest {
   indexId: string;           // The index the segments belong to
   videoId: string;           // The original video ID
   segmentIds: string[];      // IDs of segments to merge
+  segmentsData?: VideoSegment[];  // Complete segment data from search results
   mergedName?: string;       // Optional custom name for the merged segment
   userId?: string;           // User ID for tracking merge jobs
   mergeOptions?: {
@@ -114,6 +115,7 @@ interface CrossVideoMergeRequest {
     indexId: string;
     videoId: string;
     segmentId: string;
+    segmentData?: VideoSegment;  // Complete segment data from search results
     transitionType?: 'cut' | 'fade' | 'dissolve';
     transitionDuration?: number;
   }[];
@@ -264,6 +266,7 @@ async function _performVideoMerge(params: {
     indexId: string;
     videoId: string;
     segmentId: string;
+    segmentData?: VideoSegment;  // Complete segment data from search results
     transitionType?: 'cut' | 'fade' | 'dissolve';
     transitionDuration?: number;
   }[];
@@ -283,17 +286,49 @@ async function _performVideoMerge(params: {
     
     console.log(`Processing merge job ${jobId} with ${items.length} segments`);
     
-    // Collect all segments from different videos
-    const segments = [];
-    for (const item of items) {
-      const segment = await getSegmentDetail(item.indexId, item.videoId, item.segmentId);
+    // Collect all segments - use provided segmentData if available, otherwise query OpenSearch
+    const segments: (VideoSegment & { indexId: string; videoId: string; transitionType: string; transitionDuration: number })[] = [];
+    console.log(`DEBUG: Processing ${items.length} items for merge`);
+    
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      let segment: VideoSegment | null = null;
+      
+      console.log(`DEBUG: Processing item ${i + 1}:`, {
+        indexId: item.indexId,
+        videoId: item.videoId,
+        segmentId: item.segmentId,
+        hasSegmentData: !!item.segmentData
+      });
+      
+      if (item.segmentData) {
+        // Use provided segment data (preferred approach)
+        console.log(`Using provided segment data for ${item.segmentId}`);
+        segment = item.segmentData;
+        console.log(`DEBUG: Segment data video_id: ${segment.video_id}, segment_id: ${segment.segment_id}`);
+      } else {
+        // Fallback to OpenSearch query (legacy support)
+        console.log(`Querying OpenSearch for segment ${item.segmentId} (consider passing segmentData to improve performance)`);
+        segment = await getSegmentDetail(item.indexId, item.videoId, item.segmentId);
+        if (segment) {
+          console.log(`DEBUG: Retrieved segment data video_id: ${segment.video_id}, segment_id: ${segment.segment_id}`);
+        }
+      }
+      
       if (segment) {
-        segments.push({
+        const processedSegment = {
           ...segment,
           indexId: item.indexId,
           videoId: item.videoId,
           transitionType: item.transitionType || mergeOptions.defaultTransition,
           transitionDuration: item.transitionDuration || mergeOptions.defaultTransitionDuration
+        };
+        segments.push(processedSegment);
+        console.log(`DEBUG: Added segment to collection:`, {
+          segment_id: processedSegment.segment_id,
+          video_id: processedSegment.video_id,
+          indexId: processedSegment.indexId,
+          videoId: processedSegment.videoId
         });
       } else {
         throw new Error(`Segment ${item.segmentId} not found in video ${item.videoId} in index ${item.indexId}`);
@@ -330,7 +365,20 @@ async function _performVideoMerge(params: {
     // Extract indexId and videoId from the first segment for consistent S3 path structure
     // For cross-video merges, we'll use the first segment's indexId and videoId as the "parent"
     const parentIndexId = firstSegment.indexId;
-    const parentVideoId = firstSegment.videoId;
+    // Use the video_id from the segment data, not the videoId which might be the document ID
+    const parentVideoId = firstSegment.video_id || firstSegment.videoId;
+    
+    console.log(`DEBUG: First segment data:`, {
+      indexId: firstSegment.indexId,
+      videoId: firstSegment.videoId,
+      video_id: firstSegment.video_id,
+      segment_id: firstSegment.segment_id,
+      segment_video_s3_path: firstSegment.segment_video_s3_path
+    });
+    console.log(`DEBUG: Using parentIndexId: ${parentIndexId}, parentVideoId: ${parentVideoId}`);
+    console.log(`DEBUG: parentVideoId type: ${typeof parentVideoId}, length: ${parentVideoId?.length}`);
+    console.log(`DEBUG: parentVideoId encoded: ${encodeURIComponent(parentVideoId || '')}`);
+    console.log(`DEBUG: parentVideoId decoded: ${decodeURIComponent(parentVideoId || '')}`);
     
     // Define S3 paths for merged video and its thumbnail using the same structure as video-upload/index.ts
     const mergedVideoS3Path = `ProcessedVideos/${timestamp}/${parentIndexId}/${parentVideoId}/merged/${mergedFilename}`;
@@ -602,6 +650,9 @@ async function _performVideoMerge(params: {
       customName: originalMergedName
     };
     
+    // Generate a unique video ID for the merged video (will be used in document creation)
+    const mergedVideoId = uuidv4();
+    
     // Calculate merged segment metadata
     const mergedSegmentId = `merged_${jobId}`;
     const startTime = sortedSegments[0].start_time;
@@ -610,12 +661,12 @@ async function _performVideoMerge(params: {
     // We use the duration from the ffprobe command instead of the endTime - startTime since the order of segments might be not in strict time order in scnarios that: (1) the segments are from different videos, (2) the segments are not in strict time order due to the drag and drop of segments by the user
     const segmentDuration = duration;
     
-    // Create merged segment object
+    // Create merged segment object using the new merged video ID
     const mergedSegment: VideoSegment = {
       segment_id: mergedSegmentId,
-      video_id: parentVideoId,
-      start_time: startTime,
-      end_time: endTime,
+      video_id: mergedVideoId, // Use the new merged video ID instead of parentVideoId
+      start_time: 0, // The merged video starts at 0
+      end_time: segmentDuration, // The merged video ends at its full duration
       duration: segmentDuration,
       segment_video_s3_path: mergedVideoS3Path,
       segment_video_preview_url: mergedVideoUrl,
@@ -628,70 +679,76 @@ async function _performVideoMerge(params: {
       }
     };
     
-    // Update OpenSearch document with the merged segment
+    // Create complete merged video document in one step (since merged videos are new entities)
     try {
-      // Get the OpenSearch document ID for the video
-      const { body: searchResult } = await withRetry(
-        async () => openSearch.search({
+      console.log(`DEBUG: Creating complete OpenSearch document for merged video in index: ${parentIndexId}`);
+      console.log(`DEBUG: Using merged video ID: ${mergedVideoId}`);
+      
+      // Create complete merged video document with all required metadata
+      const mergedVideoDocument = {
+        video_index: parentIndexId,
+        video_id: mergedVideoId,
+        video_s3_path: mergedVideoS3Path,
+        video_name: `${originalMergedName}.mp4`,
+        video_size: 0, // We don't have the exact size, but it's not critical
+        video_type: "video/mp4",
+        video_title: originalMergedName,
+        video_description: `Merged video created from ${segments.length} segments`,
+        video_tags: ["merged"],
+        video_status: "ready_for_shots",
+        video_preview_url: mergedVideoUrl,
+        video_thumbnail_s3_path: mergedThumbnailS3Path,
+        video_thumbnail_url: mergedThumbnailUrl,
+        video_duration: formatDuration(duration),
+        video_source: "merged",
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        // Add required merged video metadata fields from VideoMetadata interface
+        is_merged: true,                    // Flag to identify if this is a merged video
+        merged_name: originalMergedName,    // Original custom name for merged videos
+        merged_file_name: mergedSegmentName, // Sanitized file name for merged videos
+        parent_video_id: parentVideoId,     // Original video ID for merged videos
+        segment_count: segments.length,     // Number of segments that were merged
+        job_id: jobId,                      // Job ID for the video processing
+        video_segments: [mergedSegment],    // The merged video itself as a segment
+        merged_segments: [mergedSegment],   // Also add to merged_segments array
+        merge_metadata: {
+          jobId: jobId,
+          originalSegments: segments.map(s => ({
+            segment_id: s.segment_id,
+            video_id: s.video_id,
+            source_index: s.indexId,
+            source_video: s.videoId
+          })),
+          mergeOptions: mergeOptions,
+          createdAt: new Date().toISOString()
+        }
+      };
+      
+      console.log(`DEBUG: Creating complete document with all metadata`);
+      console.log(`DEBUG: Document structure:`, JSON.stringify(mergedVideoDocument, null, 2));
+      
+      // Create the complete document in OpenSearch in one step
+      const createResult = await withRetry(
+        async () => openSearch.index({
           index: parentIndexId,
-          body: {
-            query: {
-              term: {
-                video_id: parentVideoId
-              }
-            }
-          }
+          // Remove 'id' parameter - AOSS DON'T SUPPORT ID in VECTORSEARCH, refer to https://github.com/langchain-ai/langchainjs/issues/4346
+          // AOSS will auto-generate document ID
+          body: mergedVideoDocument
         }),
         3,
-        `Search for video ${parentVideoId} in index ${parentIndexId}`
+        `Create complete merged video document ${mergedVideoId} in index ${parentIndexId}`
       );
       
-      if (!searchResult.hits || !searchResult.hits.hits || searchResult.hits.hits.length === 0) {
-        throw new Error(`Video ${parentVideoId} not found in index ${parentIndexId}`);
-      }
+      console.log(`DEBUG: OpenSearch document creation successful. Result:`, JSON.stringify(createResult.body, null, 2));
+      console.log(`Successfully created complete OpenSearch document for merged video ${mergedVideoId}`);
       
-      // Extract document ID
-      const documentId = searchResult.hits.hits[0]._id;
-      
-      // Update OpenSearch document
-      await openSearch.update({
-        index: parentIndexId,
-        id: documentId,
-        body: {
-          script: {
-            source: `
-              // Initialize arrays if null
-              if (ctx._source.video_segments == null) {
-                ctx._source.video_segments = [];
-              }
-              if (ctx._source.merged_segments == null) {
-                ctx._source.merged_segments = [];
-              }
-              
-              // Add merged segment to both arrays
-              // Keep in video_segments for backward compatibility
-              ctx._source.video_segments.add(params.mergedSegment);
-              
-              // Add to dedicated merged_segments array
-              ctx._source.merged_segments.add(params.mergedSegment);
-              
-              ctx._source.updated_at = params.updated_at;
-            `,
-            params: {
-              mergedSegment: mergedSegment,
-              updated_at: new Date().toISOString()
-            }
-          }
-        }
-      });
-      
-      console.log(`Successfully added merged segment to OpenSearch document for video ${parentVideoId}`);
     } catch (error) {
-      console.error('Error updating OpenSearch document:', error);
+      console.error('Error creating OpenSearch document:', error);
       
-      // Clean up S3 objects if OpenSearch update fails
+      // Clean up S3 objects if OpenSearch creation fails
       try {
-        console.log(`Cleaning up S3 objects after OpenSearch update failure: ${mergedVideoS3Path} and ${mergedThumbnailS3Path}`);
+        console.log(`Cleaning up S3 objects after OpenSearch creation failure: ${mergedVideoS3Path} and ${mergedThumbnailS3Path}`);
         
         // Delete merged video from S3
         await s3.send(new DeleteObjectCommand({
@@ -705,13 +762,13 @@ async function _performVideoMerge(params: {
           Key: mergedThumbnailS3Path
         }));
         
-        console.log('Successfully cleaned up S3 objects after OpenSearch update failure');
+        console.log('Successfully cleaned up S3 objects after OpenSearch creation failure');
       } catch (cleanupError) {
-        console.error('Error cleaning up S3 objects after OpenSearch update failure:', cleanupError);
+        console.error('Error cleaning up S3 objects after OpenSearch creation failure:', cleanupError);
       }
       
       // Re-throw the error to mark the job as failed
-      throw new Error(`Failed to update OpenSearch document: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(`Failed to create OpenSearch document: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
     
     // Update job status to completed
@@ -1024,9 +1081,24 @@ async function handleMergeRequest(event: APIGatewayProxyEvent): Promise<LambdaRe
         };
       }
       
-      // Create merge parameters
+      // Create merge parameters (filter out undefined values for DynamoDB)
       mergeParams = {
-        items,
+        items: items.map(item => {
+          const cleanItem: any = {
+            indexId: item.indexId,
+            videoId: item.videoId,
+            segmentId: item.segmentId,
+            transitionType: item.transitionType,
+            transitionDuration: item.transitionDuration
+          };
+          
+          // Only add segmentData if it exists (avoid undefined values for DynamoDB)
+          if (item.segmentData) {
+            cleanItem.segmentData = item.segmentData;
+          }
+          
+          return cleanItem;
+        }),
         mergedName: mergedName ? mergedName.trim() : undefined, // Sanitize by trimming whitespace
         mergeOptions,
         jobId,
@@ -1034,7 +1106,7 @@ async function handleMergeRequest(event: APIGatewayProxyEvent): Promise<LambdaRe
       };
     } else {
       // Handle as same-video merge
-      const { indexId, videoId, segmentIds, mergedName, mergeOptions } = request as MergeSegmentsRequest;
+      const { indexId, videoId, segmentIds, segmentsData, mergedName, mergeOptions } = request as MergeSegmentsRequest;
       
       console.log(`Handling segment merge request for video ${videoId} in index ${indexId}, segments: ${segmentIds.join(', ')}`);
       
@@ -1050,16 +1122,25 @@ async function handleMergeRequest(event: APIGatewayProxyEvent): Promise<LambdaRe
         };
       }
       
-      // Create merge parameters
+      // Create merge parameters with optional segment data (filter out undefined values)
       mergeParams = {
-        items: segmentIds.map(segmentId => ({
-          indexId,
-          videoId,
-          segmentId,
-          // Default transition settings
-          transitionType: (mergeOptions?.transition || 'cut') as 'cut' | 'fade' | 'dissolve',
-          transitionDuration: mergeOptions?.transitionDuration || 500
-        })),
+        items: segmentIds.map((segmentId, index) => {
+          const item: any = {
+            indexId,
+            videoId,
+            segmentId,
+            // Default transition settings
+            transitionType: (mergeOptions?.transition || 'cut') as 'cut' | 'fade' | 'dissolve',
+            transitionDuration: mergeOptions?.transitionDuration || 500
+          };
+          
+          // Only add segmentData if it exists (avoid undefined values for DynamoDB)
+          if (segmentsData && segmentsData[index]) {
+            item.segmentData = segmentsData[index];
+          }
+          
+          return item;
+        }),
         mergedName: mergedName ? mergedName.trim() : undefined, // Sanitize by trimming whitespace
         mergeOptions: {
           resolution: (mergeOptions?.resolution || '720p') as '720p' | '1080p',
