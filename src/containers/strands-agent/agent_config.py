@@ -14,6 +14,12 @@ from video_tools import video_search, video_merge, validate_api_endpoints
 
 logger = logging.getLogger(__name__)
 
+# Log that video tools have been imported
+logger.info("=== AGENT_CONFIG: VIDEO_TOOLS IMPORTED ===")
+logger.info(f"video_search function: {video_search}")
+logger.info(f"video_merge function: {video_merge}")
+logger.info("=== END IMPORT LOG ===")
+
 def create_strands_agent() -> Agent:
     """Create Strands Agent with custom video tools"""
     
