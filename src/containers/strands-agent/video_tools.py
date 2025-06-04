@@ -2,7 +2,7 @@ from strands import tool
 import requests
 import os
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 
 # Configure logger to ensure it inherits from root logger
 logger = logging.getLogger(__name__)
@@ -30,17 +30,18 @@ VIDEO_MERGE_API_URL = os.getenv('VIDEO_MERGE_API_URL')
 @tool
 def video_search(
     query: str,
-    indexes: Optional[List[str]] = None,
+    indexes: List[str] = None,
     top_k: int = 5,
-    min_confidence: float = 0.3
+    # Align with frontend default min_confidence
+    min_confidence: float = 0.5
 ) -> List[Dict[str, Any]]:
     """Search for relevant video content using natural language queries
     
     Args:
         query: Natural language search query describing the video content needed
-        indexes: Optional list of video indexes to search (default: ['videos'])
+        indexes: List of video indexes to search, passed by the user in the web
         top_k: Maximum number of results to return (default: 5)
-        min_confidence: Minimum confidence score for results (default: 0.3)
+        min_confidence: Minimum confidence score for results (default: 0.5)
     
     Returns:
         List of video segments with metadata including:
@@ -55,34 +56,28 @@ def video_search(
         - thumbnailUrl: Signed URL for thumbnail
     """
     # Add function entry log to confirm function is being called
-    logger.info("=== VIDEO_SEARCH FUNCTION CALLED ===")
+    logger.info("=== VIDEO_SEARCH FUNCTION CALLED ===\n")
     logger.info(f"Query: {query}")
     logger.info(f"Indexes: {indexes}")
     logger.info(f"Top_k: {top_k}")
-    logger.info(f"Min_confidence: {min_confidence}")
-    logger.info("=== END FUNCTION ENTRY LOG ===")
+    logger.info(f"Min_confidence: {min_confidence}\n")
+    logger.info("=== END FUNCTION ENTRY LOG ===\n")
     
     try:
         if not VIDEO_SEARCH_API_URL:
             raise ValueError("VIDEO_SEARCH_API_URL environment variable is not set")
-        
-        # Handle indexes parameter - default to 'videos' if not provided
+
         if not indexes:
-            indexes = ['videos']
-            logger.info(f"No indexes specified, defaulting to: {indexes}")
-        
-        logger.info(f"Searching videos with query: '{query}' in indexes: {indexes}")
-        logger.info(f"Search parameters - top_k: {top_k}, min_confidence: {min_confidence}")
+            raise ValueError("No indexes provided")
         
         # Prepare search request matching the frontend API format (from page.tsx)
         search_request = {
             "searchType": "text",
             "searchQuery": query,
-            "selectedIndex": indexes[0] if indexes else "videos",
-            "advancedSearch": True,  # Enable advanced search like frontend
-            "skipValidation": False,  # Enable validation for better results
-            # Additional parameters for better search results
-            "exactMatch": False,
+            "selectedIndex": indexes[0],
+            "advancedSearch": True,  # Enable advanced search as in frontend
+            "skipValidation": False,  # Enable results validation/reranking as in frontend
+            "exactMatch": False,  # Already obsoleted in frontend
             "topK": top_k,
             "weights": {
                 # Align with backend weights implementation in index.ts or video_search Lambda
@@ -111,13 +106,9 @@ def video_search(
 
             results = response.json()
             # Log raw search results to understand segment data structure
-            logger.info(f"Raw search results structure: {results}")
-            logger.info(f"Found {len(results)} video results for query: '{query}'")
-            
-            # Use the requested index as fallback instead of hardcoded 'videos'
-            requested_index = indexes[0] if indexes else 'videos'
-            logger.info(f"Using requested index '{requested_index}' as fallback for indexId")
-            
+            logger.info(f"Raw search results structure: {results}\n")
+            logger.info(f"Found {len(results)} video results for query: '{query}'\n")
+
             # Transform results to a more tool-friendly format
             formatted_results = []
             for video in results:
@@ -132,7 +123,7 @@ def video_search(
                     formatted_results.append({
                         'videoId': video.get('id'),
                         'segmentId': segment.get('segment_id'),
-                        'indexId': video.get('indexId', requested_index),  # Use requested index as fallback
+                        'indexId': video.get('indexId', indexes[0]),  # Use requested index as fallback
                         'title': video.get('title', ''),
                         'description': video.get('description', ''),
                         'confidence': segment.get('confidence', 0),
@@ -149,8 +140,8 @@ def video_search(
             # Sort by confidence score (highest first)
             formatted_results.sort(key=lambda x: x.get('confidence', 0), reverse=True)
             
-            logger.info(f"Returning {len(formatted_results)} formatted video segments")
-            logger.info(f"Final formatted results being returned: {formatted_results}")
+            logger.info(f"Returning {len(formatted_results)} formatted video segments\n")
+            logger.info(f"Final formatted results being returned: {formatted_results}\n")
             return formatted_results
             
         else:
@@ -220,23 +211,12 @@ def video_merge(
             raise ValueError("No segments provided for merging")
         
         # Validate segments have required fields
-        required_fields = ['indexId', 'videoId', 'segmentId']
+        required_fields = ['indexId', 'videoId', 'segmentId', 's3Path']
         for i, segment in enumerate(segments):
             missing_fields = [field for field in required_fields if field not in segment]
             if missing_fields:
                 raise ValueError(f"Segment {i+1} missing required fields: {missing_fields}")
-        
-        # Check if segments have the complete data from video_search
-        # If not, we need to handle the case where Strands Agent only passes basic fields
-        logger.info("Checking if segments have complete metadata...")
-        segments_have_metadata = all(segment.get('s3Path') for segment in segments)
-        logger.info(f"Segments have complete metadata: {segments_have_metadata}")
-        
-        if not segments_have_metadata:
-            logger.warning("Segments missing metadata - this indicates Strands Agent is not passing complete data")
-            logger.warning("This will cause video merge to fail due to missing S3 paths")
-            # For now, we'll continue with the merge request but log the issue
-            
+
         # Validate segment data before creating merge request
         logger.info(f"Validating {len(segments)} segments before merge:")
         for i, segment in enumerate(segments):
@@ -289,7 +269,7 @@ def video_merge(
                 "defaultTransitionDuration": transition_duration
             }
         }
-        logger.info(f"The video merge request is: {merge_request}")
+        logger.info(f"The video merge request assembled by video_merge: {merge_request}")
         # Make HTTP request to video merge API using requests (synchronous)
         response = requests.post(
             VIDEO_MERGE_API_URL,
@@ -300,7 +280,7 @@ def video_merge(
             },
             timeout=30
         )
-        
+
         if response.status_code == 200:
             result = response.json()
             logger.info(f"Started video merge job: {result.get('jobId')} for '{output_name}'")
@@ -337,7 +317,7 @@ def validate_api_endpoints() -> Dict[str, bool]:
         'video_search_api': False,
         'video_merge_api': False
     }
-    
+
     try:
         if VIDEO_SEARCH_API_URL:
             # Try a simple OPTIONS request to check if endpoint is accessible
