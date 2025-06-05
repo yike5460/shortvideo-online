@@ -26,7 +26,8 @@ export default function AutoCreatePage() {
 
   const loadJobHistory = async () => {
     try {
-      const history = await getJobHistory()
+      // Use the actual Cognito user ID for auto-create jobs
+      const history = await getJobHistory(state.user?.id)
       setJobHistory(history)
     } catch (error) {
       console.error('Failed to load job history:', error)
@@ -43,7 +44,7 @@ export default function AutoCreatePage() {
     try {
       const job = await createAutoCreateJob({
         request,
-        userId: state.user.email,
+        userId: state.user?.id,
         options
       })
       
@@ -63,7 +64,8 @@ export default function AutoCreatePage() {
   const pollJobStatus = async (jobId: string) => {
     const pollInterval = setInterval(async () => {
       try {
-        const updatedJob = await getJobStatus(jobId)
+        // Use the actual Cognito user ID for auto-create jobs
+        const updatedJob = await getJobStatus(jobId, state.user?.id)
         setCurrentJob(updatedJob)
         
         if (updatedJob.status === 'completed' || updatedJob.status === 'failed') {
@@ -85,7 +87,8 @@ export default function AutoCreatePage() {
 
   const handleJobSelect = async (jobId: string) => {
     try {
-      const job = await getJobStatus(jobId)
+      // Use the actual Cognito user ID for auto-create jobs
+      const job = await getJobStatus(jobId, state.user?.id)
       setCurrentJob(job)
     } catch (error) {
       console.error('Failed to load job:', error)
@@ -124,9 +127,10 @@ export default function AutoCreatePage() {
                 onNewCreation={handleNewCreation}
               />
             ) : (
-              <ProgressDisplay 
+              <ProgressDisplay
                 job={currentJob}
                 onCancel={handleNewCreation}
+                onRetry={handleCreateVideo}
               />
             )}
           </div>

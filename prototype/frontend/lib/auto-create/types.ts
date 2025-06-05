@@ -16,6 +16,7 @@ export interface AutoCreateJob {
   };
   error?: string;
   estimatedDuration?: number;
+  ttl?: number;
 }
 
 export interface CreationOptions {

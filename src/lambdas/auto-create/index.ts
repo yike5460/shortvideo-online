@@ -48,7 +48,12 @@ interface AutoCreateJob {
 }
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
+  console.log('=== AUTO-CREATE LAMBDA CALLED ===');
   console.log('Event:', JSON.stringify(event, null, 2));
+  console.log('Path:', event.path);
+  console.log('Method:', event.httpMethod);
+  console.log('Query Parameters:', event.queryStringParameters);
+  console.log('Path Parameters:', event.pathParameters);
 
   try {
     const path = event.path;
@@ -56,6 +61,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
 
     // Handle CORS preflight
     if (method === 'OPTIONS') {
+      console.log('Handling CORS preflight request');
       return {
         statusCode: 200,
         headers: corsHeaders,
@@ -63,23 +69,46 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       };
     }
 
+    console.log('Routing request - Method:', method, 'Path:', path);
+
     // Route requests
     if (method === 'POST' && path === '/auto-create') {
+      console.log('Routing to handleCreateJob');
       return await handleCreateJob(event);
     } else if (method === 'GET' && path === '/auto-create/jobs') {
+      console.log('Routing to handleListJobs');
       return await handleListJobs(event);
     } else if (method === 'GET' && path.startsWith('/auto-create/jobs/') && !path.includes('/stream/')) {
       const jobId = path.split('/').pop();
+      console.log('Routing to handleGetJobStatus with jobId:', jobId);
       return await handleGetJobStatus(event, jobId!);
     } else if (method === 'GET' && path.includes('/auto-create/stream/')) {
       const jobId = path.split('/').pop();
+      console.log('Routing to handleStreamJobUpdates with jobId:', jobId);
       return await handleStreamJobUpdates(event, jobId!);
     }
+
+    console.log('No route matched - returning 404');
+    console.log('Available routes:');
+    console.log('- POST /auto-create');
+    console.log('- GET /auto-create/jobs');
+    console.log('- GET /auto-create/jobs/{jobId}');
+    console.log('- GET /auto-create/stream/{jobId}');
 
     return {
       statusCode: 404,
       headers: corsHeaders,
-      body: JSON.stringify({ error: 'Not found' }),
+      body: JSON.stringify({
+        error: 'Not found',
+        path: path,
+        method: method,
+        availableRoutes: [
+          'POST /auto-create',
+          'GET /auto-create/jobs',
+          'GET /auto-create/jobs/{jobId}',
+          'GET /auto-create/stream/{jobId}'
+        ]
+      }),
     };
   } catch (error) {
     console.error('Error:', error);
@@ -174,22 +203,41 @@ async function handleCreateJob(event: APIGatewayProxyEvent): Promise<APIGatewayP
 }
 
 async function handleGetJobStatus(event: APIGatewayProxyEvent, jobId: string): Promise<APIGatewayProxyResult> {
+  console.log('=== HANDLE GET JOB STATUS ===');
+  console.log('JobId:', jobId);
+  console.log('Query Parameters:', event.queryStringParameters);
+  console.log('Request Context Identity:', event.requestContext.identity);
+  
+  // Use the actual user ID for auto-create jobs, fallback to anonymous if not provided
   const userId = event.queryStringParameters?.userId || event.requestContext.identity?.cognitoIdentityId || 'anonymous';
+  console.log('Resolved userId:', userId);
+  console.log('Environment JOBS_TABLE:', process.env.JOBS_TABLE);
 
   try {
+    console.log('Querying DynamoDB with Key:', { jobId, userId });
+    
     const result = await docClient.send(new GetCommand({
       TableName: process.env.JOBS_TABLE!,
       Key: { jobId, userId },
     }));
 
+    console.log('DynamoDB Result:', result);
+
     if (!result.Item) {
+      console.log('Job not found in DynamoDB');
       return {
         statusCode: 404,
         headers: corsHeaders,
-        body: JSON.stringify({ error: 'Job not found' }),
+        body: JSON.stringify({
+          error: 'Job not found',
+          jobId,
+          userId,
+          searchKey: { jobId, userId }
+        }),
       };
     }
 
+    console.log('Job found, returning:', result.Item);
     return {
       statusCode: 200,
       headers: corsHeaders,
@@ -200,15 +248,27 @@ async function handleGetJobStatus(event: APIGatewayProxyEvent, jobId: string): P
     return {
       statusCode: 500,
       headers: corsHeaders,
-      body: JSON.stringify({ error: 'Failed to get job status' }),
+      body: JSON.stringify({
+        error: 'Failed to get job status',
+        details: error instanceof Error ? error.message : 'Unknown error'
+      }),
     };
   }
 }
 
 async function handleListJobs(event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> {
+  console.log('=== HANDLE LIST JOBS ===');
+  console.log('Query Parameters:', event.queryStringParameters);
+  console.log('Request Context Identity:', event.requestContext.identity);
+  
+  // Use the actual user ID for auto-create jobs, fallback to anonymous if not provided
   const userId = event.queryStringParameters?.userId || event.requestContext.identity?.cognitoIdentityId || 'anonymous';
+  console.log('Resolved userId for listing:', userId);
+  console.log('Environment JOBS_TABLE:', process.env.JOBS_TABLE);
 
   try {
+    console.log('Querying DynamoDB UserIdIndex with userId:', userId);
+    
     const result = await docClient.send(new QueryCommand({
       TableName: process.env.JOBS_TABLE!,
       IndexName: 'UserIdIndex',
@@ -220,11 +280,16 @@ async function handleListJobs(event: APIGatewayProxyEvent): Promise<APIGatewayPr
       Limit: 50, // Limit to recent jobs
     }));
 
+    console.log('DynamoDB Query Result:', result);
+    console.log('Number of jobs found:', result.Items?.length || 0);
+
     return {
       statusCode: 200,
       headers: corsHeaders,
       body: JSON.stringify({
         jobs: result.Items || [],
+        userId: userId,
+        count: result.Items?.length || 0
       }),
     };
   } catch (error) {
@@ -232,29 +297,49 @@ async function handleListJobs(event: APIGatewayProxyEvent): Promise<APIGatewayPr
     return {
       statusCode: 500,
       headers: corsHeaders,
-      body: JSON.stringify({ error: 'Failed to list jobs' }),
+      body: JSON.stringify({
+        error: 'Failed to list jobs',
+        details: error instanceof Error ? error.message : 'Unknown error'
+      }),
     };
   }
 }
 
 async function handleStreamJobUpdates(event: APIGatewayProxyEvent, jobId: string): Promise<APIGatewayProxyResult> {
+  console.log('=== HANDLE STREAM JOB UPDATES ===');
+  console.log('JobId:', jobId);
+  console.log('Query Parameters:', event.queryStringParameters);
+  
+  // Use the actual user ID for auto-create jobs, fallback to anonymous if not provided
   const userId = event.queryStringParameters?.userId || event.requestContext.identity?.cognitoIdentityId || 'anonymous';
+  console.log('Resolved userId:', userId);
 
   try {
+    console.log('Querying DynamoDB for streaming with Key:', { jobId, userId });
+    
     // Get current job status
     const result = await docClient.send(new GetCommand({
       TableName: process.env.JOBS_TABLE!,
       Key: { jobId, userId },
     }));
 
+    console.log('DynamoDB Result for streaming:', result);
+
     if (!result.Item) {
+      console.log('Job not found for streaming');
       return {
         statusCode: 404,
         headers: corsHeaders,
-        body: JSON.stringify({ error: 'Job not found' }),
+        body: JSON.stringify({
+          error: 'Job not found',
+          jobId,
+          userId,
+          searchKey: { jobId, userId }
+        }),
       };
     }
 
+    console.log('Job found for streaming, returning SSE response');
     // For now, return the current status
     // In a full implementation, this would establish an SSE connection
     return {
@@ -272,7 +357,10 @@ async function handleStreamJobUpdates(event: APIGatewayProxyEvent, jobId: string
     return {
       statusCode: 500,
       headers: corsHeaders,
-      body: JSON.stringify({ error: 'Failed to stream job updates' }),
+      body: JSON.stringify({
+        error: 'Failed to stream job updates',
+        details: error instanceof Error ? error.message : 'Unknown error'
+      }),
     };
   }
 }

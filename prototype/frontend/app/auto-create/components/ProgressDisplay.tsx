@@ -7,9 +7,10 @@ import { subscribeToJobUpdates } from '@/lib/auto-create/api'
 interface ProgressDisplayProps {
   job: AutoCreateJob;
   onCancel?: () => void;
+  onRetry?: (request: string, options?: any) => void;
 }
 
-export default function ProgressDisplay({ job, onCancel }: ProgressDisplayProps) {
+export default function ProgressDisplay({ job, onCancel, onRetry }: ProgressDisplayProps) {
   const [currentJob, setCurrentJob] = useState<AutoCreateJob>(job)
   const [isExpanded, setIsExpanded] = useState(false)
 
@@ -22,11 +23,12 @@ export default function ProgressDisplay({ job, onCancel }: ProgressDisplayProps)
       },
       (error) => {
         console.error('Failed to receive job updates:', error)
-      }
+      },
+      job.userId
     )
 
     return unsubscribe
-  }, [job.jobId])
+  }, [job.jobId, job.userId])
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -198,6 +200,31 @@ export default function ProgressDisplay({ job, onCancel }: ProgressDisplayProps)
           >
             Create Another Video
           </button>
+        </div>
+      )}
+
+      {/* Failed Job Actions */}
+      {currentJob.status === 'failed' && (
+        <div className="mt-6 flex justify-end space-x-3">
+          {onRetry && (
+            <button
+              onClick={() => onRetry(currentJob.request)}
+              className="px-4 py-2 text-sm font-medium text-white bg-red-600 border border-red-600 rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+            >
+              <svg className="h-4 w-4 inline mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+              Retry Job
+            </button>
+          )}
+          {onCancel && (
+            <button
+              onClick={onCancel}
+              className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+            >
+              Create New Video
+            </button>
+          )}
         </div>
       )}
     </div>

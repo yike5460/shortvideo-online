@@ -36,8 +36,13 @@ export async function createAutoCreateJob(request: CreateJobRequest): Promise<Au
   };
 }
 
-export async function getJobStatus(jobId: string): Promise<AutoCreateJob> {
-  const response = await fetch(`${API_BASE_URL}/auto-create/jobs/${jobId}`, {
+export async function getJobStatus(jobId: string, userId?: string): Promise<AutoCreateJob> {
+  const url = new URL(`${API_BASE_URL}/auto-create/jobs/${jobId}`);
+  if (userId) {
+    url.searchParams.append('userId', userId);
+  }
+  
+  const response = await fetch(url.toString(), {
     method: 'GET',
     headers: {
       'Content-Type': 'application/json',
@@ -52,8 +57,13 @@ export async function getJobStatus(jobId: string): Promise<AutoCreateJob> {
   return data;
 }
 
-export async function getJobHistory(): Promise<AutoCreateJob[]> {
-  const response = await fetch(`${API_BASE_URL}/auto-create/jobs`, {
+export async function getJobHistory(userId?: string): Promise<AutoCreateJob[]> {
+  const url = new URL(`${API_BASE_URL}/auto-create/jobs`);
+  if (userId) {
+    url.searchParams.append('userId', userId);
+  }
+  
+  const response = await fetch(url.toString(), {
     method: 'GET',
     headers: {
       'Content-Type': 'application/json',
@@ -83,11 +93,17 @@ export async function cancelJob(jobId: string): Promise<void> {
 
 // Server-Sent Events for real-time updates
 export function subscribeToJobUpdates(
-  jobId: string, 
+  jobId: string,
   onUpdate: (job: AutoCreateJob) => void,
-  onError?: (error: Error) => void
+  onError?: (error: Error) => void,
+  userId?: string
 ): () => void {
-  const eventSource = new EventSource(`${API_BASE_URL}/auto-create/stream/${jobId}`);
+  const url = new URL(`${API_BASE_URL}/auto-create/stream/${jobId}`);
+  if (userId) {
+    url.searchParams.append('userId', userId);
+  }
+  
+  const eventSource = new EventSource(url.toString());
   
   eventSource.onmessage = (event) => {
     try {
