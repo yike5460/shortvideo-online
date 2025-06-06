@@ -7,7 +7,7 @@ import ProgressDisplay from './components/ProgressDisplay'
 import ResultsPreview from './components/ResultsPreview'
 import JobHistory from './components/JobHistory' 
 import { AutoCreateJob, CreationOptions } from '@/lib/auto-create/types'
-import { createAutoCreateJob, getJobStatus, getJobHistory } from '@/lib/auto-create/api'
+import { createAutoCreateJob, getJobStatus, getJobHistory, cancelJob } from '@/lib/auto-create/api'
 import { useToast } from '@/components/ui/Toast'
 
 export default function AutoCreatePage() {
@@ -68,12 +68,14 @@ export default function AutoCreatePage() {
         const updatedJob = await getJobStatus(jobId, state.user?.id)
         setCurrentJob(updatedJob)
         
-        if (updatedJob.status === 'completed' || updatedJob.status === 'failed') {
+        if (updatedJob.status === 'completed' || updatedJob.status === 'failed' || updatedJob.status === 'cancelled') {
           clearInterval(pollInterval)
           loadJobHistory() // Refresh history
           
           if (updatedJob.status === 'completed') {
             addToast('success', 'Video created successfully!')
+          } else if (updatedJob.status === 'cancelled') {
+            addToast('info', 'Job was cancelled')
           } else {
             addToast('error', 'Video creation failed')
           }
@@ -93,6 +95,17 @@ export default function AutoCreatePage() {
     } catch (error) {
       console.error('Failed to load job:', error)
       addToast('error', 'Failed to load job details')
+    }
+  }
+
+  const handleCancelJob = async (jobId: string, userId: string) => {
+    try {
+      await cancelJob(jobId, userId)
+      addToast('success', 'Job cancelled successfully')
+      // Job status will be updated via polling
+    } catch (error) {
+      console.error('Failed to cancel job:', error)
+      addToast('error', 'Failed to cancel job')
     }
   }
 
@@ -130,6 +143,7 @@ export default function AutoCreatePage() {
               <ProgressDisplay
                 job={currentJob}
                 onCancel={handleNewCreation}
+                onCancelJob={handleCancelJob}
                 onRetry={handleCreateVideo}
               />
             )}

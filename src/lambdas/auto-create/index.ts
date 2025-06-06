@@ -16,6 +16,16 @@ const corsHeaders = {
   'Access-Control-Allow-Credentials': 'true'
 };
 
+// Status codes
+const STATUS_CODES = {
+  OK: 200,
+  CREATED: 201,
+  BAD_REQUEST: 400,
+  NOT_FOUND: 404,
+  INTERNAL_SERVER_ERROR: 500
+};
+
+
 interface CreateJobRequest {
   request: string;
   userId: string;
@@ -30,7 +40,7 @@ interface AutoCreateJob {
   jobId: string;
   userId: string;
   request: string;
-  status: 'queued' | 'processing' | 'completed' | 'failed';
+  status: 'queued' | 'processing' | 'completed' | 'failed' | 'cancelled';
   progress: number;
   createdAt: string;
   completedAt?: string;
@@ -63,7 +73,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     if (method === 'OPTIONS') {
       console.log('Handling CORS preflight request');
       return {
-        statusCode: 200,
+        statusCode: STATUS_CODES.OK,
         headers: corsHeaders,
         body: '',
       };
@@ -78,10 +88,15 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     } else if (method === 'GET' && path === '/auto-create/jobs') {
       console.log('Routing to handleListJobs');
       return await handleListJobs(event);
-    } else if (method === 'GET' && path.startsWith('/auto-create/jobs/') && !path.includes('/stream/')) {
+    } else if (method === 'GET' && path.startsWith('/auto-create/jobs/') && !path.includes('/stream/') && !path.includes('/cancel')) {
       const jobId = path.split('/').pop();
       console.log('Routing to handleGetJobStatus with jobId:', jobId);
       return await handleGetJobStatus(event, jobId!);
+    } else if (method === 'POST' && path.includes('/cancel')) {
+      const pathParts = path.split('/');
+      const jobId = pathParts[pathParts.length - 2]; // Extract jobId from /auto-create/jobs/{jobId}/cancel
+      console.log('Routing to handleCancelJob with jobId:', jobId);
+      return await handleCancelJob(event, jobId!);
     } else if (method === 'GET' && path.includes('/auto-create/stream/')) {
       const jobId = path.split('/').pop();
       console.log('Routing to handleStreamJobUpdates with jobId:', jobId);
@@ -93,10 +108,11 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     console.log('- POST /auto-create');
     console.log('- GET /auto-create/jobs');
     console.log('- GET /auto-create/jobs/{jobId}');
+    console.log('- POST /auto-create/jobs/{jobId}/cancel');
     console.log('- GET /auto-create/stream/{jobId}');
 
     return {
-      statusCode: 404,
+      statusCode: STATUS_CODES.NOT_FOUND,
       headers: corsHeaders,
       body: JSON.stringify({
         error: 'Not found',
@@ -106,6 +122,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
           'POST /auto-create',
           'GET /auto-create/jobs',
           'GET /auto-create/jobs/{jobId}',
+          'POST /auto-create/jobs/{jobId}/cancel',
           'GET /auto-create/stream/{jobId}'
         ]
       }),
@@ -113,7 +130,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
   } catch (error) {
     console.error('Error:', error);
     return {
-      statusCode: 500,
+      statusCode: STATUS_CODES.INTERNAL_SERVER_ERROR,
       headers: corsHeaders,
       body: JSON.stringify({
         error: 'Internal server error',
@@ -126,7 +143,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
 async function handleCreateJob(event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> {
   if (!event.body) {
     return {
-      statusCode: 400,
+      statusCode: STATUS_CODES.BAD_REQUEST,
       headers: corsHeaders,
       body: JSON.stringify({ error: 'Missing request body' }),
     };
@@ -137,7 +154,7 @@ async function handleCreateJob(event: APIGatewayProxyEvent): Promise<APIGatewayP
   // Validate request
   if (!request.request || !request.userId) {
     return {
-      statusCode: 400,
+      statusCode: STATUS_CODES.BAD_REQUEST,
       headers: corsHeaders,
       body: JSON.stringify({ error: 'Missing required fields: request, userId' }),
     };
@@ -184,7 +201,7 @@ async function handleCreateJob(event: APIGatewayProxyEvent): Promise<APIGatewayP
     console.log(`Created job ${jobId} for user ${request.userId}`);
 
     return {
-      statusCode: 200,
+      statusCode: STATUS_CODES.OK,
       headers: corsHeaders,
       body: JSON.stringify({
         jobId,
@@ -195,7 +212,7 @@ async function handleCreateJob(event: APIGatewayProxyEvent): Promise<APIGatewayP
   } catch (error) {
     console.error('Error creating job:', error);
     return {
-      statusCode: 500,
+      statusCode: STATUS_CODES.INTERNAL_SERVER_ERROR,
       headers: corsHeaders,
       body: JSON.stringify({ error: 'Failed to create job' }),
     };
@@ -226,7 +243,7 @@ async function handleGetJobStatus(event: APIGatewayProxyEvent, jobId: string): P
     if (!result.Item) {
       console.log('Job not found in DynamoDB');
       return {
-        statusCode: 404,
+        statusCode: STATUS_CODES.NOT_FOUND,
         headers: corsHeaders,
         body: JSON.stringify({
           error: 'Job not found',
@@ -239,17 +256,84 @@ async function handleGetJobStatus(event: APIGatewayProxyEvent, jobId: string): P
 
     console.log('Job found, returning:', result.Item);
     return {
-      statusCode: 200,
+      statusCode: STATUS_CODES.OK,
       headers: corsHeaders,
       body: JSON.stringify(result.Item),
     };
   } catch (error) {
     console.error('Error getting job status:', error);
     return {
-      statusCode: 500,
+      statusCode: STATUS_CODES.INTERNAL_SERVER_ERROR,
       headers: corsHeaders,
       body: JSON.stringify({
         error: 'Failed to get job status',
+        details: error instanceof Error ? error.message : 'Unknown error'
+      }),
+    };
+  }
+}
+
+async function handleCancelJob(event: APIGatewayProxyEvent, jobId: string): Promise<APIGatewayProxyResult> {
+  console.log('=== HANDLE CANCEL JOB ===');
+  console.log('JobId:', jobId);
+  console.log('Query Parameters:', event.queryStringParameters);
+  
+  // Use the actual user ID for auto-create jobs, fallback to anonymous if not provided
+  const userId = event.queryStringParameters?.userId || event.requestContext.identity?.cognitoIdentityId || 'anonymous';
+  console.log('Resolved userId:', userId);
+
+  try {
+    console.log('Attempting to cancel job with Key:', { jobId, userId });
+    
+    // Update job status to cancelled with condition check
+    await docClient.send(new UpdateCommand({
+      TableName: process.env.JOBS_TABLE!,
+      Key: { jobId, userId },
+      UpdateExpression: 'SET #status = :status, logs = list_append(if_not_exists(logs, :emptyList), :log)',
+      ExpressionAttributeNames: {
+        '#status': 'status'
+      },
+      ExpressionAttributeValues: {
+        ':status': 'cancelled',
+        ':log': [`Job cancelled at ${new Date().toISOString()}`],
+        ':emptyList': [],
+        ':queued': 'queued',
+        ':processing': 'processing'
+      },
+      ConditionExpression: '#status IN (:queued, :processing)'
+    }));
+
+    console.log(`Successfully cancelled job ${jobId} for user ${userId}`);
+
+    return {
+      statusCode: STATUS_CODES.OK,
+      headers: corsHeaders,
+      body: JSON.stringify({ 
+        message: 'Job cancelled successfully',
+        jobId,
+        userId
+      }),
+    };
+  } catch (error) {
+    console.error('Error cancelling job:', error);
+    
+    // Check if it's a condition failed error (job not in cancellable state)
+    if (error instanceof Error && error.name === 'ConditionalCheckFailedException') {
+      return {
+        statusCode: STATUS_CODES.BAD_REQUEST,
+        headers: corsHeaders,
+        body: JSON.stringify({ 
+          error: 'Job cannot be cancelled',
+          details: 'Job is not in a cancellable state (must be queued or processing)'
+        }),
+      };
+    }
+    
+    return {
+      statusCode: STATUS_CODES.INTERNAL_SERVER_ERROR,
+      headers: corsHeaders,
+      body: JSON.stringify({ 
+        error: 'Failed to cancel job',
         details: error instanceof Error ? error.message : 'Unknown error'
       }),
     };
@@ -284,7 +368,7 @@ async function handleListJobs(event: APIGatewayProxyEvent): Promise<APIGatewayPr
     console.log('Number of jobs found:', result.Items?.length || 0);
 
     return {
-      statusCode: 200,
+      statusCode: STATUS_CODES.OK,
       headers: corsHeaders,
       body: JSON.stringify({
         jobs: result.Items || [],
@@ -295,7 +379,7 @@ async function handleListJobs(event: APIGatewayProxyEvent): Promise<APIGatewayPr
   } catch (error) {
     console.error('Error listing jobs:', error);
     return {
-      statusCode: 500,
+      statusCode: STATUS_CODES.INTERNAL_SERVER_ERROR,
       headers: corsHeaders,
       body: JSON.stringify({
         error: 'Failed to list jobs',
@@ -328,7 +412,7 @@ async function handleStreamJobUpdates(event: APIGatewayProxyEvent, jobId: string
     if (!result.Item) {
       console.log('Job not found for streaming');
       return {
-        statusCode: 404,
+        statusCode: STATUS_CODES.NOT_FOUND,
         headers: corsHeaders,
         body: JSON.stringify({
           error: 'Job not found',
@@ -343,7 +427,7 @@ async function handleStreamJobUpdates(event: APIGatewayProxyEvent, jobId: string
     // For now, return the current status
     // In a full implementation, this would establish an SSE connection
     return {
-      statusCode: 200,
+      statusCode: STATUS_CODES.OK,
       headers: {
         ...corsHeaders,
         'Content-Type': 'text/event-stream',
@@ -355,7 +439,7 @@ async function handleStreamJobUpdates(event: APIGatewayProxyEvent, jobId: string
   } catch (error) {
     console.error('Error streaming job updates:', error);
     return {
-      statusCode: 500,
+      statusCode: STATUS_CODES.INTERNAL_SERVER_ERROR,
       headers: corsHeaders,
       body: JSON.stringify({
         error: 'Failed to stream job updates',

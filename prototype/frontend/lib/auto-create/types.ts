@@ -2,7 +2,7 @@ export interface AutoCreateJob {
   jobId: string;
   userId: string;
   request: string;
-  status: 'queued' | 'processing' | 'completed' | 'failed';
+  status: 'queued' | 'processing' | 'completed' | 'failed' | 'cancelled';
   progress: number;
   createdAt: string;
   completedAt?: string;
@@ -35,7 +35,7 @@ export interface CreateJobRequest {
 
 export interface CreateJobResponse {
   jobId: string;
-  status: 'queued' | 'processing' | 'completed' | 'failed';
+  status: 'queued' | 'processing' | 'completed' | 'failed' | 'cancelled';
   estimatedDuration?: number;
 }
 

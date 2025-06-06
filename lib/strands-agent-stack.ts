@@ -202,15 +202,16 @@ export class StrandsAgentConstruct extends Construct {
     });
 
     // Scale based on SQS queue depth - scale out when messages are waiting
-    scaling.scaleOnMetric('SqsQueueDepthScaling', {
-      metric: this.jobQueue.metricApproximateNumberOfMessagesVisible(),
-      scalingSteps: [
-        { upper: 0, change: -1 },    // Scale down when no messages
-        { lower: 1, change: +1 },    // Scale up when messages are waiting
-        { lower: 5, change: +2 },    // Scale up faster with more messages
-      ],
-      adjustmentType: cdk.aws_applicationautoscaling.AdjustmentType.CHANGE_IN_CAPACITY,
-    });
+    // COMMENTED OUT: Single task is sufficient for demo purposes to avoid job fluctuation between tasks
+    // scaling.scaleOnMetric('SqsQueueDepthScaling', {
+    //   metric: this.jobQueue.metricApproximateNumberOfMessagesVisible(),
+    //   scalingSteps: [
+    //     { upper: 0, change: -1 },    // Scale down when no messages
+    //     { lower: 1, change: +1 },    // Scale up when messages are waiting
+    //     { lower: 5, change: +2 },    // Scale up faster with more messages
+    //   ],
+    //   adjustmentType: cdk.aws_applicationautoscaling.AdjustmentType.CHANGE_IN_CAPACITY,
+    // });
 
     // Create Lambda security group
     const lambdaSG = new ec2.SecurityGroup(this, 'AutoCreateLambdaSG', {
@@ -361,6 +362,10 @@ export class StrandsAgentConstruct extends Construct {
     // GET /auto-create/jobs/{jobId} - Get job status
     const jobResource = jobsResource.addResource('{jobId}');
     addMethodWithCors(jobResource, 'GET', this.autoCreateLambda);
+
+    // POST /auto-create/jobs/{jobId}/cancel - Cancel job
+    const cancelResource = jobResource.addResource('cancel');
+    addMethodWithCors(cancelResource, 'POST', this.autoCreateLambda);
 
     // GET /auto-create/stream/{jobId} - SSE stream
     const streamResource = autoCreateResource.addResource('stream');

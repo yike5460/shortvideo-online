@@ -7,12 +7,29 @@ import { subscribeToJobUpdates } from '@/lib/auto-create/api'
 interface ProgressDisplayProps {
   job: AutoCreateJob;
   onCancel?: () => void;
+  onCancelJob?: (jobId: string, userId: string) => Promise<void>;
   onRetry?: (request: string, options?: any) => void;
 }
 
-export default function ProgressDisplay({ job, onCancel, onRetry }: ProgressDisplayProps) {
+export default function ProgressDisplay({ job, onCancel, onCancelJob, onRetry }: ProgressDisplayProps) {
   const [currentJob, setCurrentJob] = useState<AutoCreateJob>(job)
   const [isExpanded, setIsExpanded] = useState(false)
+  const [isCancelling, setIsCancelling] = useState(false)
+
+  const handleCancelJob = async () => {
+    if (!onCancelJob) return
+    
+    setIsCancelling(true)
+    try {
+      await onCancelJob(currentJob.jobId, currentJob.userId)
+      // The job status will be updated via real-time updates
+    } catch (error) {
+      console.error('Failed to cancel job:', error)
+      // You might want to show an error toast here
+    } finally {
+      setIsCancelling(false)
+    }
+  }
 
   useEffect(() => {
     // Subscribe to real-time updates
@@ -40,6 +57,8 @@ export default function ProgressDisplay({ job, onCancel, onRetry }: ProgressDisp
         return 'text-green-600 bg-green-100'
       case 'failed':
         return 'text-red-600 bg-red-100'
+      case 'cancelled':
+        return 'text-gray-600 bg-gray-100'
       default:
         return 'text-gray-600 bg-gray-100'
     }
@@ -72,6 +91,12 @@ export default function ProgressDisplay({ job, onCancel, onRetry }: ProgressDisp
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
           </svg>
         )
+      case 'cancelled':
+        return (
+          <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728L5.636 5.636m12.728 12.728L18.364 5.636M5.636 18.364l12.728-12.728" />
+          </svg>
+        )
       default:
         return null
     }
@@ -95,12 +120,13 @@ export default function ProgressDisplay({ job, onCancel, onRetry }: ProgressDisp
             Job ID: {currentJob.jobId}
           </p>
         </div>
-        {onCancel && currentJob.status !== 'completed' && currentJob.status !== 'failed' && (
+        {onCancelJob && (currentJob.status === 'queued' || currentJob.status === 'processing') && (
           <button
-            onClick={onCancel}
-            className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+            onClick={handleCancelJob}
+            disabled={isCancelling}
+            className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            Cancel
+            {isCancelling ? 'Cancelling...' : 'Cancel Job'}
           </button>
         )}
       </div>

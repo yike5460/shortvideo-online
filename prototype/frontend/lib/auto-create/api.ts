@@ -78,8 +78,13 @@ export async function getJobHistory(userId?: string): Promise<AutoCreateJob[]> {
   return data.jobs;
 }
 
-export async function cancelJob(jobId: string): Promise<void> {
-  const response = await fetch(`${API_BASE_URL}/auto-create/jobs/${jobId}/cancel`, {
+export async function cancelJob(jobId: string, userId?: string): Promise<void> {
+  const url = new URL(`${API_BASE_URL}/auto-create/jobs/${jobId}/cancel`);
+  if (userId) {
+    url.searchParams.append('userId', userId);
+  }
+  
+  const response = await fetch(url.toString(), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
