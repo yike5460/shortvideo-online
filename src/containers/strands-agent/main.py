@@ -79,6 +79,10 @@ class StrandsVideoAgent:
         try:
             logger.info(f"Processing job {job_message.jobId}: {job_message.request}")
             
+            # Create a fresh agent instance for each job to prevent conversation history accumulation
+            logger.info("Creating fresh agent instance to prevent conversation history issues")
+            fresh_agent = create_strands_agent()
+            
             # Update job status to processing
             await self.update_job_status(job_message.jobId, job_message.userId, {
                 'status': 'processing',
@@ -118,8 +122,8 @@ Selected video index: {selected_index}
 
 Remember to be thorough in your search within the specified index and selective in choosing segments that best match the user's intent."""
 
-            # Process with streaming for progress updates
-            result = await self.process_with_streaming(prompt, job_message)
+            # Process with streaming for progress updates using fresh agent
+            result = await self.process_with_streaming(prompt, job_message, fresh_agent)
             
             return result
             
@@ -132,7 +136,7 @@ Remember to be thorough in your search within the specified index and selective 
             })
             raise e
 
-    async def process_with_streaming(self, prompt: str, job_message: JobMessage) -> Dict[str, Any]:
+    async def process_with_streaming(self, prompt: str, job_message: JobMessage, agent) -> Dict[str, Any]:
         """Process request with streaming using Strands Agent"""
         progress = 30
         video_result = None
@@ -143,12 +147,30 @@ Remember to be thorough in your search within the specified index and selective 
             mode_name = "fast mode" if is_fast_mode else "standard mode"
             
             logger.info(f"Starting Strands Agent processing for job {job_message.jobId} using {mode_name}")
+            logger.info(f"Initial prompt length: {len(prompt)} characters")
+            
+            # Log agent state before streaming
+            try:
+                if hasattr(agent, 'conversation') and agent.conversation:
+                    logger.info(f"Agent conversation history before streaming: {len(agent.conversation.messages)} messages")
+                    for i, msg in enumerate(agent.conversation.messages):
+                        content_preview = str(msg.content)[:100] if msg.content else "EMPTY_CONTENT"
+                        logger.info(f"Message {i}: role={msg.role}, content_preview='{content_preview}...'")
+                else:
+                    logger.info("Agent has no conversation history before streaming")
+            except Exception as e:
+                logger.warning(f"Could not inspect agent conversation: {e}")
             
             # Use async streaming from Strands Agent
-            async for event in self.agent.stream_async(prompt):
+            event_count = 0
+            async for event in agent.stream_async(prompt):
+                event_count += 1
+                logger.debug(f"Streaming event {event_count}: {event}")
+                
                 if "current_tool_use" in event and event["current_tool_use"]:
                     tool_info = event["current_tool_use"]
                     tool_name = tool_info.get("name")
+                    logger.info(f"Tool use detected: {tool_name}")
                     
                     if tool_name == "video_search":
                         progress = 50
@@ -168,8 +190,51 @@ Remember to be thorough in your search within the specified index and selective 
                 if "data" in event:
                     logger.debug(f"Agent output: {event['data']}")
             
+            logger.info(f"Streaming completed after {event_count} events")
+            
+            # Log agent state after streaming but before final call
+            try:
+                if hasattr(agent, 'conversation') and agent.conversation:
+                    logger.info(f"Agent conversation history after streaming: {len(agent.conversation.messages)} messages")
+                    for i, msg in enumerate(agent.conversation.messages):
+                        content_preview = str(msg.content)[:100] if msg.content else "EMPTY_CONTENT"
+                        logger.warning(f"Message {i}: role={msg.role}, content_preview='{content_preview}...'")
+                        if not msg.content or (isinstance(msg.content, str) and not msg.content.strip()):
+                            logger.error(f"FOUND EMPTY MESSAGE at index {i}: role={msg.role}, content={repr(msg.content)}")
+                else:
+                    logger.info("Agent has no conversation history after streaming")
+            except Exception as e:
+                logger.warning(f"Could not inspect agent conversation after streaming: {e}")
+            
             # Get final result from agent
-            final_result = self.agent(prompt)
+            logger.info("Making final agent call...")
+            try:
+                final_result = agent(prompt)
+                logger.info("Final agent call completed successfully")
+            except Exception as bedrock_error:
+                logger.error(f"Final agent call failed: {str(bedrock_error)}")
+                
+                # Log detailed error information for ValidationException
+                if "ValidationException" in str(bedrock_error):
+                    logger.error("BEDROCK VALIDATION EXCEPTION DETAILS:")
+                    logger.error(f"Error message: {str(bedrock_error)}")
+                    
+                    # Try to inspect conversation state when error occurs
+                    try:
+                        if hasattr(agent, 'conversation') and agent.conversation:
+                            logger.error(f"Conversation has {len(agent.conversation.messages)} messages at time of error")
+                            # Log messages around the problematic message 38
+                            for i in range(max(0, 35), min(len(agent.conversation.messages), 42)):
+                                msg = agent.conversation.messages[i]
+                                content_info = f"content_type={type(msg.content)}, content_length={len(str(msg.content)) if msg.content else 0}"
+                                if not msg.content or (isinstance(msg.content, str) and not msg.content.strip()):
+                                    logger.error(f"EMPTY MESSAGE FOUND at index {i}: role={msg.role}, {content_info}, content={repr(msg.content)}")
+                                else:
+                                    logger.error(f"Message {i}: role={msg.role}, {content_info}")
+                    except Exception as inspect_error:
+                        logger.error(f"Could not inspect conversation during error: {inspect_error}")
+                
+                raise bedrock_error
             
             # Extract video information from the agent's response
             video_result = self.extract_video_result(final_result.message, job_message.request)
@@ -190,6 +255,8 @@ Remember to be thorough in your search within the specified index and selective 
             # Check if it's a throttling error
             if "ThrottlingException" in str(e) or "Too many tokens" in str(e):
                 logger.error("Bedrock throttling detected - try using fast mode")
+            elif "ValidationException" in str(e) and "empty" in str(e):
+                logger.error("Empty message content detected - this indicates a conversation history issue")
             raise e
     
     def extract_video_result(self, agent_response: str, original_request: str) -> Dict[str, Any]:

@@ -31,7 +31,7 @@ def create_strands_agent() -> Agent:
             model_id="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
             boto_session=session,
             temperature=0.3,
-            cache_tools="default"
+            cache_tools=None  # Disable tool caching to prevent conversation corruption
         )
         
         # Comment out MCP integration - keeping for future reference
