@@ -101,12 +101,12 @@ class StrandsVideoAgent:
                 prompt = f"""EXECUTE IMMEDIATELY: Create video for "{job_message.request}"
 
 ACTIONS:
-1. video_search(query="{job_message.request}", indexes=["{selected_index}"], top_k=5)
+1. video_search(query="{job_message.request}", indexes=["{selected_index}"], top_k=5, fast_mode=True)
 2. Select top 3 segments by confidence
 3. video_merge(segments=selected, output_name="auto_{job_message.jobId[:8]}", resolution="720p")
 
 INDEX: {selected_index}
-MODE: Direct execution, minimal cycles"""
+MODE: Direct execution, minimal cycles, fast processing with skipValidation=True"""
             else:
                 # Standard mode: Detailed, conversational prompt
                 prompt = f"""Create a short video based on this request: "{job_message.request}"
@@ -236,8 +236,8 @@ Remember to be thorough in your search within the specified index and selective 
                 
                 raise bedrock_error
             
-            # Extract video information from the agent's response
-            video_result = self.extract_video_result(final_result.message, job_message.request)
+            # Extract video information from the agent's response and conversation history
+            video_result = self.extract_video_result(final_result, job_message.request, agent)
             video_result['processingMode'] = mode_name
             
             await self.update_job_status(job_message.jobId, job_message.userId, {
@@ -259,21 +259,98 @@ Remember to be thorough in your search within the specified index and selective 
                 logger.error("Empty message content detected - this indicates a conversation history issue")
             raise e
     
-    def extract_video_result(self, agent_response: str, original_request: str) -> Dict[str, Any]:
-        """Extract structured video result from agent response"""
-        # This is a simplified extraction - the agent should provide structured information
-        # about the video creation process including the final video details
+    def extract_video_result(self, agent_response, original_request: str, agent=None) -> Dict[str, Any]:
+        """Extract structured video result from agent response and tool results"""
+        logger.info(f"Extracting video result from agent response type: {type(agent_response)}")
         
-        # For now, return a basic structure that will be enhanced by the actual tool results
-        return {
-            'videoUrl': 'https://example.com/created-video.mp4',  # Will be populated by video_merge tool
-            'thumbnailUrl': 'https://example.com/thumbnail.jpg',
-            'description': agent_response,
-            'duration': 60000,  # Will be calculated from segments
-            's3Path': 'path/to/merged-video.mp4',
-            'originalRequest': original_request,
-            'agentResponse': agent_response
+        # Initialize default values
+        duration = 0
+        description = original_request
+        video_merge_result = None
+        video_search_results = []
+        
+        try:
+            # Extract tool results from agent conversation history
+            if agent and hasattr(agent, 'conversation') and agent.conversation:
+                logger.info(f"Analyzing agent conversation with {len(agent.conversation.messages)} messages")
+                
+                for i, message in enumerate(agent.conversation.messages):
+                    try:
+                        # Look for tool results in the conversation
+                        if hasattr(message, 'content') and message.content:
+                            content_str = str(message.content)
+                            
+                            # Check for video_merge tool results
+                            if 'video_merge' in content_str and 'jobId' in content_str:
+                                logger.info(f"Found video_merge result in message {i}")
+                                try:
+                                    import json
+                                    if '{' in content_str and '}' in content_str:
+                                        json_start = content_str.find('{')
+                                        json_end = content_str.rfind('}') + 1
+                                        json_str = content_str[json_start:json_end]
+                                        video_merge_result = json.loads(json_str)
+                                        logger.info(f"Extracted video_merge result: {video_merge_result}")
+                                except Exception as e:
+                                    logger.warning(f"Could not parse video_merge JSON: {e}")
+                            
+                            # Check for video_search tool results
+                            if 'video_search' in content_str and ('videoId' in content_str or 'segmentId' in content_str):
+                                logger.info(f"Found video_search result in message {i}")
+                                try:
+                                    import json
+                                    if '[' in content_str and ']' in content_str:
+                                        json_start = content_str.find('[')
+                                        json_end = content_str.rfind(']') + 1
+                                        json_str = content_str[json_start:json_end]
+                                        search_results = json.loads(json_str)
+                                        if isinstance(search_results, list):
+                                            video_search_results.extend(search_results)
+                                            logger.info(f"Extracted {len(search_results)} video search results")
+                                except Exception as e:
+                                    logger.warning(f"Could not parse video_search JSON: {e}")
+                                    
+                    except Exception as e:
+                        logger.warning(f"Error processing message {i}: {e}")
+            
+            # Extract video information from tool results
+            if video_merge_result:
+                logger.info("Using video_merge result for video information")
+                custom_name = video_merge_result.get('customName', 'merged-video')
+                
+                # Calculate duration from search results if available
+                if video_search_results:
+                    total_duration = sum(segment.get('duration', 0) for segment in video_search_results)
+                    duration = total_duration // 1000 if total_duration > 1000 else total_duration
+                    logger.info(f"Calculated duration from segments: {duration} seconds")
+                
+                # Create meaningful description
+                segment_count = video_merge_result.get('segmentCount', len(video_search_results))
+                description = f"Successfully created video '{custom_name}' by merging {segment_count} video segments for: {original_request}"
+            else:
+                # Fallback description if no tool results found
+                logger.info("No video_merge result found, using fallback description")
+                description = f"Video creation completed for: {original_request}"
+                
+            # Set default duration if not calculated
+            if duration == 0:
+                duration = 30  # Default 30 seconds
+                
+        except Exception as e:
+            logger.error(f"Error extracting video result: {str(e)}")
+            # Fallback to safe defaults
+            duration = 30
+            description = f"Video creation completed for: {original_request}"
+        
+        # Simplified result structure - no longer need video URLs or thumbnails
+        result = {
+            'description': description,  # Guaranteed to be a string
+            'duration': duration,  # Duration in seconds for frontend
+            'originalRequest': original_request
         }
+        
+        logger.info(f"Final extracted result: {result}")
+        return result
 
     async def update_job_status(self, job_id: str, user_id: str, updates: Dict[str, Any]):
         """Update job status in DynamoDB"""

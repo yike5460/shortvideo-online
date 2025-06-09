@@ -8,11 +8,9 @@ export interface AutoCreateJob {
   completedAt?: string;
   logs: string[];
   result?: {
-    videoUrl: string;
-    thumbnailUrl: string;
     description: string;
     duration: number;
-    s3Path: string;
+    originalRequest: string;
   };
   error?: string;
   estimatedDuration?: number;

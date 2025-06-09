@@ -33,7 +33,8 @@ def video_search(
     indexes: List[str] = None,
     top_k: int = 5,
     # Align with frontend default min_confidence
-    min_confidence: float = 0.5
+    min_confidence: float = 0.5,
+    fast_mode: bool = False
 ) -> List[Dict[str, Any]]:
     """Search for relevant video content using natural language queries
     
@@ -42,6 +43,7 @@ def video_search(
         indexes: List of video indexes to search, passed by the user in the web
         top_k: Maximum number of results to return (default: 5)
         min_confidence: Minimum confidence score for results (default: 0.5)
+        fast_mode: Enable fast mode processing - skips validation for faster results (default: False)
     
     Returns:
         List of video segments with metadata including:
@@ -60,7 +62,8 @@ def video_search(
     logger.info(f"Query: {query}")
     logger.info(f"Indexes: {indexes}")
     logger.info(f"Top_k: {top_k}")
-    logger.info(f"Min_confidence: {min_confidence}\n")
+    logger.info(f"Min_confidence: {min_confidence}")
+    logger.info(f"Fast_mode: {fast_mode}\n")
     logger.info("=== END FUNCTION ENTRY LOG ===\n")
     
     try:
@@ -71,12 +74,15 @@ def video_search(
             raise ValueError("No indexes provided")
         
         # Prepare search request matching the frontend API format (from page.tsx)
+        # In fast mode, skip validation to speed up processing
+        skip_validation = fast_mode  # Skip validation when fast mode is enabled
+        
         search_request = {
             "searchType": "text",
             "searchQuery": query,
             "selectedIndex": indexes[0],
             "advancedSearch": True,  # Enable advanced search as in frontend
-            "skipValidation": False,  # Enable results validation/reranking as in frontend
+            "skipValidation": skip_validation,  # Skip validation in fast mode for faster results
             "exactMatch": False,  # Already obsoleted in frontend
             "topK": top_k,
             "weights": {
@@ -90,6 +96,8 @@ def video_search(
             "visualSearch": True,
             "audioSearch": True
         }
+        
+        logger.info(f"Search request skipValidation set to: {skip_validation} (fast_mode: {fast_mode})")
         
         # Make HTTP request to video search API using requests (synchronous)
         response = requests.post(
