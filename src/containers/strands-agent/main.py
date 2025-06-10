@@ -87,7 +87,7 @@ class StrandsVideoAgent:
             await self.update_job_status(job_message.jobId, job_message.userId, {
                 'status': 'processing',
                 'progress': 10,
-                'logs': [f"Started processing at {datetime.now().isoformat()}"]
+                'logs': [f"[{datetime.now().isoformat()}] Started processing"]
             })
 
             # Extract index from options or use default
@@ -96,6 +96,10 @@ class StrandsVideoAgent:
             # Check for fast mode to determine prompt style
             use_fast_mode = job_message.options.get('fastMode', True) if job_message.options else True
             
+            # Log the processing mode
+            mode_name = "fast mode" if use_fast_mode else "standard mode"
+            await self.append_job_log(job_message.jobId, job_message.userId, f"Processing in {mode_name} using index '{selected_index}'")
+
             if use_fast_mode:
                 # Fast mode: Direct, action-oriented prompt
                 prompt = f"""EXECUTE IMMEDIATELY: Create video for "{job_message.request}"
@@ -121,6 +125,9 @@ User options: {json.dumps(job_message.options, indent=2) if job_message.options 
 Selected video index: {selected_index}
 
 Remember to be thorough in your search within the specified index and selective in choosing segments that best match the user's intent."""
+
+            # Log start of agent processing
+            await self.append_job_log(job_message.jobId, job_message.userId, "Starting AI agent processing...")
 
             # Process with streaming for progress updates using fresh agent
             result = await self.process_with_streaming(prompt, job_message, fresh_agent)
@@ -175,16 +182,16 @@ Remember to be thorough in your search within the specified index and selective 
                     if tool_name == "video_search":
                         progress = 50
                         await self.update_job_status(job_message.jobId, job_message.userId, {
-                            'progress': progress,
-                            'logs': [f"Searching for video content using {mode_name}..."]
+                            'progress': progress
                         })
+                        await self.append_job_log(job_message.jobId, job_message.userId, f"Searching for video content using {mode_name}...")
                         
                     elif tool_name == "video_merge":
                         progress = 80
                         await self.update_job_status(job_message.jobId, job_message.userId, {
-                            'progress': progress,
-                            'logs': [f"Merging video segments using {mode_name}..."]
+                            'progress': progress
                         })
+                        await self.append_job_log(job_message.jobId, job_message.userId, f"Merging video segments using {mode_name}...")
                 
                 # Capture streaming text output
                 if "data" in event:
@@ -208,9 +215,11 @@ Remember to be thorough in your search within the specified index and selective 
             
             # Get final result from agent
             logger.info("Making final agent call...")
+            await self.append_job_log(job_message.jobId, job_message.userId, "Finalizing video creation...")
             try:
                 final_result = agent(prompt)
                 logger.info("Final agent call completed successfully")
+                await self.append_job_log(job_message.jobId, job_message.userId, "AI processing completed successfully")
             except Exception as bedrock_error:
                 logger.error(f"Final agent call failed: {str(bedrock_error)}")
                 
@@ -244,9 +253,9 @@ Remember to be thorough in your search within the specified index and selective 
                 'status': 'completed',
                 'progress': 100,
                 'result': video_result,
-                'completedAt': datetime.now().isoformat(),
-                'logs': [f'Video creation completed using {mode_name}']
+                'completedAt': datetime.now().isoformat()
             })
+            await self.append_job_log(job_message.jobId, job_message.userId, f'Video creation completed using {mode_name}')
             
             return video_result
             
@@ -375,8 +384,33 @@ Remember to be thorough in your search within the specified index and selective 
                 ExpressionAttributeValues=expression_values
             )
             
+            logger.info(f"Successfully updated job {job_id} status")
+                
         except Exception as e:
             logger.error(f"Error updating job status: {str(e)}")
+
+    async def append_job_log(self, job_id: str, user_id: str, log_message: str):
+        """Append a single log message to the job's logs array using DynamoDB list_append"""
+        try:
+            table = dynamodb.Table(JOBS_TABLE_NAME)
+            
+            # Use DynamoDB's list_append to add to existing logs
+            timestamp = datetime.now().isoformat()
+            formatted_log = f"[{timestamp}] {log_message}"
+            
+            table.update_item(
+                Key={'jobId': job_id, 'userId': user_id},
+                UpdateExpression="SET logs = list_append(if_not_exists(logs, :empty_list), :new_log)",
+                ExpressionAttributeValues={
+                    ':empty_list': [],
+                    ':new_log': [formatted_log]
+                }
+            )
+            
+            logger.info(f"Successfully appended log to job {job_id}: {log_message}")
+                
+        except Exception as e:
+            logger.error(f"Error appending job log: {str(e)}")
 
 # Initialize the agent
 agent = StrandsVideoAgent()

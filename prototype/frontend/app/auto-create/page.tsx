@@ -126,16 +126,16 @@ export default function AutoCreatePage() {
           </p>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 lg:items-start">
           {/* Main Content Area */}
           <div className="lg:col-span-2 space-y-6">
             {!currentJob ? (
-              <CreationForm 
+              <CreationForm
                 onSubmit={handleCreateVideo}
                 isProcessing={isLoading}
               />
             ) : currentJob.status === 'completed' && currentJob.result ? (
-              <ResultsPreview 
+              <ResultsPreview
                 result={currentJob.result}
                 onNewCreation={handleNewCreation}
               />
@@ -150,8 +150,8 @@ export default function AutoCreatePage() {
           </div>
 
           {/* Sidebar */}
-          <div className="lg:col-span-1">
-            <JobHistory 
+          <div className="lg:col-span-1 flex">
+            <JobHistory
               jobs={jobHistory}
               currentJobId={currentJob?.jobId}
               onJobSelect={handleJobSelect}

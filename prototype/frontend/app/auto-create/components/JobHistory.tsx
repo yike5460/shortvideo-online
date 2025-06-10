@@ -78,23 +78,28 @@ export default function JobHistory({ jobs, currentJobId, onJobSelect }: JobHisto
 
   if (jobs.length === 0) {
     return (
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-        <h3 className="text-lg font-medium text-gray-900 mb-4">Job History</h3>
-        <div className="text-center py-8">
-          <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-          </svg>
-          <h3 className="mt-2 text-sm font-medium text-gray-900">No jobs yet</h3>
-          <p className="mt-1 text-sm text-gray-500">
-            Create your first video to see it here.
-          </p>
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200 max-h-[779.01px] flex flex-col w-full">
+        <div className="px-6 py-4 border-b border-gray-200">
+          <h3 className="text-lg font-medium text-gray-900">Job History</h3>
+          <p className="text-sm text-gray-500 mt-1">0 jobs</p>
+        </div>
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-center py-8">
+            <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+            </svg>
+            <h3 className="mt-2 text-sm font-medium text-gray-900">No jobs yet</h3>
+            <p className="mt-1 text-sm text-gray-500">
+              Create your first video to see it here.
+            </p>
+          </div>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+    <div className="bg-white rounded-lg shadow-sm border border-gray-200 max-h-[779.01px] flex flex-col w-full">
       <div className="px-6 py-4 border-b border-gray-200">
         <h3 className="text-lg font-medium text-gray-900">Job History</h3>
         <p className="text-sm text-gray-500 mt-1">
@@ -102,7 +107,7 @@ export default function JobHistory({ jobs, currentJobId, onJobSelect }: JobHisto
         </p>
       </div>
 
-      <div className="divide-y divide-gray-200 max-h-96 overflow-y-auto">
+      <div className="divide-y divide-gray-200 flex-1 overflow-y-auto">
         {jobs.map((job) => (
           <div
             key={job.jobId}
