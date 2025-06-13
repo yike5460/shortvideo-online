@@ -3,7 +3,6 @@ import { LambdaContext, LambdaResponse } from '../../types/aws-lambda';
 import { VideoMetadata, VideoStatus, VideoResult, WebVideoStatus } from '../../types/common';
 import { S3Client, GetObjectCommand, PutObjectCommand, DeleteObjectCommand, HeadObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { Client } from '@opensearch-project/opensearch';
 import { defaultProvider } from '@aws-sdk/credential-provider-node';
 import { AwsSigv4Signer } from '@opensearch-project/opensearch/aws';
@@ -17,7 +16,6 @@ import { spawn } from 'child_process';
 
 // Initialize clients
 const s3 = new S3Client({});
-const sqs = new SQSClient({});
 const openSearch = new Client({
   ...AwsSigv4Signer({
     region: process.env.AWS_REGION || 'us-east-1',

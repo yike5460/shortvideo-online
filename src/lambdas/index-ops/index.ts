@@ -178,24 +178,27 @@ async function handleGetIndex(event: APIGatewayProxyEvent): Promise<APIGatewayPr
           videoIdToSegmentAudioEmbedding[videoId] = [];
         }
         
-        // Iterate through video_segments and extract both visual and audio embeddings
-        hit._source.video_segments.forEach((segment: any) => {
-          // Process visual embeddings
-          if (segment.segment_visual?.segment_visual_embedding && 
-            segment.segment_visual.segment_visual_embedding.length === 2048) {
-            videoIdToSegmentVisualEmbedding[videoId].push(
-              segment.segment_visual.segment_visual_embedding
-            );
-          }
-          
-          // Process audio embeddings
-          if (segment.segment_audio?.segment_audio_embedding && 
-            segment.segment_audio.segment_audio_embedding.length === 768) {
-            videoIdToSegmentAudioEmbedding[videoId].push(
-              segment.segment_audio.segment_audio_embedding
-            );
-          }
-        });
+        // Defensive: Only iterate if video_segments is an array
+        if (Array.isArray(hit._source.video_segments)) {
+          // Iterate through video_segments and extract both visual and audio embeddings
+          hit._source.video_segments.forEach((segment: any) => {
+            // Process visual embeddings
+            if (segment.segment_visual?.segment_visual_embedding && 
+              segment.segment_visual.segment_visual_embedding.length === 2048) {
+              videoIdToSegmentVisualEmbedding[videoId].push(
+                segment.segment_visual.segment_visual_embedding
+              );
+            }
+            
+            // Process audio embeddings
+            if (segment.segment_audio?.segment_audio_embedding && 
+              segment.segment_audio.segment_audio_embedding.length === 768) {
+              videoIdToSegmentAudioEmbedding[videoId].push(
+                segment.segment_audio.segment_audio_embedding
+              );
+            }
+          });
+        }
       });
 
       // Count valid and invalid segments for visual embeddings
@@ -724,8 +727,8 @@ async function handleDeleteIndex(event: APIGatewayProxyEvent): Promise<APIGatewa
     
     // Step 4: Delete all entries for this indexId from DynamoDB
     console.log(`Deleting ${scanResult.Items.length} items from DynamoDB for indexId ${indexId}`);
-    
     const deletePromises = scanResult.Items.map(async (item) => {
+      console.log(`Deleting item with videoId ${item.videoId} from DynamoDB`);
       try {
         await docClient.send(new DeleteCommand({
           TableName: process.env.INDEXES_TABLE,
