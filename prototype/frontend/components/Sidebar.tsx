@@ -33,7 +33,11 @@ export default function Sidebar() {
       <div className="flex flex-1 flex-col overflow-y-auto">
         <nav className="flex-1 space-y-1 px-2 py-4">
           {navigation.map((item) => {
-            const isActive = pathname === item.href
+            // Enhanced active state detection to handle nested routes
+            const isActive = item.href === '/' 
+              ? pathname === '/' 
+              : pathname.startsWith(item.href)
+            
             return (
               <Link
                 key={item.name}
@@ -42,7 +46,7 @@ export default function Sidebar() {
                   isActive
                     ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md'
                     : 'text-gray-600 hover:bg-indigo-50 hover:text-indigo-600',
-                  'group flex items-center rounded-md px-2 py-2 text-sm font-medium transition-all duration-200'
+                  'group flex items-center rounded-md px-2 py-2 text-lg font-medium transition-all duration-200'
                 )}
               >
                 <item.icon
