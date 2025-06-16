@@ -208,12 +208,14 @@ const extractAllTags = (videos: VideoResult[]): {tag: string, count: number, typ
     }
   });
   
-  // Convert Map to array
-  return Array.from(tagCounts.entries()).map(([tag, data]) => ({
-    tag,
-    count: data.count,
-    type: data.type
-  }));
+  // Convert Map to array and sort by count (descending order)
+  return Array.from(tagCounts.entries())
+    .map(([tag, data]) => ({
+      tag,
+      count: data.count,
+      type: data.type
+    }))
+    .sort((a, b) => b.count - a.count);
 };
 
 // Helper function to get a color for a category tag based on its name (for consistent colors)
@@ -656,7 +658,7 @@ export default function VideosPage() {
           return 0;
       }
     });
-  }, [videos, sortBy]);
+  }, [videos, sortBy, appliedTags]);
 
   // Group videos by status
   const videosByStatus = useMemo(() => {
@@ -946,31 +948,84 @@ export default function VideosPage() {
         {/* Tag Library */}
         <div className="flex-1">
           <div className="flex justify-between items-center mb-2">
-            <label className="block text-sm font-medium text-gray-700">
-              Categories & Tags
-            </label>
+            <div>
+              <label className="block text-sm font-medium text-gray-700">
+                Categories & Tags
+              </label>
+              <p className="text-xs text-gray-500 mt-1">
+                Click tags to select, then apply filters to show matching videos
+              </p>
+            </div>
             {selectedTags.length > 0 && (
-              <div className="flex space-x-4">
+              <div className="flex space-x-3">
                 <button
                   type="button"
-                  className="text-sm text-indigo-600 hover:text-indigo-800"
+                  className="inline-flex items-center px-3 py-1.5 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-md transition-colors duration-200 shadow-sm"
                   onClick={() => setAppliedTags([...selectedTags])}
                 >
-                  Apply filters
+                  <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+                  </svg>
+                  Apply filters ({selectedTags.length})
                 </button>
                 <button
                   type="button"
-                  className="text-sm text-indigo-600 hover:text-indigo-800"
+                  className="inline-flex items-center px-3 py-1.5 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md transition-colors duration-200"
                   onClick={() => {
                     setSelectedTags([]);
                     setAppliedTags([]);
                   }}
                 >
-                  Clear filters
+                  <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                  Clear
                 </button>
               </div>
             )}
           </div>
+          
+          {/* Show active filters if any */}
+          {appliedTags.length > 0 && (
+            <div className="mb-3 p-2 bg-indigo-50 border border-indigo-200 rounded-md">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center">
+                  <svg className="w-4 h-4 text-indigo-600 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+                  </svg>
+                  <span className="text-sm font-medium text-indigo-800">Active filters:</span>
+                  <div className="flex flex-wrap gap-1 ml-2">
+                    {appliedTags.map(tag => (
+                      <span key={tag} className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-indigo-100 text-indigo-800">
+                        {tag}
+                        <button
+                          onClick={() => {
+                            const newAppliedTags = appliedTags.filter(t => t !== tag);
+                            setAppliedTags(newAppliedTags);
+                            setSelectedTags(newAppliedTags);
+                          }}
+                          className="ml-1 hover:text-indigo-600"
+                        >
+                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    setAppliedTags([]);
+                    setSelectedTags([]);
+                  }}
+                  className="text-xs text-indigo-600 hover:text-indigo-800 font-medium"
+                >
+                  Clear all
+                </button>
+              </div>
+            </div>
+          )}
           
           <div className="border border-gray-200 rounded-md p-3 bg-gray-50 h-[105px] overflow-y-auto">
             {allTags.length > 0 ? (
@@ -986,23 +1041,36 @@ export default function VideosPage() {
                         setSelectedTags(prev => [...prev, tag.tag]);
                       }
                     }}
-                    className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-medium 
+                    className={`inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium cursor-pointer transition-all duration-200 transform hover:scale-105 hover:shadow-sm
                       ${selectedTags.includes(tag.tag) 
-                        ? 'bg-indigo-100 text-indigo-800 border border-indigo-300' 
+                        ? 'bg-indigo-100 text-indigo-800 border-2 border-indigo-300 shadow-sm ring-2 ring-indigo-200' 
                         : tag.type === 'category' 
-                          ? getCategoryColor(tag.tag) 
-                          : 'bg-gray-100 text-gray-800'
+                          ? `${getCategoryColor(tag.tag)} hover:opacity-80 border border-transparent hover:border-gray-300` 
+                          : 'bg-gray-100 text-gray-800 hover:bg-gray-200 border border-transparent hover:border-gray-300'
                       }`}
+                    title={`Click to ${selectedTags.includes(tag.tag) ? 'remove' : 'add'} "${tag.tag}" filter`}
                   >
+                    {selectedTags.includes(tag.tag) && (
+                      <svg className="w-3 h-3 mr-1 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                      </svg>
+                    )}
                     {tag.tag} 
-                    <span className="ml-1 bg-white text-xs px-1.5 rounded-full">
+                    <span className={`ml-1.5 text-xs px-1.5 py-0.5 rounded-full ${selectedTags.includes(tag.tag) ? 'bg-indigo-200 text-indigo-800' : 'bg-white text-gray-600'}`}>
                       {tag.count}
                     </span>
                   </button>
                 ))}
               </div>
             ) : (
-              <div className="text-gray-500 text-sm">No categories or tags detected</div>
+              <div className="flex items-center justify-center h-full">
+                <div className="text-center">
+                  <svg className="w-8 h-8 text-gray-400 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
+                  </svg>
+                  <div className="text-gray-500 text-sm">No categories or tags detected</div>
+                </div>
+              </div>
             )}
           </div>
         </div>
