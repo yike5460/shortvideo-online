@@ -211,9 +211,9 @@ const extractAllTags = (videos: VideoResult[]): {tag: string, count: number, typ
   // Convert Map to array and sort by count (descending order)
   return Array.from(tagCounts.entries())
     .map(([tag, data]) => ({
-      tag,
-      count: data.count,
-      type: data.type
+    tag,
+    count: data.count,
+    type: data.type
     }))
     .sort((a, b) => b.count - a.count);
 };
@@ -365,6 +365,10 @@ export default function VideosPage() {
   const [allTags, setAllTags] = useState<{tag: string, count: number, type: 'category' | 'alias'}[]>([])
   const [selectedTags, setSelectedTags] = useState<string[]>([])
   const [appliedTags, setAppliedTags] = useState<string[]>([])
+  
+  // Add pagination state
+  const [currentPage, setCurrentPage] = useState(1)
+  const VIDEOS_PER_PAGE = 12
   
   // Initialize selectedIndexId from URL parameter
   useEffect(() => {
@@ -660,6 +664,31 @@ export default function VideosPage() {
     });
   }, [videos, sortBy, appliedTags]);
 
+  // Calculate pagination values
+  const totalFilteredVideos = sortedVideos.length;
+  const totalPages = Math.ceil(totalFilteredVideos / VIDEOS_PER_PAGE);
+  const startIndex = (currentPage - 1) * VIDEOS_PER_PAGE;
+  const endIndex = startIndex + VIDEOS_PER_PAGE;
+  const paginatedVideos = sortedVideos.slice(startIndex, endIndex);
+
+  // Reset to page 1 when filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [appliedTags, selectedIndexId, sortBy]);
+
+  // Pagination handlers
+  const goToPage = (page: number) => {
+    setCurrentPage(Math.max(1, Math.min(page, totalPages)));
+  };
+
+  const goToPrevPage = () => {
+    setCurrentPage(prev => Math.max(1, prev - 1));
+  };
+
+  const goToNextPage = () => {
+    setCurrentPage(prev => Math.min(totalPages, prev + 1));
+  };
+
   // Group videos by status
   const videosByStatus = useMemo(() => {
     if (!sortedVideos || !sortedVideos.length) return {}
@@ -949,9 +978,9 @@ export default function VideosPage() {
         <div className="flex-1">
           <div className="flex justify-between items-center mb-2">
             <div>
-              <label className="block text-sm font-medium text-gray-700">
-                Categories & Tags
-              </label>
+            <label className="block text-sm font-medium text-gray-700">
+              Categories & Tags
+            </label>
               <p className="text-xs text-gray-500 mt-1">
                 Click tags to select, then apply filters to show matching videos
               </p>
@@ -1068,7 +1097,7 @@ export default function VideosPage() {
                   <svg className="w-8 h-8 text-gray-400 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
                   </svg>
-                  <div className="text-gray-500 text-sm">No categories or tags detected</div>
+              <div className="text-gray-500 text-sm">No categories or tags detected</div>
                 </div>
               </div>
             )}
@@ -1079,7 +1108,7 @@ export default function VideosPage() {
       {/* Divider line */}
       <div className="border-b border-gray-200 mb-6"></div>
       
-      {/* Video info and Sorting - combined section */}
+              {/* Video info and Sorting - combined section */}
       <div className="flex justify-between items-center mb-6">
         <div className="flex items-center space-x-4">
           {/* Video count and total duration */}
@@ -1088,7 +1117,17 @@ export default function VideosPage() {
               <path fillRule="evenodd" d="M4 3a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V5a2 2 0 00-2-2H4zm3 2h6v4H7V5zm8 8v2h1v-2h-1zm-2-2H7v4h6v-4zm2 0h1V9h-1v2zm1-4V5h-1v2h1zM5 5v2H4V5h1zm0 4H4v2h1V9zm-1 4h1v2H4v-2z" clipRule="evenodd" />
             </svg>
             <span className="font-semibold">
-              {`${videos.length} video${videos.length !== 1 ? 's' : ''} (Total ${calculateTotalDuration(new Set(videos.map(v => v.id)))})`}
+              {totalFilteredVideos > 0 ? (
+                <>
+                  {`${totalFilteredVideos} video${totalFilteredVideos !== 1 ? 's' : ''}`}
+                  {totalPages > 1 && (
+                    <span className="text-gray-600 font-normal"> (showing {paginatedVideos.length} on page {currentPage})</span>
+                  )}
+                  <span className="text-gray-600 font-normal"> - Total {calculateTotalDuration(new Set(sortedVideos.map(v => v.id)))}</span>
+                </>
+              ) : (
+                'No videos found'
+              )}
             </span>
           </div>
           
@@ -1148,8 +1187,19 @@ export default function VideosPage() {
       
       {/* Unified video grid */}
       <div className="mb-12">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-          {sortedVideos.map((video) => (
+        {totalFilteredVideos === 0 ? (
+          <div className="flex items-center justify-center h-64">
+            <div className="text-center">
+              <svg className="w-12 h-12 text-gray-400 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+              </svg>
+              <div className="text-gray-500 text-lg">No videos match your current filters</div>
+              <div className="text-gray-400 text-sm mt-1">Try adjusting your search criteria or clearing the filters</div>
+            </div>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+            {paginatedVideos.map((video) => (
                 <div 
                   key={video.id} 
                   className={`relative bg-white rounded-lg shadow-md overflow-hidden group
@@ -1259,7 +1309,90 @@ export default function VideosPage() {
                 </div>
               ))}
             </div>
-          </div>
+          )}
+        </div>
+          
+                {/* Pagination Controls */}
+        {totalPages > 1 && totalFilteredVideos > 0 && (
+            <div className="mt-8 p-4 bg-gray-50 rounded-lg border border-gray-200 flex flex-col md:flex-row items-center justify-between gap-4">
+              <div className="flex flex-col sm:flex-row items-center text-sm text-gray-600 space-y-2 sm:space-y-0 sm:space-x-4">
+                <span className="text-center sm:text-left">
+                  Showing {startIndex + 1} to {Math.min(endIndex, totalFilteredVideos)} of {totalFilteredVideos} videos
+                </span>
+                <div className="flex items-center">
+                  <span className="text-gray-500">Page</span>
+                  <span className="mx-2 px-2 py-1 bg-gradient-blue-teal text-white text-xs font-semibold rounded-md shadow-sm">
+                    {currentPage}
+                  </span>
+                  <span className="text-gray-500">of {totalPages}</span>
+                </div>
+              </div>
+              
+              <div className="flex items-center space-x-1 sm:space-x-2">
+                {/* Previous button */}
+                <button
+                  onClick={goToPrevPage}
+                  disabled={currentPage === 1}
+                  className={`flex items-center px-3 py-2 text-sm font-medium rounded-lg transition-all duration-200 ${
+                    currentPage === 1
+                      ? 'text-gray-400 cursor-not-allowed bg-gray-100'
+                      : 'text-blue-deep hover:bg-blue-50 hover:shadow-sm focus:bg-blue-50'
+                  }`}
+                >
+                  <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                  </svg>
+                  Previous
+                </button>
+                
+                {/* Page numbers */}
+                <div className="flex items-center space-x-1">
+                  {Array.from({ length: Math.min(7, totalPages) }, (_, i) => {
+                    let pageNum;
+                    if (totalPages <= 7) {
+                      pageNum = i + 1;
+                    } else if (currentPage <= 4) {
+                      pageNum = i + 1;
+                    } else if (currentPage >= totalPages - 3) {
+                      pageNum = totalPages - 6 + i;
+                    } else {
+                      pageNum = currentPage - 3 + i;
+                    }
+                    
+                    return (
+                      <button
+                        key={pageNum}
+                        onClick={() => goToPage(pageNum)}
+                        className={`px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200 ${
+                          currentPage === pageNum
+                            ? 'bg-white text-blue-deep border-2 border-blue-deep shadow-md ring-2 ring-blue-300 ring-opacity-50 transform scale-105 font-bold'
+                            : 'text-gray-700 hover:bg-blue-50 hover:text-blue-deep hover:shadow-sm'
+                        }`}
+                      >
+                        {pageNum}
+                      </button>
+                    );
+                  })}
+                </div>
+                
+                {/* Next button */}
+                <button
+                  onClick={goToNextPage}
+                  disabled={currentPage === totalPages}
+                  className={`flex items-center px-3 py-2 text-sm font-medium rounded-lg transition-all duration-200 ${
+                    currentPage === totalPages
+                      ? 'text-gray-400 cursor-not-allowed bg-gray-100'
+                      : 'text-blue-deep hover:bg-blue-50 hover:shadow-sm focus:bg-blue-50'
+                  }`}
+                >
+                  Next
+                  <svg className="w-4 h-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          )}
       
       
       {/* Use the shared VideoModal component */}
