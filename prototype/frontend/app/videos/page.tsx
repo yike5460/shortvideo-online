@@ -1319,13 +1319,13 @@ export default function VideosPage() {
                 <span className="text-center sm:text-left">
                   Showing {startIndex + 1} to {Math.min(endIndex, totalFilteredVideos)} of {totalFilteredVideos} videos
                 </span>
-                <div className="flex items-center">
-                  <span className="text-gray-500">Page</span>
-                  <span className="mx-2 px-2 py-1 bg-gradient-blue-teal text-white text-xs font-semibold rounded-md shadow-sm">
-                    {currentPage}
-                  </span>
-                  <span className="text-gray-500">of {totalPages}</span>
-                </div>
+                                  <div className="flex items-center">
+                    <span className="text-gray-500">Page</span>
+                    <span className="mx-2 px-2 py-1 bg-white text-blue-deep border border-blue-deep text-xs font-bold rounded-md shadow-sm">
+                      {currentPage}
+                    </span>
+                    <span className="text-gray-500">of {totalPages}</span>
+                  </div>
               </div>
               
               <div className="flex items-center space-x-1 sm:space-x-2">
