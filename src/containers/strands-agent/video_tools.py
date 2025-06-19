@@ -2,7 +2,15 @@ from strands import tool
 import requests
 import os
 import logging
+import time
 from typing import List, Dict, Any
+from functools import wraps
+
+# Import monitoring (try both relative and absolute)
+try:
+    from .monitoring import monitor
+except ImportError:
+    from monitoring import monitor
 
 # Configure logger to ensure it inherits from root logger
 logger = logging.getLogger(__name__)
@@ -27,7 +35,63 @@ logger.info("=== END MODULE LOAD LOG ===")
 VIDEO_SEARCH_API_URL = os.getenv('VIDEO_SEARCH_API_URL')
 VIDEO_MERGE_API_URL = os.getenv('VIDEO_MERGE_API_URL')
 
+def retry_on_failure(max_retries=3, delay=1.0):
+    """Decorator to retry function calls on failure with exponential backoff"""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            last_exception = None
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    last_exception = e
+                    if attempt < max_retries - 1:
+                        wait_time = delay * (2 ** attempt)  # Exponential backoff
+                        logger.warning(f"Attempt {attempt + 1} failed for {func.__name__}: {str(e)}. Retrying in {wait_time}s...")
+                        time.sleep(wait_time)
+                    else:
+                        logger.error(f"All {max_retries} attempts failed for {func.__name__}")
+            raise last_exception
+        return wrapper
+    return decorator
+
+def make_api_request(url: str, data: dict, timeout: int = 30) -> requests.Response:
+    """Make HTTP request with enhanced error handling and circuit breaker pattern"""
+    try:
+        response = requests.post(
+            url,
+            json=data,
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            },
+            timeout=timeout
+        )
+        
+        # Log response for debugging
+        logger.info(f"API Response: {response.status_code} from {url}")
+        
+        if response.status_code == 429:  # Rate limiting
+            retry_after = response.headers.get('Retry-After', '5')
+            raise Exception(f"Rate limited. Retry after {retry_after} seconds")
+        elif response.status_code >= 500:  # Server errors
+            raise Exception(f"Server error: {response.status_code} - {response.text}")
+        elif response.status_code >= 400:  # Client errors
+            raise Exception(f"Client error: {response.status_code} - {response.text}")
+            
+        return response
+        
+    except requests.exceptions.Timeout:
+        raise Exception(f"Request timeout after {timeout} seconds")
+    except requests.exceptions.ConnectionError:
+        raise Exception("Connection error - API endpoint unavailable")
+    except requests.exceptions.RequestException as e:
+        raise Exception(f"Request failed: {str(e)}")
+
 @tool
+@retry_on_failure(max_retries=3, delay=1.0)
+@monitor.track_api_call('video_search')
 def video_search(
     query: str,
     indexes: List[str] = None,
@@ -57,14 +121,10 @@ def video_search(
         - videoUrl: Signed URL for video preview
         - thumbnailUrl: Signed URL for thumbnail
     """
-    # Add function entry log to confirm function is being called
-    logger.info("=== VIDEO_SEARCH FUNCTION CALLED ===\n")
-    logger.info(f"Query: {query}")
-    logger.info(f"Indexes: {indexes}")
-    logger.info(f"Top_k: {top_k}")
-    logger.info(f"Min_confidence: {min_confidence}")
-    logger.info(f"Fast_mode: {fast_mode}\n")
-    logger.info("=== END FUNCTION ENTRY LOG ===\n")
+        # Add function entry log to confirm function is being called  
+    logger.info("=== VIDEO_SEARCH FUNCTION CALLED ===")
+    logger.info(f"Query: '{query}', Indexes: {indexes}, Top_k: {top_k}, Min_confidence: {min_confidence}, Fast_mode: {fast_mode}")
+    logger.info("=== END FUNCTION ENTRY LOG ===")
     
     try:
         if not VIDEO_SEARCH_API_URL:
@@ -99,23 +159,14 @@ def video_search(
         
         logger.info(f"Search request skipValidation set to: {skip_validation} (fast_mode: {fast_mode})")
         
-        # Make HTTP request to video search API using requests (synchronous)
-        response = requests.post(
-            VIDEO_SEARCH_API_URL,
-            json=search_request,
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "application/json"
-            },
-            timeout=30
-        )
+        # Make HTTP request to video search API with enhanced error handling
+        response = make_api_request(VIDEO_SEARCH_API_URL, search_request, timeout=30)
         
         if response.status_code == 200:
 
             results = response.json()
-            # Log raw search results to understand segment data structure
-            logger.info(f"Raw search results structure: {results}\n")
-            logger.info(f"Found {len(results)} video results for query: '{query}'\n")
+            # Log search results count without full structure to avoid cluttering logs
+            logger.info(f"Found {len(results)} video results for query: '{query}'")
 
             # Transform results to a more tool-friendly format
             formatted_results = []
@@ -125,8 +176,13 @@ def video_search(
                 
                 # Extract segments from each video
                 for segment in video.get('segments', []):
-                    # Log segment data to identify missing S3 paths
-                    logger.info(f"Segment {segment.get('segment_id')} data: s3_path={segment.get('segment_video_s3_path')}, duration={segment.get('duration')}, start_time={segment.get('start_time')}, end_time={segment.get('end_time')}")
+                    # Get URLs but don't log them (they're very long)
+                    video_url = segment.get('segment_video_preview_url', '')
+                    thumbnail_url = segment.get('segment_video_thumbnail_url', '')
+                    s3_path = segment.get('segment_video_s3_path', '')
+                    
+                    # Log segment data without URLs to avoid cluttering logs
+                    logger.info(f"Segment {segment.get('segment_id')}: s3_path={'present' if s3_path else 'missing'}, duration={segment.get('duration')}, start_time={segment.get('start_time')}, end_time={segment.get('end_time')}")
                     
                     formatted_results.append({
                         'videoId': video.get('id'),
@@ -138,9 +194,9 @@ def video_search(
                         'duration': segment.get('duration', 0),
                         'startTime': segment.get('start_time', 0),
                         'endTime': segment.get('end_time', 0),
-                        's3Path': segment.get('segment_video_s3_path', ''),
-                        'videoUrl': segment.get('segment_video_preview_url', ''),
-                        'thumbnailUrl': segment.get('segment_video_thumbnail_url', ''),
+                        's3Path': s3_path,
+                        'videoUrl': video_url,
+                        'thumbnailUrl': thumbnail_url,
                         'videoTitle': video.get('title', ''),
                         'videoDescription': video.get('description', '')
                     })
@@ -148,8 +204,11 @@ def video_search(
             # Sort by confidence score (highest first)
             formatted_results.sort(key=lambda x: x.get('confidence', 0), reverse=True)
             
-            logger.info(f"Returning {len(formatted_results)} formatted video segments\n")
-            logger.info(f"Final formatted results being returned: {formatted_results}\n")
+            logger.info(f"Returning {len(formatted_results)} formatted video segments")
+            # Log summary without URLs to avoid cluttering
+            for i, result in enumerate(formatted_results[:3]):  # Log only first 3 results summary
+                logger.info(f"Top result {i+1}: {result['segmentId']} (confidence: {result['confidence']:.3f}, duration: {result['duration']}ms)")
+            
             return formatted_results
             
         else:
@@ -162,6 +221,8 @@ def video_search(
         raise Exception(f"Failed to search videos: {str(e)}")
 
 @tool
+@retry_on_failure(max_retries=2, delay=2.0)
+@monitor.track_api_call('video_merge')
 def video_merge(
     segments: List[Dict[str, Any]],
     output_name: str,
@@ -206,7 +267,9 @@ def video_merge(
     logger.info(f"Number of segments: {len(segments)}")
     logger.info(f"Resolution: {resolution}")
     logger.info(f"Transition type: {transition_type}")
-    logger.info(f"Raw segments received by video_merge: {segments}")
+    # Log segment summary without full URLs to avoid cluttering logs
+    for i, segment in enumerate(segments):
+        logger.info(f"Segment {i+1}: {segment.get('segmentId')} (confidence: {segment.get('confidence', 0):.3f}, duration: {segment.get('duration', 0)}ms)")
     logger.info("=== END FUNCTION ENTRY LOG ===")
     
     try:
@@ -233,17 +296,19 @@ def video_merge(
             start_time = segment.get("startTime", 0)
             end_time = segment.get("endTime", 0)
             
-            logger.info(f"Segment {i+1} - ID: {segment.get('segmentId')}")
-            logger.info(f"Segment {i+1} - S3 Path: {s3_path} (valid: {s3_path is not None and s3_path != ''})")
-            logger.info(f"Segment {i+1} - Duration: {duration} (valid: {duration > 0})")
-            logger.info(f"Segment {i+1} - Time Range: {start_time} - {end_time} (valid: {end_time > start_time})")
+            # Compact validation logging to avoid cluttering
+            s3_valid = s3_path is not None and s3_path != ''
+            duration_valid = duration > 0
+            time_valid = end_time > start_time
             
-            if not s3_path or s3_path == '':
-                logger.error(f"ERROR: Segment {i+1} ({segment.get('segmentId')}) has no valid S3 path - this will cause merge to fail")
-            if duration <= 0:
-                logger.error(f"ERROR: Segment {i+1} ({segment.get('segmentId')}) has invalid duration ({duration}) - indicates incomplete processing")
-            if end_time <= start_time:
-                logger.error(f"ERROR: Segment {i+1} ({segment.get('segmentId')}) has invalid time range ({start_time}-{end_time}) - indicates incomplete processing")
+            logger.info(f"Segment {i+1} ({segment.get('segmentId')}): s3_path={s3_valid}, duration={duration}ms, time_range={start_time}-{end_time}")
+            
+            if not s3_valid:
+                logger.error(f"ERROR: Segment {i+1} ({segment.get('segmentId')}) has no valid S3 path - merge will fail")
+            if not duration_valid:
+                logger.error(f"ERROR: Segment {i+1} ({segment.get('segmentId')}) has invalid duration ({duration})")
+            if not time_valid:
+                logger.error(f"ERROR: Segment {i+1} ({segment.get('segmentId')}) has invalid time range ({start_time}-{end_time})")
 
         # Prepare merge request matching the video-merge Lambda API with complete segment data
         merge_request = {
@@ -277,17 +342,10 @@ def video_merge(
                 "defaultTransitionDuration": transition_duration
             }
         }
-        logger.info(f"The video merge request assembled by video_merge: {merge_request}")
-        # Make HTTP request to video merge API using requests (synchronous)
-        response = requests.post(
-            VIDEO_MERGE_API_URL,
-            json=merge_request,
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "application/json"
-            },
-            timeout=30
-        )
+        # Log merge request summary without full URLs to avoid cluttering logs
+        logger.info(f"Assembled merge request with {len(merge_request['items'])} items for '{output_name}' ({resolution})")
+        # Make HTTP request to video merge API with enhanced error handling
+        response = make_api_request(VIDEO_MERGE_API_URL, merge_request, timeout=30)
 
         if response.status_code == 200:
             result = response.json()

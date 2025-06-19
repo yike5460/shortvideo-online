@@ -4,6 +4,7 @@ import boto3
 from typing import Dict, Any
 from strands import Agent
 from strands.models import BedrockModel
+from strands.agent.conversation_manager import SlidingWindowConversationManager
 
 # Comment out MCP imports - keeping for future reference
 # from strands.tools.mcp.mcp_client import MCPClient
@@ -27,11 +28,14 @@ def create_strands_agent() -> Agent:
         # Create Bedrock model with boto session, fixed to region us-east-1 for now
         # session = boto3.Session(region_name=os.getenv('AWS_REGION', 'us-east-1'))
         session = boto3.Session(region_name='us-east-1')
+        
+        # Enhanced Bedrock model configuration to prevent conversation corruption
         bedrock_model = BedrockModel(
             model_id="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
             boto_session=session,
             temperature=0.3,
-            cache_tools=None  # Disable tool caching to prevent conversation corruption
+            # Actually mapping to cachePoint option for prompt cache: https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html
+            cache_tools=None
         )
         
         # Comment out MCP integration - keeping for future reference
@@ -54,19 +58,51 @@ def create_strands_agent() -> Agent:
         # System prompt for video creation
         system_prompt = get_system_prompt()
         
+        # Create conversation manager with window limit to prevent accumulation
+        conversation_manager = SlidingWindowConversationManager(
+            window_size=20  # Limit conversation to last 20 messages, official default is 40 messages
+        )
+        
         # Create agent with custom tools instead of MCP tools
         agent = Agent(
             model=bedrock_model,
             tools=[video_search, video_merge],  # Use custom tools directly
-            system_prompt=system_prompt
+            system_prompt=system_prompt,
+            conversation_manager=conversation_manager  # Use conversation manager with limits
         )
         
-        logger.info("Strands Agent created successfully with custom video tools")
+        logger.info("Strands Agent created successfully with custom video tools and conversation management")
         return agent
         
     except Exception as e:
         logger.error(f"Failed to create Strands Agent: {str(e)}")
         raise Exception(f"Agent initialization failed: {str(e)}")
+
+def reset_agent_conversation(agent: Agent) -> None:
+    """Reset agent conversation history to prevent accumulation issues"""
+    try:
+        if hasattr(agent, 'messages') and agent.messages:
+            # Get current conversation length before clearing
+            conversation_length = len(agent.messages)
+            logger.info(f"Resetting conversation with {conversation_length} messages")
+            
+            # Clear the messages list (this is the actual conversation history in Strands Agent)
+            agent.messages.clear()
+            logger.info("Agent conversation history reset successfully")
+            
+            # Also trigger conversation manager if available to ensure proper cleanup
+            if hasattr(agent, 'conversation_manager') and agent.conversation_manager:
+                # Apply conversation management to ensure proper state cleanup
+                agent.conversation_manager.apply_management(agent)
+                logger.info("Applied conversation manager cleanup")
+                
+        else:
+            logger.info("Agent has no conversation messages to reset")
+            
+    except Exception as e:
+        logger.error(f"Failed to reset agent conversation: {str(e)}")
+        # Re-raise the exception to ensure calling code can handle it appropriately
+        raise e
 
 def get_system_prompt() -> str:
     """Get system prompt for video creation agent"""
@@ -80,7 +116,7 @@ Your task is to help users create videos by:
 1. Understanding their request for video creation
 2. Using video_search to find relevant video content based on the request
 3. Analyzing the search results and selecting the most appropriate segments
-4. Using video_merge to combine selected segments into a final video
+4. Using video_merge ONCE to combine selected segments into a final video
 5. Providing a clear description of the created video and merge job details
 
 Guidelines for video creation:
@@ -92,21 +128,27 @@ Guidelines for video creation:
 - Be creative while working within the available video content
 - If you can't find suitable content, explain what was searched for and suggest alternatives
 
-Important constraints:
+CRITICAL CONSTRAINTS TO PREVENT LOOPS:
 - You can only work with existing video content in the library
 - Always use the video_search tool first to find relevant content
 - Only merge segments that are actually returned from video_search
+- Use video_merge EXACTLY ONCE per request - never call it multiple times in a row
+- After calling video_merge successfully, DO NOT call it again - the job is submitted and processing asynchronously
+- If video_merge returns a jobId, the task is complete - explain the result and stop
 - Provide detailed explanations of your video creation process
 - Each segment needs indexId, videoId, and segmentId for merging
 
 When creating videos:
 1. Start by searching for content related to the user's request
 2. Review the search results and select the best segments (consider confidence scores)
-3. Merge the selected segments with appropriate transitions and resolution
-4. Describe the final video including its content, job ID for tracking, and key segments used
-5. Explain how users can track the merge job progress
+3. Call video_merge ONCE with the selected segments
+4. Once video_merge returns a jobId, STOP and explain the result
+5. Describe the final video including its content, job ID for tracking, and key segments used
+6. Explain how users can track the merge job progress
 
-Video merge jobs are processed asynchronously. Always provide the job ID and explain that users can check the status later.
+Video merge jobs are processed asynchronously. Once you receive a jobId from video_merge, the job is successfully submitted and you should NOT call video_merge again. Always provide the job ID and explain that users can check the status later.
+
+IMPORTANT: Never call the same tool repeatedly in a conversation. Each tool should be used purposefully and only when necessary.
 
 Be helpful, creative, and thorough in your responses."""
 

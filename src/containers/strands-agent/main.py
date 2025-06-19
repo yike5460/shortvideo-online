@@ -13,12 +13,14 @@ from datetime import datetime
 # Strands Agent imports - Fix relative import issue
 try:
     # Try relative imports first (for package mode)
-    from .agent_config import create_strands_agent, validate_agent_setup, get_agent_info
+    from .agent_config import create_strands_agent, validate_agent_setup, get_agent_info, reset_agent_conversation
+    from .monitoring import monitor
     print("DEBUG: Successfully imported with relative imports")
 except ImportError as e:
     print(f"DEBUG: Relative import failed: {e}")
     # Fallback to absolute imports (for script mode)
-    from agent_config import create_strands_agent, validate_agent_setup, get_agent_info
+    from agent_config import create_strands_agent, validate_agent_setup, get_agent_info, reset_agent_conversation
+    from monitoring import monitor
     print("DEBUG: Successfully imported with absolute imports")
 
 # Configure logging
@@ -74,8 +76,10 @@ class StrandsVideoAgent:
             logger.error(f"Failed to initialize StrandsVideoAgent: {str(e)}")
             raise e
 
+    @monitor.track_job_processing
     async def process_request(self, job_message: JobMessage) -> Dict[str, Any]:
-        """Process video creation request using Strands Agent"""
+        """Process video creation request using Strands Agent with enhanced error handling"""
+        fresh_agent = None
         try:
             logger.info(f"Processing job {job_message.jobId}: {job_message.request}")
             
@@ -83,11 +87,14 @@ class StrandsVideoAgent:
             logger.info("Creating fresh agent instance to prevent conversation history issues")
             fresh_agent = create_strands_agent()
             
+            # Ensure clean conversation state
+            reset_agent_conversation(fresh_agent)
+            
             # Update job status to processing
             await self.update_job_status(job_message.jobId, job_message.userId, {
                 'status': 'processing',
                 'progress': 10,
-                'logs': [f"[{datetime.now().isoformat()}] Started processing"]
+                'logs': [f"[{datetime.now().isoformat()}] Started processing with fresh agent instance"]
             })
 
             # Extract index from options or use default
@@ -101,8 +108,13 @@ class StrandsVideoAgent:
             await self.append_job_log(job_message.jobId, job_message.userId, f"Processing in {mode_name} using index '{selected_index}'")
 
             if use_fast_mode:
-                # Fast mode: Direct, action-oriented prompt
+                # Fast mode: Direct, action-oriented prompt with conversation limits
                 prompt = f"""EXECUTE IMMEDIATELY: Create video for "{job_message.request}"
+
+CRITICAL INSTRUCTIONS:
+- Use fresh conversation with no history
+- Execute tools directly without extensive conversation
+- Limit response to essential information only
 
 ACTIONS:
 1. video_search(query="{job_message.request}", indexes=["{selected_index}"], top_k=5, fast_mode=True)
@@ -110,38 +122,59 @@ ACTIONS:
 3. video_merge(segments=selected, output_name="auto_{job_message.jobId[:8]}", resolution="720p")
 
 INDEX: {selected_index}
-MODE: Direct execution, minimal cycles, fast processing with skipValidation=True"""
-            else:
-                # Standard mode: Detailed, conversational prompt
-                prompt = f"""Create a short video based on this request: "{job_message.request}"
+MODE: Direct execution, minimal conversation, fast processing with skipValidation=True
 
-Please search for videos using index '{selected_index}' and follow these steps:
-1. Search for relevant video content in the '{selected_index}' index that matches this request
-2. Select the best segments that create a coherent narrative
-3. Merge them into a cohesive video with appropriate transitions
-4. Provide details about the final video including description and key segments used
+RESPOND BRIEFLY: Only provide tool results and final status."""
+            else:
+                # Standard mode: Detailed, conversational prompt with conversation limits
+                prompt = f"""Create a short video for: "{job_message.request}"
+
+Use index '{selected_index}' and follow these steps:
+1. Search for relevant video content
+2. Select the best segments (consider confidence scores)
+3. Merge them into a cohesive video
 
 User options: {json.dumps(job_message.options, indent=2) if job_message.options else 'None specified'}
 Selected video index: {selected_index}
 
-Remember to be thorough in your search within the specified index and selective in choosing segments that best match the user's intent."""
+Keep responses concise and focused on tool execution."""
 
             # Log start of agent processing
-            await self.append_job_log(job_message.jobId, job_message.userId, "Starting AI agent processing...")
+            await self.append_job_log(job_message.jobId, job_message.userId, "Starting AI agent processing with conversation limits...")
 
-            # Process with streaming for progress updates using fresh agent
+            # Process with enhanced streaming and conversation management
             result = await self.process_with_streaming(prompt, job_message, fresh_agent)
             
             return result
             
         except Exception as e:
             logger.error(f"Error processing job {job_message.jobId}: {str(e)}")
+            
+            # Log specific error types for better debugging and track in monitoring
+            if "ValidationException" in str(e):
+                logger.error("BEDROCK VALIDATION ERROR: Likely conversation corruption")
+                monitor.track_conversation_issue(fresh_agent, "validation_exception", job_message.jobId)
+                await self.append_job_log(job_message.jobId, job_message.userId, "Error: Conversation validation failed - using fresh agent instance")
+            elif "ThrottlingException" in str(e):
+                logger.error("BEDROCK THROTTLING ERROR: Rate limit exceeded")
+                await self.append_job_log(job_message.jobId, job_message.userId, "Error: Rate limit exceeded - try again later")
+            else:
+                await self.append_job_log(job_message.jobId, job_message.userId, f"Error: {str(e)}")
+            
             await self.update_job_status(job_message.jobId, job_message.userId, {
                 'status': 'failed',
                 'error': str(e),
                 'completedAt': datetime.now().isoformat()
             })
             raise e
+        finally:
+            # Clean up agent conversation even if processing fails
+            if fresh_agent:
+                try:
+                    reset_agent_conversation(fresh_agent)
+                    logger.info("Cleaned up agent conversation after processing")
+                except Exception as cleanup_error:
+                    logger.warning(f"Failed to clean up agent conversation: {cleanup_error}")
 
     async def process_with_streaming(self, prompt: str, job_message: JobMessage, agent) -> Dict[str, Any]:
         """Process request with streaming using Strands Agent"""
@@ -168,6 +201,10 @@ Remember to be thorough in your search within the specified index and selective 
             except Exception as e:
                 logger.warning(f"Could not inspect agent conversation: {e}")
             
+            # Tool execution guards to prevent infinite loops
+            tool_execution_count = {"video_search": 0, "video_merge": 0}
+            max_tool_executions = {"video_search": 3, "video_merge": 1}  # Allow max 3 searches, 1 merge
+            
             # Use async streaming from Strands Agent
             event_count = 0
             async for event in agent.stream_async(prompt):
@@ -177,7 +214,20 @@ Remember to be thorough in your search within the specified index and selective 
                 if "current_tool_use" in event and event["current_tool_use"]:
                     tool_info = event["current_tool_use"]
                     tool_name = tool_info.get("name")
-                    logger.info(f"Tool use detected: {tool_name}")
+                    
+                    # Check tool execution limits to prevent infinite loops
+                    if tool_name in tool_execution_count:
+                        tool_execution_count[tool_name] += 1
+                        logger.info(f"Tool use detected: {tool_name} (execution #{tool_execution_count[tool_name]})")
+                        
+                        # Enforce tool execution limits
+                        if tool_execution_count[tool_name] > max_tool_executions.get(tool_name, 1):
+                            logger.error(f"TOOL LOOP DETECTED: {tool_name} executed {tool_execution_count[tool_name]} times (max: {max_tool_executions.get(tool_name, 1)})")
+                            # Force stop the agent to prevent infinite loops
+                            await self.append_job_log(job_message.jobId, job_message.userId, f"Warning: Tool loop detected for {tool_name}. Stopping to prevent timeout.")
+                            break
+                    else:
+                        logger.info(f"Tool use detected: {tool_name}")
                     
                     if tool_name == "video_search":
                         progress = 50
@@ -198,6 +248,7 @@ Remember to be thorough in your search within the specified index and selective 
                     logger.debug(f"Agent output: {event['data']}")
             
             logger.info(f"Streaming completed after {event_count} events")
+            logger.info(f"Tool execution summary: {tool_execution_count}")
             
             # Log agent state after streaming but before final call
             try:
@@ -417,7 +468,7 @@ agent = StrandsVideoAgent()
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint with dependency verification"""
+    """Health check endpoint with corrected environment variables"""
     try:
         # Basic health status
         health_status = {
@@ -427,8 +478,8 @@ async def health_check():
             "version": "1.0.0"
         }
         
-        # Check if required environment variables are present
-        required_env_vars = ['OPENSEARCH_ENDPOINT', 'VIDEO_BUCKET', 'JOBS_TABLE', 'INDEXES_TABLE', 'MCP_SERVER_URL']
+        # Check if required environment variables are present (corrected list)
+        required_env_vars = ['VIDEO_SEARCH_API_URL', 'VIDEO_MERGE_API_URL', 'JOBS_TABLE']
         missing_vars = [var for var in required_env_vars if not os.getenv(var)]
         
         if missing_vars:
@@ -438,6 +489,12 @@ async def health_check():
             logger.error(f"Health check failed: Missing env vars: {missing_vars}")
             raise HTTPException(status_code=503, detail=health_status)
         
+        # Check optional environment variables
+        optional_env_vars = ['JOB_QUEUE_URL', 'AWS_REGION']
+        for var in optional_env_vars:
+            if not os.getenv(var):
+                health_status["warnings"] = health_status.get("warnings", []) + [f"Optional env var {var} not configured"]
+        
         # Check if SQS queue URL is configured (optional - just warning)
         if JOB_QUEUE_URL:
             health_status["sqs_queue_configured"] = True
@@ -445,17 +502,17 @@ async def health_check():
             health_status["sqs_queue_configured"] = False
             health_status["warnings"] = health_status.get("warnings", []) + ["SQS queue not configured - background processing disabled"]
         
-        # Validate MCP connection and agent setup
+        # Validate agent setup and API endpoints
         try:
-            validation_results = await validate_agent_setup()
-            health_status["mcp_validation"] = validation_results
+            validation_results = validate_agent_setup()
+            health_status["api_validation"] = validation_results
             
             if not all(validation_results.values()):
-                health_status["warnings"] = health_status.get("warnings", []) + ["Some MCP validation checks failed"]
+                health_status["warnings"] = health_status.get("warnings", []) + ["Some API validation checks failed"]
                 
         except Exception as e:
-            health_status["mcp_validation"] = {"error": str(e)}
-            health_status["warnings"] = health_status.get("warnings", []) + [f"MCP validation failed: {str(e)}"]
+            health_status["api_validation"] = {"error": str(e)}
+            health_status["warnings"] = health_status.get("warnings", []) + [f"API validation failed: {str(e)}"]
         
         # Check Strands Agent configuration
         try:
@@ -464,7 +521,7 @@ async def health_check():
                 "status": "configured",
                 "model_id": agent_info["model_id"],
                 "integration_type": agent_info["integration_type"],
-                "mcp_server_url": agent_info["mcp_server_url"]
+                "tools": agent_info["tools"]
             }
         except Exception as e:
             health_status["strands_agent"] = {
@@ -526,6 +583,40 @@ async def validate_agent_endpoint():
     except Exception as e:
         logger.error(f"Agent validation failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Agent validation failed: {str(e)}")
+
+@app.get("/monitoring/metrics")
+async def get_monitoring_metrics():
+    """Get agent performance and health metrics"""
+    try:
+        metrics = monitor.get_health_metrics()
+        return metrics
+    except Exception as e:
+        logger.error(f"Failed to get monitoring metrics: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get monitoring metrics: {str(e)}")
+
+@app.post("/monitoring/reset")
+async def reset_monitoring_metrics():
+    """Reset monitoring metrics (admin endpoint)"""
+    try:
+        monitor.reset_metrics()
+        return {"message": "Monitoring metrics reset successfully", "timestamp": datetime.now().isoformat()}
+    except Exception as e:
+        logger.error(f"Failed to reset monitoring metrics: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to reset monitoring metrics: {str(e)}")
+
+@app.get("/monitoring/alerts")
+async def get_active_alerts():
+    """Get current active alerts"""
+    try:
+        alerts = monitor.generate_alerts()
+        return {
+            "timestamp": datetime.now().isoformat(),
+            "alerts": alerts,
+            "alert_count": len(alerts)
+        }
+    except Exception as e:
+        logger.error(f"Failed to get alerts: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get alerts: {str(e)}")
 
 @app.post("/process-job")
 async def process_job(job_message: JobMessage):
