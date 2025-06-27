@@ -140,9 +140,9 @@ Selected video index: {selected_index}
 Keep responses concise and focused on tool execution."""
 
             # Log start of agent processing
-            await self.append_job_log(job_message.jobId, job_message.userId, "Starting AI agent processing with conversation limits...")
+            await self.append_job_log(job_message.jobId, job_message.userId, "Starting AI agent processing with streaming...")
 
-            # Process with enhanced streaming and conversation management
+            # Process with streaming only (no redundant calls)
             result = await self.process_with_streaming(prompt, job_message, fresh_agent)
             
             return result
@@ -188,19 +188,7 @@ Keep responses concise and focused on tool execution."""
             
             logger.info(f"Starting Strands Agent processing for job {job_message.jobId} using {mode_name}")
             logger.info(f"Initial prompt length: {len(prompt)} characters")
-            
-            # Log agent state before streaming
-            try:
-                if hasattr(agent, 'conversation') and agent.conversation:
-                    logger.info(f"Agent conversation history before streaming: {len(agent.conversation.messages)} messages")
-                    for i, msg in enumerate(agent.conversation.messages):
-                        content_preview = str(msg.content)[:100] if msg.content else "EMPTY_CONTENT"
-                        logger.info(f"Message {i}: role={msg.role}, content_preview='{content_preview}...'")
-                else:
-                    logger.info("Agent has no conversation history before streaming")
-            except Exception as e:
-                logger.warning(f"Could not inspect agent conversation: {e}")
-            
+     
             # Tool execution guards to prevent infinite loops
             tool_execution_count = {"video_search": 0, "video_merge": 0}
             max_tool_executions = {"video_search": 3, "video_merge": 1}  # Allow max 3 searches, 1 merge
@@ -250,54 +238,12 @@ Keep responses concise and focused on tool execution."""
             logger.info(f"Streaming completed after {event_count} events")
             logger.info(f"Tool execution summary: {tool_execution_count}")
             
-            # Log agent state after streaming but before final call
-            try:
-                if hasattr(agent, 'conversation') and agent.conversation:
-                    logger.info(f"Agent conversation history after streaming: {len(agent.conversation.messages)} messages")
-                    for i, msg in enumerate(agent.conversation.messages):
-                        content_preview = str(msg.content)[:100] if msg.content else "EMPTY_CONTENT"
-                        logger.warning(f"Message {i}: role={msg.role}, content_preview='{content_preview}...'")
-                        if not msg.content or (isinstance(msg.content, str) and not msg.content.strip()):
-                            logger.error(f"FOUND EMPTY MESSAGE at index {i}: role={msg.role}, content={repr(msg.content)}")
-                else:
-                    logger.info("Agent has no conversation history after streaming")
-            except Exception as e:
-                logger.warning(f"Could not inspect agent conversation after streaming: {e}")
+            # Process completed - extract results from conversation history
+            logger.info("Streaming processing completed - extracting results from conversation")
+            await self.append_job_log(job_message.jobId, job_message.userId, "AI processing completed successfully")
             
-            # Get final result from agent
-            logger.info("Making final agent call...")
-            await self.append_job_log(job_message.jobId, job_message.userId, "Finalizing video creation...")
-            try:
-                final_result = agent(prompt)
-                logger.info("Final agent call completed successfully")
-                await self.append_job_log(job_message.jobId, job_message.userId, "AI processing completed successfully")
-            except Exception as bedrock_error:
-                logger.error(f"Final agent call failed: {str(bedrock_error)}")
-                
-                # Log detailed error information for ValidationException
-                if "ValidationException" in str(bedrock_error):
-                    logger.error("BEDROCK VALIDATION EXCEPTION DETAILS:")
-                    logger.error(f"Error message: {str(bedrock_error)}")
-                    
-                    # Try to inspect conversation state when error occurs
-                    try:
-                        if hasattr(agent, 'conversation') and agent.conversation:
-                            logger.error(f"Conversation has {len(agent.conversation.messages)} messages at time of error")
-                            # Log messages around the problematic message 38
-                            for i in range(max(0, 35), min(len(agent.conversation.messages), 42)):
-                                msg = agent.conversation.messages[i]
-                                content_info = f"content_type={type(msg.content)}, content_length={len(str(msg.content)) if msg.content else 0}"
-                                if not msg.content or (isinstance(msg.content, str) and not msg.content.strip()):
-                                    logger.error(f"EMPTY MESSAGE FOUND at index {i}: role={msg.role}, {content_info}, content={repr(msg.content)}")
-                                else:
-                                    logger.error(f"Message {i}: role={msg.role}, {content_info}")
-                    except Exception as inspect_error:
-                        logger.error(f"Could not inspect conversation during error: {inspect_error}")
-                
-                raise bedrock_error
-            
-            # Extract video information from the agent's response and conversation history
-            video_result = self.extract_video_result(final_result, job_message.request, agent)
+            # Extract video information from the agent's conversation history (no redundant call needed)
+            video_result = self.extract_video_result(None, job_message.request, agent)
             video_result['processingMode'] = mode_name
             
             await self.update_job_status(job_message.jobId, job_message.userId, {
@@ -315,13 +261,13 @@ Keep responses concise and focused on tool execution."""
             # Check if it's a throttling error
             if "ThrottlingException" in str(e) or "Too many tokens" in str(e):
                 logger.error("Bedrock throttling detected - try using fast mode")
-            elif "ValidationException" in str(e) and "empty" in str(e):
-                logger.error("Empty message content detected - this indicates a conversation history issue")
+            elif "ValidationException" in str(e):
+                logger.error("Validation exception detected - this may indicate a conversation history issue")
             raise e
     
     def extract_video_result(self, agent_response, original_request: str, agent=None) -> Dict[str, Any]:
-        """Extract structured video result from agent response and tool results"""
-        logger.info(f"Extracting video result from agent response type: {type(agent_response)}")
+        """Extract structured video result from agent conversation history"""
+        logger.info(f"Extracting video result from conversation history (agent_response: {type(agent_response)})")
         
         # Initialize default values
         duration = 0
@@ -330,6 +276,9 @@ Keep responses concise and focused on tool execution."""
         video_search_results = []
         
         try:
+            # Refer to https://github.dev/strands-agents/sdk-python/blob/eb50073f2ac82302b35d69dfca5a2337aa1da7ab/src/strands/agent/agent.py#L214 for the actual Agent schema
+            logger.info(f"Raw agent schema: {agent}")
+
             # Extract tool results from agent conversation history
             if agent and hasattr(agent, 'conversation') and agent.conversation:
                 logger.info(f"Analyzing agent conversation with {len(agent.conversation.messages)} messages")
