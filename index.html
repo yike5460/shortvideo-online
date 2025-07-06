@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>AI Video Effects Plugin</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <h1>AI Video Effects</h1>
+        
+        <div class="section">
+            <h2>Video Search & Import</h2>
+            <div class="search-container">
+                <input type="text" id="searchQuery" placeholder="Search for video content..." class="search-input">
+                <button id="searchVideos" class="btn primary">Search</button>
+            </div>
+            <div class="search-options">
+                <label for="topK">Results:</label>
+                <select id="topK">
+                    <option value="5">5</option>
+                    <option value="10">10</option>
+                    <option value="15">15</option>
+                </select>
+                <label for="minConfidence">Min Confidence:</label>
+                <input type="range" id="minConfidence" min="0" max="100" value="50">
+                <span id="minConfidenceValue">50%</span>
+            </div>
+            <div id="searchResults" class="search-results"></div>
+        </div>
+        
+        <div class="section">
+            <h2>Face Detection & Tracking</h2>
+            <button id="detectFaces" class="btn primary">Detect Faces</button>
+            <button id="trackFaces" class="btn secondary">Track Faces</button>
+        </div>
+        
+        <div class="section">
+            <h2>Background Removal</h2>
+            <button id="removeBackground" class="btn primary">Remove Background</button>
+            <div class="slider-container">
+                <label for="threshold">Threshold:</label>
+                <input type="range" id="threshold" min="0" max="100" value="50">
+                <span id="thresholdValue">50</span>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h2>Color Correction</h2>
+            <button id="autoColor" class="btn primary">Auto Color Correct</button>
+            <div class="color-controls">
+                <div class="slider-container">
+                    <label for="brightness">Brightness:</label>
+                    <input type="range" id="brightness" min="-100" max="100" value="0">
+                    <span id="brightnessValue">0</span>
+                </div>
+                <div class="slider-container">
+                    <label for="contrast">Contrast:</label>
+                    <input type="range" id="contrast" min="-100" max="100" value="0">
+                    <span id="contrastValue">0</span>
+                </div>
+                <div class="slider-container">
+                    <label for="saturation">Saturation:</label>
+                    <input type="range" id="saturation" min="-100" max="100" value="0">
+                    <span id="saturationValue">0</span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h2>Export Options</h2>
+            <select id="exportFormat">
+                <option value="h264">H.264</option>
+                <option value="prores">ProRes</option>
+                <option value="dnxhd">DNxHD</option>
+            </select>
+            <button id="exportVideo" class="btn primary">Export</button>
+        </div>
+        
+        <div id="status" class="status"></div>
+    </div>
+    
+    <script src="CSInterface.js"></script>
+    <script src="config.js"></script>
+    <script src="ai-services.js"></script>
+    <script src="image-processor.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>
