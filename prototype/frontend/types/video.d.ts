@@ -33,5 +33,6 @@ declare module '@/types' {
     source?: 'local' | 'youtube' | 'merged';
     parentVideoId?: string;    // For merged segments to reference original video
     isMerged?: boolean;        // Flag to identify merged segments
+    tags?: string[];           // For storing tags/hashtags for ad assets
   }
 }
