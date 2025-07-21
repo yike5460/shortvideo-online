@@ -5,6 +5,10 @@ const nextConfig = {
   },
   // Ensure all routes are pre-rendered
   trailingSlash: true,
+  // Allow external connections for port forwarding
+  experimental: {
+    appDir: true,
+  },
 }
 
 module.exports = nextConfig 

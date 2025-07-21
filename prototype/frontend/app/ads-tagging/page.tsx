@@ -1,9 +1,9 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { useAuth } from '@/lib/auth/AuthContext'
 import { useSearchParams } from 'next/navigation'
-import { VideoResult } from '@/types'
+import { VideoResult, TimestampedLabel, LabelInfo, NamedEntity } from '@/types'
 import HashtagsAndTopics, { isHashtagsResponse } from '@/components/HashtagsAndTopics'
 import ReactMarkdown from 'react-markdown'
 import { Chart } from 'chart.js/auto'
@@ -11,6 +11,137 @@ import 'chart.js/auto'
 
 // API configuration
 const API_ENDPOINT = process.env.NEXT_PUBLIC_API_URL
+
+// Extend VideoResult to include video_objects for TypeScript
+interface ExtendedVideoResult extends VideoResult {
+  video_objects?: TimestampedLabel[];
+}
+
+// Helper function to extract unique categories from video objects
+// Updated to handle optimized backend response format with shortened property names
+const extractCategories = (videoObjects?: any[]): string[] => {
+  if (!videoObjects || !Array.isArray(videoObjects)) return [];
+  
+  // Create a Set to store unique category names
+  const uniqueCategories = new Set<string>();
+  
+  // Process each timestamped label (t = timestamp, l = labels)
+  videoObjects.forEach(timestamped => {
+    // Process each label within the timestamped label (l = labels)
+    (timestamped.l || timestamped.labels || []).forEach((label: any) => {
+      // Process each category within the label (cat = categories)
+      const categories = label.cat || label.categories || [];
+      
+      if (Array.isArray(categories)) {
+        // Handle both direct string arrays and object arrays with Name property
+        categories.forEach((category: any) => {
+          const categoryName = typeof category === 'string' ? category : category?.Name;
+          if (categoryName) {
+            uniqueCategories.add(categoryName);
+          }
+        });
+      }
+    });
+  });
+  
+  // Convert the Set to an array and return
+  return Array.from(uniqueCategories);
+};
+
+// Helper function to extract unique aliases from video objects
+// Updated to handle optimized backend response format with shortened property names
+const extractAliases = (videoObjects?: any[]): string[] => {
+  if (!videoObjects || !Array.isArray(videoObjects)) return [];
+  
+  const uniqueAliases = new Set<string>();
+  
+  videoObjects.forEach(timestamped => {
+    // Support both shortened (l) and full (labels) property names
+    (timestamped.l || timestamped.labels || []).forEach((label: any) => {
+      // Process aliases (ali = aliases)
+      const aliases = label.ali || label.aliases || [];
+      
+      if (Array.isArray(aliases)) {
+        // Handle both direct string arrays and object arrays with Name property
+        aliases.forEach((alias: any) => {
+          const aliasName = typeof alias === 'string' ? alias : alias?.Name;
+          if (aliasName) {
+            uniqueAliases.add(aliasName);
+          }
+        });
+      }
+    });
+  });
+  
+  return Array.from(uniqueAliases);
+};
+
+// Function to extract all tags (categories and aliases) from all videos
+const extractAllTags = (videos: VideoThumbnail[]): {tag: string, count: number, type: 'category' | 'alias'}[] => {
+  const tagCounts = new Map<string, {count: number, type: 'category' | 'alias'}>();
+  
+  videos.forEach(video => {
+    // Cast to ExtendedVideoResult to access video_objects
+    const extendedVideo = video as any as ExtendedVideoResult;
+    
+    // Extract categories from video objects
+    if (extendedVideo.video_objects) {
+      const categories = extractCategories(extendedVideo.video_objects);
+      categories.forEach(category => {
+        const existingTag = tagCounts.get(category);
+        if (existingTag) {
+          existingTag.count++;
+        } else {
+          tagCounts.set(category, {count: 1, type: 'category'});
+        }
+      });
+      
+      // Extract aliases
+      const aliases = extractAliases(extendedVideo.video_objects);
+      aliases.forEach(alias => {
+        const existingTag = tagCounts.get(alias);
+        if (existingTag) {
+          existingTag.count++;
+        } else {
+          tagCounts.set(alias, {count: 1, type: 'alias'});
+        }
+      });
+    }
+  });
+  
+  // Convert Map to array and sort by count (descending order)
+  return Array.from(tagCounts.entries())
+    .map(([tag, data]) => ({
+    tag,
+    count: data.count,
+    type: data.type
+    }))
+    .sort((a, b) => b.count - a.count);
+};
+
+// Helper function to get a color for a category tag based on its name (for consistent colors)
+const getCategoryColor = (category: string): string => {
+  // Simple hash function to generate consistent colors
+  const hash = category.split('').reduce((acc, char) => {
+    return char.charCodeAt(0) + ((acc << 5) - acc);
+  }, 0);
+  
+  // List of tailwind color classes for tags
+  const colorClasses = [
+    'bg-blue-100 text-blue-800',
+    'bg-green-100 text-green-800',
+    'bg-yellow-100 text-yellow-800',
+    'bg-red-100 text-red-800',
+    'bg-purple-100 text-purple-800',
+    'bg-pink-100 text-pink-800',
+    'bg-indigo-100 text-indigo-800',
+    'bg-teal-100 text-teal-800',
+  ];
+  
+  // Use the hash to pick a color
+  const index = Math.abs(hash) % colorClasses.length;
+  return colorClasses[index];
+};
 
 // Define interfaces for the Ads Asset Tagging feature
 interface VideoThumbnail {
@@ -21,6 +152,7 @@ interface VideoThumbnail {
   duration: string;
   indexId: string;
   tags?: string[];
+  video_objects?: TimestampedLabel[];
 }
 
 interface VideoTag {
@@ -75,6 +207,10 @@ export default function AdsTaggingPage() {
   const chartRef = useRef<HTMLCanvasElement>(null)
   const chartInstanceRef = useRef<Chart>()
   const [activePanel, setActivePanel] = useState<'operational' | 'analytics'>('operational')
+  const [selectedTags, setSelectedTags] = useState<string[]>([])
+  const [appliedTagFilters, setAppliedTagFilters] = useState<string[]>([])
+  // Add state for extracted tags from video_objects
+  const [allTags, setAllTags] = useState<{tag: string, count: number, type: 'category' | 'alias'}[]>([])
 
   // Initialize selectedIndexId from URL parameter and fetch indexes on mount
   useEffect(() => {
@@ -191,13 +327,22 @@ export default function AdsTaggingPage() {
           videoPreviewUrl: video.videoPreviewUrl || '',
           duration: video.videoDuration || '00:00',
           indexId: video.indexId || 'videos',
-          tags: video.tags || []
+          tags: video.tags || [],
+          video_objects: (video as any).video_objects || []
         }));
         
         setVideos(videoThumbnails);
         
-        // Update tag statistics based on videos
+        // Extract all tags from video_objects
+        const extractedTags = extractAllTags(videoThumbnails);
+        setAllTags(extractedTags);
+        
+        // Update tag statistics based on videos (keeping for compatibility)
         updateTagStatistics(videoThumbnails);
+        
+        // Reset tag filters when changing index
+        setSelectedTags([]);
+        setAppliedTagFilters([]);
       } catch (error) {
         console.error('Error fetching videos:', error);
         setError(error instanceof Error ? error.message : 'Failed to load videos');
@@ -493,10 +638,12 @@ export default function AdsTaggingPage() {
 
   // Export tags as JSON
   const exportTags = () => {
+    const videosToExport = appliedTagFilters.length > 0 ? filteredVideos : videos;
     const tagsData = {
       exportDate: new Date().toISOString(),
       indexId: selectedIndexId,
-      videos: videos.map(video => ({
+      appliedFilters: appliedTagFilters,
+      videos: videosToExport.map(video => ({
         id: video.id,
         title: video.title,
         tags: video.tags || []
@@ -517,6 +664,47 @@ export default function AdsTaggingPage() {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+  };
+
+  // Filter videos based on applied tag filters using video_objects
+  const filteredVideos = useMemo(() => {
+    if (appliedTagFilters.length === 0) {
+      return videos;
+    }
+    
+    return videos.filter(video => {
+      // Cast to ExtendedVideoResult to access video_objects
+      const extendedVideo = video as any as ExtendedVideoResult;
+      if (!extendedVideo.video_objects) return false;
+      
+      // Extract all categories and aliases from this video
+      const categories = extractCategories(extendedVideo.video_objects);
+      const aliases = extractAliases(extendedVideo.video_objects);
+      const allVideoTags = [...categories, ...aliases];
+      
+      // Check if any of the applied filters match this video's tags
+      return appliedTagFilters.some(filter => allVideoTags.includes(filter));
+    });
+  }, [videos, appliedTagFilters]);
+
+  // Handle tag selection
+  const toggleTagSelection = (tag: string) => {
+    if (selectedTags.includes(tag)) {
+      setSelectedTags(prev => prev.filter(t => t !== tag));
+    } else {
+      setSelectedTags(prev => [...prev, tag]);
+    }
+  };
+
+  // Apply selected tags as filters
+  const applyTagFilters = () => {
+    setAppliedTagFilters([...selectedTags]);
+  };
+
+  // Clear all tag filters
+  const clearTagFilters = () => {
+    setSelectedTags([]);
+    setAppliedTagFilters([]);
   };
 
   // Handle click outside to close dropdowns
@@ -642,9 +830,135 @@ export default function AdsTaggingPage() {
               )}
             </div>
             
+            {/* Tag Filtering Section */}
+            <div className="bg-white rounded-lg shadow-md p-6">
+              <div className="flex justify-between items-center mb-4">
+                <div>
+                  <h2 className="text-lg font-medium">Filter by Tags</h2>
+                  <p className="text-sm text-gray-600 mt-1">
+                    Select tags to filter videos, then apply to narrow down results
+                  </p>
+                </div>
+                {selectedTags.length > 0 && (
+                  <div className="flex space-x-3">
+                    <button
+                      type="button"
+                      className="inline-flex items-center px-3 py-1.5 text-sm font-medium text-white bg-purple-600 hover:bg-purple-700 rounded-md transition-colors duration-200 shadow-sm"
+                      onClick={applyTagFilters}
+                    >
+                      <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+                      </svg>
+                      Apply Filters ({selectedTags.length})
+                    </button>
+                    <button
+                      type="button"
+                      className="inline-flex items-center px-3 py-1.5 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md transition-colors duration-200"
+                      onClick={clearTagFilters}
+                    >
+                      <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                      Clear
+                    </button>
+                  </div>
+                )}
+              </div>
+              
+              {/* Show active filters if any */}
+              {appliedTagFilters.length > 0 && (
+                <div className="mb-4 p-3 bg-purple-50 border border-purple-200 rounded-md">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center">
+                      <svg className="w-4 h-4 text-purple-600 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+                      </svg>
+                      <span className="text-sm font-medium text-purple-800">Active filters:</span>
+                      <div className="flex flex-wrap gap-1 ml-2">
+                        {appliedTagFilters.map(tag => (
+                          <span key={tag} className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-800">
+                            {tag}
+                            <button
+                              onClick={() => {
+                                const newFilters = appliedTagFilters.filter(t => t !== tag);
+                                setAppliedTagFilters(newFilters);
+                                setSelectedTags(newFilters);
+                              }}
+                              className="ml-1 hover:text-purple-600"
+                            >
+                              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                              </svg>
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                    <button
+                      onClick={clearTagFilters}
+                      className="text-xs text-purple-600 hover:text-purple-800 font-medium"
+                    >
+                      Clear all
+                    </button>
+                  </div>
+                </div>
+              )}
+              
+              {/* Tag Selection Area */}
+              <div className="border border-gray-200 rounded-md p-4 bg-gray-50 h-[120px] overflow-y-auto">
+                {allTags.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {allTags.map(({ tag, count, type }) => (
+                      <button
+                        key={tag}
+                        onClick={() => toggleTagSelection(tag)}
+                        className={`inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium cursor-pointer transition-all duration-200 transform hover:scale-105 hover:shadow-sm
+                          ${selectedTags.includes(tag) 
+                            ? 'bg-purple-100 text-purple-800 border-2 border-purple-300 shadow-sm ring-2 ring-purple-200' 
+                            : type === 'category' 
+                              ? `${getCategoryColor(tag)} hover:opacity-80 border border-transparent hover:border-gray-300` 
+                              : 'bg-gray-100 text-gray-800 hover:bg-gray-200 border border-transparent hover:border-gray-300'
+                          }`}
+                        title={`Click to ${selectedTags.includes(tag) ? 'remove' : 'add'} "${tag}" filter (${type})`}
+                      >
+                        {selectedTags.includes(tag) && (
+                          <svg className="w-3 h-3 mr-1 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                          </svg>
+                        )}
+                        {tag}
+                        <span className={`ml-1.5 text-xs px-1.5 py-0.5 rounded-full ${selectedTags.includes(tag) ? 'bg-purple-200 text-purple-800' : 'bg-white text-gray-600'}`}>
+                          {count}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-center h-full">
+                    <div className="text-center">
+                      <svg className="w-8 h-8 text-gray-400 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
+                      </svg>
+                      <div className="text-gray-500 text-sm">No tags available yet</div>
+                      <div className="text-gray-400 text-xs mt-1">Generate tags for videos to enable filtering</div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+            
             {/* Video Selection Box */}
             <div className="bg-white rounded-lg shadow-md p-6">
-              <h2 className="text-lg font-medium mb-4">Select a Video Asset</h2>
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-lg font-medium">Select a Video Asset</h2>
+                <div className="text-sm text-gray-600">
+                  {appliedTagFilters.length > 0 ? (
+                    `Showing ${filteredVideos.length} of ${videos.length} videos`
+                  ) : (
+                    `${videos.length} videos available`
+                  )}
+                </div>
+              </div>
               
               {!selectedIndexId ? (
                 <div className="bg-gray-100 p-4 rounded-md text-gray-600">
@@ -654,13 +968,15 @@ export default function AdsTaggingPage() {
                 <div className="flex items-center justify-center h-40">
                   <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-500"></div>
                 </div>
-              ) : videos.length === 0 ? (
+              ) : filteredVideos.length === 0 ? (
                 <div className="bg-gray-100 p-4 rounded-md text-gray-600">
-                  No videos found in this index. <a href="/create" className="text-purple-600 hover:underline">Upload videos</a>
+                  {appliedTagFilters.length > 0 
+                    ? "No videos match the selected tag filters." 
+                    : "No videos found in this index."} <a href="/create" className="text-purple-600 hover:underline">Upload videos</a>
                 </div>
               ) : (
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-                  {videos.map((video) => (
+                  {filteredVideos.map((video) => (
                     <div
                       key={video.id}
                       className={`cursor-pointer rounded-md overflow-hidden ${selectedVideo?.id === video.id ? 'ring-4 ring-purple-500 shadow-md' : 'hover:shadow-md'}`}
@@ -890,6 +1206,11 @@ export default function AdsTaggingPage() {
                 <div className="bg-gray-100 p-4 rounded-md text-gray-600 text-center">
                   No videos found in this index
                 </div>
+              ) : filteredVideos.length === 0 && appliedTagFilters.length > 0 ? (
+                <div className="bg-yellow-50 border border-yellow-200 p-4 rounded-md text-yellow-800 text-center">
+                  <div className="text-sm">No videos match the selected tag filters</div>
+                  <div className="text-xs mt-1">Clear filters to see all {videos.length} videos</div>
+                </div>
               ) : (
                 <div>
                   {/* Tag Frequency Chart */}
@@ -913,9 +1234,16 @@ export default function AdsTaggingPage() {
                             </tr>
                           </thead>
                           <tbody className="bg-white divide-y divide-gray-200">
-                            {tagStatistics.slice(0, 10).map((stat, index) => (
+                            {allTags.slice(0, 10).map((stat, index) => (
                               <tr key={index} className="hover:bg-gray-50">
-                                <td className="px-6 py-2 whitespace-nowrap text-sm font-medium text-gray-900">{stat.tag}</td>
+                                <td className="px-6 py-2 whitespace-nowrap text-sm font-medium text-gray-900">
+                                  <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium mr-2 ${
+                                    stat.type === 'category' ? getCategoryColor(stat.tag) : 'bg-gray-100 text-gray-800'
+                                  }`}>
+                                    {stat.type}
+                                  </span>
+                                  {stat.tag}
+                                </td>
                                 <td className="px-6 py-2 whitespace-nowrap text-sm text-gray-500">{stat.count}</td>
                               </tr>
                             ))}
@@ -928,24 +1256,47 @@ export default function AdsTaggingPage() {
                       <h3 className="text-md font-medium mb-4">Index Statistics</h3>
                       <div className="grid grid-cols-2 gap-4">
                         <div className="bg-gray-50 rounded-md p-4">
-                          <div className="text-sm text-gray-500">Total Videos</div>
-                          <div className="text-2xl font-semibold">{videos.length}</div>
+                          <div className="text-sm text-gray-500">
+                            {appliedTagFilters.length > 0 ? 'Filtered Videos' : 'Total Videos'}
+                          </div>
+                          <div className="text-2xl font-semibold">{filteredVideos.length}</div>
+                          {appliedTagFilters.length > 0 && (
+                            <div className="text-xs text-gray-400">of {videos.length} total</div>
+                          )}
                         </div>
                         <div className="bg-gray-50 rounded-md p-4">
                           <div className="text-sm text-gray-500">Unique Tags</div>
-                          <div className="text-2xl font-semibold">{tags.length}</div>
+                          <div className="text-2xl font-semibold">{allTags.length}</div>
+                          <div className="text-xs text-gray-400">
+                            {allTags.filter(t => t.type === 'category').length} categories, {allTags.filter(t => t.type === 'alias').length} aliases
+                          </div>
                         </div>
                         <div className="bg-gray-50 rounded-md p-4">
                           <div className="text-sm text-gray-500">Tagged Videos</div>
                           <div className="text-2xl font-semibold">
-                            {videos.filter(video => video.tags && video.tags.length > 0).length}
+                            {filteredVideos.filter(video => {
+                              const extendedVideo = video as any as ExtendedVideoResult;
+                              if (!extendedVideo.video_objects) return false;
+                              const categories = extractCategories(extendedVideo.video_objects);
+                              const aliases = extractAliases(extendedVideo.video_objects);
+                              return categories.length > 0 || aliases.length > 0;
+                            }).length}
                           </div>
+                          {appliedTagFilters.length > 0 && (
+                            <div className="text-xs text-gray-400">in filtered set</div>
+                          )}
                         </div>
                         <div className="bg-gray-50 rounded-md p-4">
                           <div className="text-sm text-gray-500">Avg. Tags Per Video</div>
                           <div className="text-2xl font-semibold">
-                            {videos.length > 0
-                              ? (videos.reduce((sum, video) => sum + (video.tags?.length || 0), 0) / videos.length).toFixed(1)
+                            {filteredVideos.length > 0
+                              ? (filteredVideos.reduce((sum, video) => {
+                                  const extendedVideo = video as any as ExtendedVideoResult;
+                                  if (!extendedVideo.video_objects) return sum;
+                                  const categories = extractCategories(extendedVideo.video_objects);
+                                  const aliases = extractAliases(extendedVideo.video_objects);
+                                  return sum + categories.length + aliases.length;
+                                }, 0) / filteredVideos.length).toFixed(1)
                               : '0'}
                           </div>
                         </div>
