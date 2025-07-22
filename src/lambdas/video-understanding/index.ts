@@ -274,6 +274,7 @@ interface SessionData {
   indexId: string;
   question: string;
   model?: string;  // Add model field
+  bypassPromptEnhancement?: boolean;  // Flag to bypass prompt enhancement for raw analysis
   status: 'pending' | 'processing' | 'completed' | 'error';
   createdAt: number;
   ttl: number;
@@ -286,11 +287,12 @@ interface InitRequest {
   indexId: string;
   question: string;
   model?: string;  // Add model field
+  bypassPromptEnhancement?: boolean;  // Flag to bypass prompt enhancement for raw analysis
 }
 
 // Interface for model processors
 interface ModelProcessor {
-  processVideo(s3Path: string, question: string, videoMetadata?: any): Promise<string>;
+  processVideo(s3Path: string, question: string, videoMetadata?: any, bypassPromptEnhancement?: boolean): Promise<string>;
 }
 
 // Factory function to get the appropriate model processor
@@ -307,11 +309,11 @@ function getModelProcessor(model?: string): ModelProcessor {
     default:
       // Default behavior: use Qwen-VL if external endpoint exists, otherwise Nova
       return {
-        processVideo: async (s3Path: string, question: string, videoMetadata?: any) => {
+        processVideo: async (s3Path: string, question: string, videoMetadata?: any, bypassPromptEnhancement?: boolean) => {
           if (EXTERNAL_VIDEO_UNDERSTANDING_ENDPOINT) {
-            return processVideoWithQwenVL(s3Path, question, videoMetadata);
+            return processVideoWithQwenVL(s3Path, question, videoMetadata, bypassPromptEnhancement);
           } else {
-            return processVideoWithNova(s3Path, question, videoMetadata);
+            return processVideoWithNova(s3Path, question, videoMetadata, bypassPromptEnhancement);
           }
         }
       };
@@ -401,7 +403,7 @@ async function updateSession(sessionId: string, updates: Partial<SessionData>): 
 }
 
 // Helper function to process video with Nova
-async function processVideoWithNova(s3Path: string, question: string, videoMetadata?: any): Promise<string> {
+async function processVideoWithNova(s3Path: string, question: string, videoMetadata?: any, bypassPromptEnhancement?: boolean): Promise<string> {
   // Get video metadata if not provided
   videoMetadata = videoMetadata || {
     duration: 0,
@@ -409,8 +411,15 @@ async function processVideoWithNova(s3Path: string, question: string, videoMetad
     startTime: '00:00:00'
   };
   
-  // Enhance the prompt based on question type
-  const enhancedPrompt = enhancePrompt(question, videoMetadata);
+  // Enhance the prompt based on question type, unless bypassing enhancement
+  const shouldBypass = bypassPromptEnhancement === true;
+  const enhancedPrompt = shouldBypass ? question : enhancePrompt(question, videoMetadata);
+  
+  // Log the bypass status for debugging
+  console.log(`Nova processing - bypassPromptEnhancement: ${bypassPromptEnhancement} (${typeof bypassPromptEnhancement})`);
+  console.log(`shouldBypass: ${shouldBypass}`);
+  console.log(`Original question: ${question}`);
+  console.log(`Enhanced prompt: ${enhancedPrompt.substring(0, 200)}...`);
   try {
     // Parse S3 path
     let bucket = VIDEO_BUCKET;
@@ -496,7 +505,7 @@ async function processVideoWithNova(s3Path: string, question: string, videoMetad
 }
 
 // Helper function to process video with Qwen-VL
-async function processVideoWithQwenVL(s3Path: string, question: string, videoMetadata?: any): Promise<string> {
+async function processVideoWithQwenVL(s3Path: string, question: string, videoMetadata?: any, bypassPromptEnhancement?: boolean): Promise<string> {
   // Get video metadata if not provided
   videoMetadata = videoMetadata || {
     duration: 0,
@@ -504,8 +513,15 @@ async function processVideoWithQwenVL(s3Path: string, question: string, videoMet
     startTime: '00:00:00'
   };
   
-  // Enhance the prompt based on question type
-  const enhancedPrompt = enhancePrompt(question, videoMetadata);
+  // Enhance the prompt based on question type, unless bypassing enhancement
+  const shouldBypass = bypassPromptEnhancement === true;
+  const enhancedPrompt = shouldBypass ? question : enhancePrompt(question, videoMetadata);
+  
+  // Log the bypass status for debugging
+  console.log(`QwenVL processing - bypassPromptEnhancement: ${bypassPromptEnhancement} (${typeof bypassPromptEnhancement})`);
+  console.log(`shouldBypass: ${shouldBypass}`);
+  console.log(`Original question: ${question}`);
+  console.log(`Enhanced prompt: ${enhancedPrompt.substring(0, 200)}...`);
   try {
     // Parse S3 path
     let bucket = VIDEO_BUCKET;
@@ -563,7 +579,13 @@ export async function initHandler(event: APIGatewayProxyEvent): Promise<LambdaRe
     }
 
     const request: InitRequest = JSON.parse(event.body);
-    const { videoId, indexId, question, model } = request;
+    const { videoId, indexId, question, model, bypassPromptEnhancement = false } = request;
+    
+    // Debug log to see what's being received
+    console.log('Request body:', JSON.stringify(request, null, 2));
+    console.log('bypassPromptEnhancement value:', bypassPromptEnhancement, 'type:', typeof bypassPromptEnhancement);
+    console.log('All request properties:', Object.keys(request));
+    console.log('Raw event body:', event.body);
 
     if (!videoId || !question) {
       return {
@@ -593,10 +615,14 @@ export async function initHandler(event: APIGatewayProxyEvent): Promise<LambdaRe
       indexId,
       question,
       model,
+      bypassPromptEnhancement,
       status: 'pending',
       createdAt: now,
       ttl: now + SESSION_TTL
     };
+    
+    // Debug log session data
+    console.log('Creating session with data:', JSON.stringify(sessionData, null, 2));
 
     await createSession(sessionData);
 
@@ -640,6 +666,9 @@ export async function streamHandler(event: APIGatewayProxyEvent): Promise<Lambda
         body: JSON.stringify({ error: 'Session not found' })
       };
     }
+    
+    // Debug log retrieved session
+    console.log('Retrieved session data:', JSON.stringify(session, null, 2));
 
     // Set up SSE response headers
     const headers = {
@@ -683,9 +712,10 @@ export async function streamHandler(event: APIGatewayProxyEvent): Promise<Lambda
       // Get the appropriate model processor based on the selected model
       const modelProcessor = getModelProcessor(session.model);
       console.log(`Using model: ${session.model || 'default'}`);
+      console.log(`Session bypassPromptEnhancement:`, session.bypassPromptEnhancement, 'type:', typeof session.bypassPromptEnhancement);
       
       // Process the video with the selected model and enhanced prompt
-      const response = await modelProcessor.processVideo(videoS3Path, session.question, videoMetadata);
+      const response = await modelProcessor.processVideo(videoS3Path, session.question, videoMetadata, session.bypassPromptEnhancement || false);
       
       // In a real implementation, we would stream chunks as they become available
       // For this implementation, we'll simulate streaming with chunks

@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { useAuth } from '@/lib/auth/AuthContext'
 import { useSearchParams } from 'next/navigation'
-import { VideoResult, TimestampedLabel, LabelInfo, NamedEntity } from '@/types'
+import { VideoResult, TimestampedLabel, LabelInfo, NamedEntity, VideoSegment } from '@/types'
 import HashtagsAndTopics, { isHashtagsResponse } from '@/components/HashtagsAndTopics'
 import ReactMarkdown from 'react-markdown'
 import { Chart } from 'chart.js/auto'
@@ -12,9 +12,60 @@ import 'chart.js/auto'
 // API configuration
 const API_ENDPOINT = process.env.NEXT_PUBLIC_API_URL
 
-// Extend VideoResult to include video_objects for TypeScript
+// Extend VideoResult to include video_objects and segments for TypeScript
 interface ExtendedVideoResult extends VideoResult {
   video_objects?: TimestampedLabel[];
+  segments?: VideoSegment[];
+}
+
+// Enhanced video analysis result interface
+interface VideoAnalysisResult {
+  videoId: string;
+  segments: AnalyzedSegment[];
+  processingStats: {
+    totalSegments: number;
+    analyzedSegments: number;
+    processingTime: number;
+  };
+}
+
+// Enhanced segment analysis interface
+interface AnalyzedSegment {
+  segment_id: string;
+  start_time: number;
+  end_time: number;
+  duration: number;
+  enhanced_analysis?: {
+    scene_description?: {
+      environment: 'indoor' | 'outdoor' | 'mixed';
+      location: string;
+      lighting: string;
+      atmosphere: string;
+      visual_style_keywords: string[];
+    };
+    camera_analysis?: {
+      shot_type: string;
+      camera_movement: string;
+      composition_notes: string;
+    };
+    emotion_analysis?: {
+      facial_expressions: Array<{
+        type: string;
+        intensity: 'low' | 'medium' | 'high';
+        confidence: number;
+      }>;
+      overall_mood: string;
+      engagement_level: string;
+    };
+    generated_tags?: {
+      primary_keywords: string[];
+      emotion_keywords: string[];
+      visual_style_keywords: string[];
+      utility_tags: string[];
+      technical_tags: string[];
+    };
+  };
+  analysis_summary?: string;
 }
 
 // Helper function to extract unique categories from video objects
@@ -153,6 +204,7 @@ interface VideoThumbnail {
   indexId: string;
   tags?: string[];
   video_objects?: TimestampedLabel[];
+  segments?: VideoSegment[];
 }
 
 interface VideoTag {
@@ -178,6 +230,67 @@ const AVAILABLE_MODELS = [
   { id: 'qwen-vl-2.5', name: 'Qwen-VL 2.5' },
   { id: 'nova', name: 'Amazon Nova' }
 ];
+
+// Analysis types for enhanced video content analysis
+const ANALYSIS_TYPES = [
+  { id: 'scene_description', name: 'Scene Description', description: 'Analyze environment, location, lighting, and atmosphere' },
+  { id: 'camera_analysis', name: 'Camera Analysis', description: 'Detect shot types, camera movements, and composition' },
+  { id: 'emotion_analysis', name: 'Emotion Analysis', description: 'Analyze facial expressions, mood, and engagement levels' },
+  { id: 'object_detection', name: 'Object Detection', description: 'Identify subjects, objects, and their interactions' },
+  { id: 'comprehensive', name: 'Comprehensive Analysis', description: 'Full analysis including all aspects' }
+];
+
+// Specialized prompts for video content analysis
+const ANALYSIS_PROMPTS = {
+  scene_description: `Analyze this video segment and provide detailed scene information:
+1. Environment type (indoor/outdoor/mixed)
+2. Specific location description (office, beach, city, kitchen, etc.)
+3. Lighting conditions (daylight, indoor warm, neon, backlit, etc.)
+4. Color grading and atmosphere (warm/cool tone, saturation, mood)
+5. Visual style keywords (3-5 descriptive words)
+
+Format as JSON: {"environment": "indoor", "location": "modern office", "lighting": "soft daylight", "atmosphere": "professional, clean", "visual_style_keywords": ["modern", "minimalist", "bright"]}`,
+  
+  camera_analysis: `Analyze camera work and composition in this video segment:
+1. Shot type (Close-up, Medium shot, Long shot, Extreme long shot, Over-the-shoulder)
+2. Camera movement (Static, Dolly, Pan, Tilt, Zoom, Handheld)
+3. Composition analysis (Rule of thirds, framing, subject positioning)
+4. Technical quality notes
+
+Format as JSON: {"shot_type": "Medium shot", "camera_movement": "Static with slight pan", "composition_notes": "Subject centered, good depth of field"}`,
+  
+  emotion_analysis: `Analyze human emotions and behavior in this video segment:
+1. For each person visible, identify:
+   - Facial expression type (smile, frown, surprise, neutral, focused, etc.)
+   - Expression intensity (low/medium/high)
+   - Confidence level (0-100%)
+2. Overall mood assessment
+3. Engagement level evaluation
+
+Format as JSON: {"facial_expressions": [{"type": "smile", "intensity": "high", "confidence": 85}], "overall_mood": "positive, energetic", "engagement_level": "high"}`,
+  
+  object_detection: `Identify and describe all visible objects and subjects in this video segment:
+1. Main subjects (people, animals, vehicles) with descriptions
+2. Key objects with confidence levels
+3. Subject actions and interactions
+4. Spatial relationships between objects
+
+Provide detailed descriptions for advertising context.`,
+  
+  comprehensive: `Perform comprehensive video content analysis for advertising purposes:
+1. Scene description (environment, location, lighting, atmosphere)
+2. Camera work (shot type, movement, composition)
+3. Human behavior (expressions, emotions, engagement)
+4. Objects and subjects (detailed identification)
+5. Generate advertising-focused tags:
+   - Primary keywords (5-7 nouns/verbs)
+   - Emotion keywords (3-5 emotional descriptors)
+   - Visual style keywords (3-5 style descriptors)
+   - Technical tags (camera, lighting, composition)
+   - Utility tags (suitable for opening, transition, B-roll, etc.)
+
+Provide comprehensive analysis suitable for advertising campaign planning.`
+};
 
 export default function AdsTaggingPage() {
   const { state } = useAuth()
@@ -211,6 +324,20 @@ export default function AdsTaggingPage() {
   const [appliedTagFilters, setAppliedTagFilters] = useState<string[]>([])
   // Add state for extracted tags from video_objects
   const [allTags, setAllTags] = useState<{tag: string, count: number, type: 'category' | 'alias'}[]>([])
+  
+  // Enhanced video analysis states
+  const [videoAnalysis, setVideoAnalysis] = useState<VideoAnalysisResult | null>(null)
+  const [selectedAnalysisType, setSelectedAnalysisType] = useState<string>('comprehensive')
+  const [analysisProgress, setAnalysisProgress] = useState<{
+    current: number;
+    total: number;
+    currentSegment?: string;
+    stage: string;
+  }>({ current: 0, total: 0, stage: 'idle' })
+  const [isAnalyzing, setIsAnalyzing] = useState(false)
+  const [analyzedSegments, setAnalyzedSegments] = useState<AnalyzedSegment[]>([])
+  const [showSegmentDetails, setShowSegmentDetails] = useState(false)
+  const [selectedSegment, setSelectedSegment] = useState<AnalyzedSegment | null>(null)
 
   // Initialize selectedIndexId from URL parameter and fetch indexes on mount
   useEffect(() => {
@@ -328,7 +455,8 @@ export default function AdsTaggingPage() {
           duration: video.videoDuration || '00:00',
           indexId: video.indexId || 'videos',
           tags: video.tags || [],
-          video_objects: (video as any).video_objects || []
+          video_objects: (video as any).video_objects || [],
+          segments: (video as any).segments || []
         }));
         
         setVideos(videoThumbnails);
@@ -484,7 +612,8 @@ export default function AdsTaggingPage() {
           videoId: selectedVideo.id,
           indexId: selectedVideo.indexId,
           question: "Generate highly detailed advertising-focused hashtags and topics for this video. Include tags for: visual elements, emotional tone, audience demographics, ad campaign types, industry verticals, product categories, and creative style. Format as '## Hashtags' followed by hashtags and '## Topics' followed by detailed topic descriptions. Make tags extremely specific and granular for advertising campaign targeting.",
-          model: selectedModel
+          model: selectedModel,
+          bypassPromptEnhancement: true  // Bypass enhancement for direct analysis
         })
       });
       
@@ -1019,9 +1148,21 @@ export default function AdsTaggingPage() {
             {/* Tag Management */}
             <div className="bg-white rounded-lg shadow-md p-6">
               <div className="flex justify-between items-center mb-4">
-                <h2 className="text-lg font-medium">Tag Management</h2>
+                <h2 className="text-lg font-medium">Enhanced Video Analysis</h2>
                 
                 <div className="flex items-center gap-2">
+                  <div className="relative">
+                    <select
+                      value={selectedAnalysisType}
+                      onChange={(e) => setSelectedAnalysisType(e.target.value)}
+                      className="px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    >
+                      {ANALYSIS_TYPES.map((type) => (
+                        <option key={type.id} value={type.id}>{type.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  
                   <div className="relative" ref={modelDropdownRef}>
                     <button
                       type="button"
@@ -1075,6 +1216,13 @@ export default function AdsTaggingPage() {
                       'Generate Tags'
                     )}
                   </button>
+                </div>
+              </div>
+              
+              {/* Analysis Type Description */}
+              <div className="mb-4">
+                <div className="text-sm text-gray-600">
+                  {ANALYSIS_TYPES.find(type => type.id === selectedAnalysisType)?.description}
                 </div>
               </div>
               
