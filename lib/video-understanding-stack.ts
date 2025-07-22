@@ -136,11 +136,17 @@ export class VideoUnderstandingStack extends Construct {
     // Add API Gateway endpoints
     // POST /video/ask/init
     // GET /video/ask/stream/{sessionId}
+    // GET /videos/segmentation/{videoId}/{indexId}
     const videos = props.api.root.getResource('videos') || props.api.root.addResource('videos');
     const ask = videos.addResource('ask');
     const init = ask.addResource('init');
     const stream = ask.addResource('stream');
     const streamSession = stream.addResource('{sessionId}');
+    
+    // Add segmentation endpoint
+    const segmentation = videos.addResource('segmentation');
+    const segmentationVideo = segmentation.addResource('{videoId}');
+    const segmentationIndex = segmentationVideo.addResource('{indexId}');
 
     // Add Lambda integrations with CORS
     const addMethodWithCors = (resource: apigateway.Resource, httpMethod: string, lambdaFn: lambda.Function) => {
@@ -225,5 +231,6 @@ export class VideoUnderstandingStack extends Construct {
     // Add endpoints
     addMethodWithCors(init, 'POST', this.videoUnderstandingFunction);
     addMethodWithCors(streamSession, 'GET', this.videoUnderstandingFunction);
+    addMethodWithCors(segmentationIndex, 'GET', this.videoUnderstandingFunction);
   }
 }

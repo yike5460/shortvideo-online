@@ -338,6 +338,13 @@ export default function AdsTaggingPage() {
   const [analyzedSegments, setAnalyzedSegments] = useState<AnalyzedSegment[]>([])
   const [showSegmentDetails, setShowSegmentDetails] = useState(false)
   const [selectedSegment, setSelectedSegment] = useState<AnalyzedSegment | null>(null)
+  
+  // Video segmentation states
+  const [videoSegments, setVideoSegments] = useState<any[]>([])
+  const [isLoadingSegmentation, setIsLoadingSegmentation] = useState(false)
+  const [segmentationError, setSegmentationError] = useState<string | null>(null)
+  const [isSegmentPlayerOpen, setIsSegmentPlayerOpen] = useState(false)
+  const [playingSegment, setPlayingSegment] = useState<any>(null)
 
   // Initialize selectedIndexId from URL parameter and fetch indexes on mount
   useEffect(() => {
@@ -576,6 +583,10 @@ export default function AdsTaggingPage() {
   const handleVideoSelect = (video: VideoThumbnail) => {
     setSelectedVideo(video);
     setSelectedVideoTags(video.tags || []);
+    // Reset segmentation state when a new video is selected
+    setVideoSegments([]);
+    setSelectedSegment(null);
+    setSegmentationError(null);
   };
 
   // Handle index selection
@@ -700,6 +711,47 @@ export default function AdsTaggingPage() {
       setError(error instanceof Error ? error.message : 'Failed to generate tags');
       setIsProcessing(false);
     }
+  };
+
+  // Load video segmentation preview
+  const loadVideoSegmentation = async () => {
+    if (!selectedVideo) {
+      setSegmentationError('Please select a video first');
+      return;
+    }
+    
+    try {
+      setIsLoadingSegmentation(true);
+      setSegmentationError(null);
+      
+      // Call the video segmentation preview endpoint
+      const response = await fetch(`${API_ENDPOINT}/videos/segmentation/${selectedVideo.id}/${selectedVideo.indexId}`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(state.session ? { 'Authorization': `Bearer ${state.session.token}` } : {})
+        }
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Failed to load video segmentation: ${response.statusText}`);
+      }
+      
+      const segmentationData = await response.json();
+      setVideoSegments(segmentationData.segments || []);
+      
+    } catch (error) {
+      console.error('Error loading video segmentation:', error);
+      setSegmentationError(error instanceof Error ? error.message : 'Failed to load video segmentation');
+    } finally {
+      setIsLoadingSegmentation(false);
+    }
+  };
+
+  // Handle segment playback
+  const playSegment = (segment: any) => {
+    setPlayingSegment(segment);
+    setIsSegmentPlayerOpen(true);
   };
 
   // Handle adding a custom tag to the selected video
@@ -901,184 +953,186 @@ export default function AdsTaggingPage() {
         </div>
       )}
       
-      <div className="grid grid-cols-1 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
         {activePanel === 'operational' ? (
           /* Operational Panel */
-          <div className="space-y-6">
-            {/* Index Selection */}
-            <div className="bg-white rounded-lg shadow-md p-6">
-              <h2 className="text-lg font-medium mb-4">Select an Index</h2>
-              
-              {indexes.length === 0 ? (
-                <div className="bg-gray-100 p-4 rounded-md text-gray-600">
-                  No indexes found. <a href="/create" className="text-purple-600 hover:underline">Create your first index</a>
-                </div>
-              ) : (
-                <div className="relative" ref={dropdownRef}>
-                  <div 
-                    className="block w-full pl-3 pr-10 py-2 text-base border border-gray-300 focus:outline-none focus:ring-purple-500 focus:border-purple-500 rounded-md cursor-pointer"
-                    onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                  >
-                    <div className="flex justify-between items-center">
-                      <span>{selectedIndexId ? indexes.find(idx => idx.id === selectedIndexId)?.name || 'Select an index' : 'Select an index'}</span>
-                      <svg className={`h-5 w-5 transition-transform duration-200 ${isDropdownOpen ? 'transform rotate-180' : ''}`} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                        <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
-                      </svg>
-                    </div>
-                  </div>
+          <>
+            {/* Left Sidebar - Index Selection and Tag Filtering */}
+            <div className="lg:col-span-1 space-y-6">
+              {/* Merged Index Selection and Tag Filtering */}
+              <div className="bg-white rounded-lg shadow-md p-6">
+                {/* Index Selection */}
+                <div className="mb-6">
+                  <h2 className="text-lg font-medium mb-4">Select an Index</h2>
                   
-                  {isDropdownOpen && (
-                    <div className="absolute z-10 mt-1 w-full bg-white shadow-lg max-h-60 rounded-md py-1 text-base ring-1 ring-black ring-opacity-5 overflow-auto focus:outline-none sm:text-sm">
+                  {indexes.length === 0 ? (
+                    <div className="bg-gray-100 p-4 rounded-md text-gray-600">
+                      No indexes found. <a href="/create" className="text-purple-600 hover:underline">Create your first index</a>
+                    </div>
+                  ) : (
+                    <div className="relative" ref={dropdownRef}>
                       <div 
-                        className="cursor-pointer select-none relative py-2 pl-3 pr-9 hover:bg-purple-50 text-gray-500"
-                        onClick={() => handleIndexSelect('')}
+                        className="block w-full pl-3 pr-10 py-2 text-base border border-gray-300 focus:outline-none focus:ring-purple-500 focus:border-purple-500 rounded-md cursor-pointer"
+                        onClick={() => setIsDropdownOpen(!isDropdownOpen)}
                       >
-                        Select an index
+                        <div className="flex justify-between items-center">
+                          <span className="text-sm">{selectedIndexId ? indexes.find(idx => idx.id === selectedIndexId)?.name || 'Select an index' : 'Select an index'}</span>
+                          <svg className={`h-5 w-5 transition-transform duration-200 ${isDropdownOpen ? 'transform rotate-180' : ''}`} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                            <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
+                          </svg>
+                        </div>
                       </div>
                       
-                      {indexes.map((index) => (
-                        <div
-                          key={index.id}
-                          className={`cursor-pointer select-none relative py-2 pl-3 pr-9 hover:bg-purple-50 ${selectedIndexId === index.id ? 'bg-purple-100 text-purple-900' : 'text-gray-900'}`}
-                          onClick={() => handleIndexSelect(index.id)}
-                        >
-                          {index.name} ({index.videoCount} videos)
+                      {isDropdownOpen && (
+                        <div className="absolute z-10 mt-1 w-full bg-white shadow-lg max-h-60 rounded-md py-1 text-base ring-1 ring-black ring-opacity-5 overflow-auto focus:outline-none sm:text-sm">
+                          <div 
+                            className="cursor-pointer select-none relative py-2 pl-3 pr-9 hover:bg-purple-50 text-gray-500"
+                            onClick={() => handleIndexSelect('')}
+                          >
+                            Select an index
+                          </div>
                           
-                          {selectedIndexId === index.id && (
-                            <span className="absolute inset-y-0 right-0 flex items-center pr-4 text-purple-600">
-                              <svg className="h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                                <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                              </svg>
-                            </span>
-                          )}
+                          {indexes.map((index) => (
+                            <div
+                              key={index.id}
+                              className={`cursor-pointer select-none relative py-2 pl-3 pr-9 hover:bg-purple-50 ${selectedIndexId === index.id ? 'bg-purple-100 text-purple-900' : 'text-gray-900'}`}
+                              onClick={() => handleIndexSelect(index.id)}
+                            >
+                              <span className="text-sm">{index.name} ({index.videoCount})</span>
+                              
+                              {selectedIndexId === index.id && (
+                                <span className="absolute inset-y-0 right-0 flex items-center pr-4 text-purple-600">
+                                  <svg className="h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                                    <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                                  </svg>
+                                </span>
+                              )}
+                            </div>
+                          ))}
                         </div>
-                      ))}
+                      )}
                     </div>
                   )}
                 </div>
-              )}
-            </div>
-            
-            {/* Tag Filtering Section */}
-            <div className="bg-white rounded-lg shadow-md p-6">
-              <div className="flex justify-between items-center mb-4">
-                <div>
-                  <h2 className="text-lg font-medium">Filter by Tags</h2>
-                  <p className="text-sm text-gray-600 mt-1">
-                    Select tags to filter videos, then apply to narrow down results
-                  </p>
-                </div>
-                {selectedTags.length > 0 && (
-                  <div className="flex space-x-3">
-                    <button
-                      type="button"
-                      className="inline-flex items-center px-3 py-1.5 text-sm font-medium text-white bg-purple-600 hover:bg-purple-700 rounded-md transition-colors duration-200 shadow-sm"
-                      onClick={applyTagFilters}
-                    >
-                      <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
-                      </svg>
-                      Apply Filters ({selectedTags.length})
-                    </button>
-                    <button
-                      type="button"
-                      className="inline-flex items-center px-3 py-1.5 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md transition-colors duration-200"
-                      onClick={clearTagFilters}
-                    >
-                      <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                      </svg>
-                      Clear
-                    </button>
+
+                {/* Tag Filtering Section */}
+                <div className="border-t pt-6">
+                  <div className="flex justify-between items-center mb-4">
+                    <div>
+                      <h2 className="text-lg font-medium">Filter by Tags</h2>
+                      <p className="text-xs text-gray-600 mt-1">
+                        Select tags to filter videos
+                      </p>
+                    </div>
+                    {selectedTags.length > 0 && (
+                      <div className="flex flex-col space-y-2">
+                        <button
+                          type="button"
+                          className="inline-flex items-center px-2 py-1 text-xs font-medium text-white bg-purple-600 hover:bg-purple-700 rounded-md transition-colors duration-200 shadow-sm"
+                          onClick={applyTagFilters}
+                        >
+                          <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+                          </svg>
+                          Apply ({selectedTags.length})
+                        </button>
+                        <button
+                          type="button"
+                          className="inline-flex items-center px-2 py-1 text-xs font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md transition-colors duration-200"
+                          onClick={clearTagFilters}
+                        >
+                          <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                          Clear
+                        </button>
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-              
-              {/* Show active filters if any */}
-              {appliedTagFilters.length > 0 && (
-                <div className="mb-4 p-3 bg-purple-50 border border-purple-200 rounded-md">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center">
-                      <svg className="w-4 h-4 text-purple-600 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
-                      </svg>
-                      <span className="text-sm font-medium text-purple-800">Active filters:</span>
-                      <div className="flex flex-wrap gap-1 ml-2">
-                        {appliedTagFilters.map(tag => (
-                          <span key={tag} className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-800">
-                            {tag}
-                            <button
-                              onClick={() => {
-                                const newFilters = appliedTagFilters.filter(t => t !== tag);
-                                setAppliedTagFilters(newFilters);
-                                setSelectedTags(newFilters);
-                              }}
-                              className="ml-1 hover:text-purple-600"
-                            >
-                              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                              </svg>
-                            </button>
-                          </span>
-                        ))}
+                  
+                  {/* Show active filters if any */}
+                  {appliedTagFilters.length > 0 && (
+                    <div className="mb-4 p-3 bg-purple-50 border border-purple-200 rounded-md">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center">
+                          <svg className="w-4 h-4 text-purple-600 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+                          </svg>
+                          <span className="text-xs font-medium text-purple-800">Active:</span>
+                          <div className="flex flex-wrap gap-1 ml-2">
+                            {appliedTagFilters.map(tag => (
+                              <span key={tag} className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-800">
+                                {tag}
+                                <button
+                                  onClick={() => {
+                                    const newFilters = appliedTagFilters.filter(t => t !== tag);
+                                    setAppliedTagFilters(newFilters);
+                                    setSelectedTags(newFilters);
+                                  }}
+                                  className="ml-1 hover:text-purple-600"
+                                >
+                                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                  </svg>
+                                </button>
+                              </span>
+                            ))}
+                          </div>
+                        </div>
                       </div>
                     </div>
-                    <button
-                      onClick={clearTagFilters}
-                      className="text-xs text-purple-600 hover:text-purple-800 font-medium"
-                    >
-                      Clear all
-                    </button>
+                  )}
+                  
+                  {/* Tag Selection Area */}
+                  <div className="border border-gray-200 rounded-md p-3 bg-gray-50 h-[200px] overflow-y-auto">
+                    {allTags.length > 0 ? (
+                      <div className="flex flex-wrap gap-1">
+                        {allTags.map(({ tag, count, type }) => (
+                          <button
+                            key={tag}
+                            onClick={() => toggleTagSelection(tag)}
+                            className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium cursor-pointer transition-all duration-200 transform hover:scale-105 hover:shadow-sm
+                              ${selectedTags.includes(tag) 
+                                ? 'bg-purple-100 text-purple-800 border-2 border-purple-300 shadow-sm ring-2 ring-purple-200' 
+                                : type === 'category' 
+                                  ? `${getCategoryColor(tag)} hover:opacity-80 border border-transparent hover:border-gray-300` 
+                                  : 'bg-gray-100 text-gray-800 hover:bg-gray-200 border border-transparent hover:border-gray-300'
+                              }`}
+                            title={`Click to ${selectedTags.includes(tag) ? 'remove' : 'add'} "${tag}" filter (${type})`}
+                          >
+                            {selectedTags.includes(tag) && (
+                              <svg className="w-3 h-3 mr-1 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                              </svg>
+                            )}
+                            {tag}
+                            <span className={`ml-1 text-xs px-1 py-0.5 rounded-full ${selectedTags.includes(tag) ? 'bg-purple-200 text-purple-800' : 'bg-white text-gray-600'}`}>
+                              {count}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-center h-full">
+                        <div className="text-center">
+                          <svg className="w-6 h-6 text-gray-400 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
+                          </svg>
+                          <div className="text-gray-500 text-xs">No tags available yet</div>
+                          <div className="text-gray-400 text-xs mt-1">Generate tags first</div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
-              )}
-              
-              {/* Tag Selection Area */}
-              <div className="border border-gray-200 rounded-md p-4 bg-gray-50 h-[120px] overflow-y-auto">
-                {allTags.length > 0 ? (
-                  <div className="flex flex-wrap gap-2">
-                    {allTags.map(({ tag, count, type }) => (
-                      <button
-                        key={tag}
-                        onClick={() => toggleTagSelection(tag)}
-                        className={`inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium cursor-pointer transition-all duration-200 transform hover:scale-105 hover:shadow-sm
-                          ${selectedTags.includes(tag) 
-                            ? 'bg-purple-100 text-purple-800 border-2 border-purple-300 shadow-sm ring-2 ring-purple-200' 
-                            : type === 'category' 
-                              ? `${getCategoryColor(tag)} hover:opacity-80 border border-transparent hover:border-gray-300` 
-                              : 'bg-gray-100 text-gray-800 hover:bg-gray-200 border border-transparent hover:border-gray-300'
-                          }`}
-                        title={`Click to ${selectedTags.includes(tag) ? 'remove' : 'add'} "${tag}" filter (${type})`}
-                      >
-                        {selectedTags.includes(tag) && (
-                          <svg className="w-3 h-3 mr-1 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                          </svg>
-                        )}
-                        {tag}
-                        <span className={`ml-1.5 text-xs px-1.5 py-0.5 rounded-full ${selectedTags.includes(tag) ? 'bg-purple-200 text-purple-800' : 'bg-white text-gray-600'}`}>
-                          {count}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="flex items-center justify-center h-full">
-                    <div className="text-center">
-                      <svg className="w-8 h-8 text-gray-400 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
-                      </svg>
-                      <div className="text-gray-500 text-sm">No tags available yet</div>
-                      <div className="text-gray-400 text-xs mt-1">Generate tags for videos to enable filtering</div>
-                    </div>
-                  </div>
-                )}
               </div>
             </div>
-            
-            {/* Video Selection Box */}
-            <div className="bg-white rounded-lg shadow-md p-6">
-              <div className="flex justify-between items-center mb-4">
+
+            {/* Main Content Area */}
+            <div className="lg:col-span-3 space-y-6">
+              {/* Video Selection Box */}
+              <div className="bg-white rounded-lg shadow-md p-6">
+                <div className="flex justify-between items-center mb-4">
                 <h2 className="text-lg font-medium">Select a Video Asset</h2>
                 <div className="text-sm text-gray-600">
                   {appliedTagFilters.length > 0 ? (
@@ -1199,23 +1253,43 @@ export default function AdsTaggingPage() {
                     )}
                   </div>
                   
-                  <button
-                    onClick={generateTags}
-                    disabled={!selectedVideo || isProcessing}
-                    className={`px-4 py-2 rounded-md text-white ${!selectedVideo || isProcessing ? 'bg-gray-400 cursor-not-allowed' : 'bg-purple-600 hover:bg-purple-700'}`}
-                  >
-                    {isProcessing ? (
-                      <span className="flex items-center">
-                        <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                        </svg>
-                        Generating
-                      </span>
-                    ) : (
-                      'Generate Tags'
-                    )}
-                  </button>
+                  <div className="flex gap-3">
+                    <button
+                      onClick={generateTags}
+                      disabled={!selectedVideo || isProcessing}
+                      className={`px-4 py-2 rounded-md text-white ${!selectedVideo || isProcessing ? 'bg-gray-400 cursor-not-allowed' : 'bg-purple-600 hover:bg-purple-700'}`}
+                    >
+                      {isProcessing ? (
+                        <span className="flex items-center">
+                          <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                          </svg>
+                          Generating
+                        </span>
+                      ) : (
+                        'Generate Tags'
+                      )}
+                    </button>
+                    
+                    <button
+                      onClick={loadVideoSegmentation}
+                      disabled={!selectedVideo || isLoadingSegmentation}
+                      className={`px-4 py-2 rounded-md text-white ${!selectedVideo || isLoadingSegmentation ? 'bg-gray-400 cursor-not-allowed' : 'bg-purple-600 hover:bg-purple-700'}`}
+                    >
+                      {isLoadingSegmentation ? (
+                        <span className="flex items-center">
+                          <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                          </svg>
+                          Loading...
+                        </span>
+                      ) : (
+                        'Load Segments'
+                      )}
+                    </button>
+                  </div>
                 </div>
               </div>
               
@@ -1228,90 +1302,351 @@ export default function AdsTaggingPage() {
               
               {selectedVideo ? (
                 <div>
+                  {/* Video Information and Segmentation Preview */}
                   <div className="mb-4 p-4 bg-gray-50 rounded-md">
-                    <div className="flex flex-col sm:flex-row gap-4">
-                      <div className="w-full sm:w-1/3 lg:w-1/4">
-                        <div className="relative aspect-video bg-gray-100 rounded-md overflow-hidden">
-                          {selectedVideo.thumbnailUrl ? (
-                            <img
-                              src={selectedVideo.thumbnailUrl}
-                              alt={selectedVideo.title}
-                              className="w-full h-full object-cover"
-                            />
-                          ) : (
-                            <div className="w-full h-full bg-gray-200 flex items-center justify-center">
-                              <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                              </svg>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                      
-                      <div className="flex-1">
-                        <h3 className="text-lg font-medium mb-2">{selectedVideo.title}</h3>
-                        <div className="text-sm text-gray-500 mb-4">
-                          <span className="mr-4">Duration: {selectedVideo.duration}</span>
-                          <span>Index: {selectedVideo.indexId}</span>
-                        </div>
-                        
-                        {/* Custom Tag Input */}
-                        <div className="flex mb-4">
-                          <input
-                            type="text"
-                            value={tagInput}
-                            onChange={(e) => setTagInput(e.target.value)}
-                            placeholder="Add custom tag (e.g. #professional)"
-                            className="flex-1 px-3 py-2 border border-gray-300 rounded-l-md focus:outline-none focus:ring-purple-500 focus:border-purple-500"
-                          />
-                          <button
-                            onClick={handleAddTag}
-                            disabled={!tagInput.trim()}
-                            className={`px-4 py-2 rounded-r-md text-white ${!tagInput.trim() ? 'bg-gray-400 cursor-not-allowed' : 'bg-purple-600 hover:bg-purple-700'}`}
-                          >
-                            Add
-                          </button>
-                        </div>
-                        
-                        {/* Current Tags */}
-                        <div className="mb-2">
-                          <h4 className="text-sm font-medium text-gray-700 mb-2">Current Tags:</h4>
-                          <div className="flex flex-wrap gap-2">
-                            {selectedVideoTags.length > 0 ? (
-                              selectedVideoTags.map((tag, index) => (
-                                <div
-                                  key={`${tag}-${index}`}
-                                  className="bg-purple-100 text-purple-800 px-3 py-1 rounded-full flex items-center text-sm"
-                                >
-                                  <span className="mr-1">{tag}</span>
-                                  <button
-                                    onClick={() => handleRemoveTag(tag)}
-                                    className="text-purple-600 hover:text-purple-800"
-                                  >
-                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                                    </svg>
-                                  </button>
-                                </div>
-                              ))
+                    <div className="flex flex-col gap-4">
+                      {/* Video Header */}
+                      <div className="flex flex-col sm:flex-row gap-4">
+                        <div className="w-full sm:w-1/3 lg:w-1/4">
+                          <div className="relative aspect-video bg-gray-100 rounded-md overflow-hidden">
+                            {selectedVideo.thumbnailUrl ? (
+                              <img
+                                src={selectedVideo.thumbnailUrl}
+                                alt={selectedVideo.title}
+                                className="w-full h-full object-cover"
+                              />
                             ) : (
-                              <span className="text-sm text-gray-500">No tags yet. Generate or add custom tags.</span>
+                              <div className="w-full h-full bg-gray-200 flex items-center justify-center">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                </svg>
+                              </div>
                             )}
                           </div>
                         </div>
+                        
+                        <div className="flex-1">
+                          <h3 className="text-lg font-medium mb-2">{selectedVideo.title}</h3>
+                          <div className="text-sm text-gray-500 mb-4">
+                            <span className="mr-4">Duration: {selectedVideo.duration}</span>
+                            <span>Index: {selectedVideo.indexId}</span>
+                          </div>
+                          
+                          {/* Custom Tag Input */}
+                          <div className="flex mb-4">
+                            <input
+                              type="text"
+                              value={tagInput}
+                              onChange={(e) => setTagInput(e.target.value)}
+                              placeholder="Add custom tag (e.g. #professional)"
+                              className="flex-1 px-3 py-2 border border-gray-300 rounded-l-md focus:outline-none focus:ring-purple-500 focus:border-purple-500"
+                            />
+                            <button
+                              onClick={handleAddTag}
+                              disabled={!tagInput.trim()}
+                              className={`px-4 py-2 rounded-r-md text-white ${!tagInput.trim() ? 'bg-gray-400 cursor-not-allowed' : 'bg-purple-600 hover:bg-purple-700'}`}
+                            >
+                              Add
+                            </button>
+                          </div>
+                          
+                          {/* Current Tags */}
+                          <div className="mb-2">
+                            <h4 className="text-sm font-medium text-gray-700 mb-2">Current Tags:</h4>
+                            <div className="flex flex-wrap gap-2">
+                              {selectedVideoTags.length > 0 ? (
+                                selectedVideoTags.map((tag, index) => (
+                                  <div
+                                    key={`${tag}-${index}`}
+                                    className="bg-purple-100 text-purple-800 px-3 py-1 rounded-full flex items-center text-sm"
+                                  >
+                                    <span className="mr-1">{tag}</span>
+                                    <button
+                                      onClick={() => handleRemoveTag(tag)}
+                                      className="text-purple-600 hover:text-purple-800"
+                                    >
+                                      <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                      </svg>
+                                    </button>
+                                  </div>
+                                ))
+                              ) : (
+                                <span className="text-sm text-gray-500">No tags yet. Generate or add custom tags.</span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      
+                      {/* Video Segmentation Preview */}
+                      <div className="border-t pt-4">
+                        <div className="mb-3">
+                          <h4 className="text-sm font-medium text-gray-700">Video Segmentation Preview</h4>
+                        </div>
+                        
+                        {segmentationError && (
+                          <div className="mb-3 p-3 bg-red-50 border border-red-200 rounded-md">
+                            <div className="text-sm text-red-600">
+                              <strong>Error:</strong> {segmentationError}
+                            </div>
+                          </div>
+                        )}
+                        
+                        {videoSegments.length > 0 ? (
+                          <div className="space-y-3">
+                            <div className="text-sm text-gray-600">
+                              Found {videoSegments.length} segments • Total Duration: {selectedVideo.duration}
+                            </div>
+                            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 max-h-64 overflow-y-auto">
+                              {videoSegments.map((segment, index) => (
+                                <div
+                                  key={segment.segment_id}
+                                  className="bg-white rounded-md border border-gray-200 overflow-hidden hover:shadow-md transition-shadow cursor-pointer group"
+                                  onClick={() => setSelectedSegment(segment)}
+                                >
+                                  <div className="relative aspect-video bg-gray-100">
+                                    {segment.thumbnailUrl ? (
+                                      <img
+                                        src={segment.thumbnailUrl}
+                                        alt={segment.segment_name}
+                                        className="w-full h-full object-cover"
+                                        loading="lazy"
+                                      />
+                                    ) : (
+                                      <div className="w-full h-full bg-gray-200 flex items-center justify-center">
+                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                        </svg>
+                                      </div>
+                                    )}
+                                    {/* Play button overlay */}
+                                    <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-30 transition-all duration-200 flex items-center justify-center">
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          playSegment(segment);
+                                        }}
+                                        className="opacity-0 group-hover:opacity-100 transition-opacity duration-200 bg-white bg-opacity-90 hover:bg-opacity-100 rounded-full p-2 shadow-lg"
+                                      >
+                                        <svg className="w-4 h-4 text-gray-700" fill="currentColor" viewBox="0 0 24 24">
+                                          <path d="M8 5v14l11-7z"/>
+                                        </svg>
+                                      </button>
+                                    </div>
+                                    <div className="absolute bottom-0 right-0 bg-black bg-opacity-70 text-white text-xs px-2 py-1">
+                                      {Math.round(segment.duration / 1000)}s
+                                    </div>
+                                    {segment.confidence && (
+                                      <div className="absolute top-0 right-0 bg-green-500 text-white text-xs px-2 py-1 rounded-bl-md">
+                                        {(segment.confidence * 100).toFixed(1)}%
+                                      </div>
+                                    )}
+                                  </div>
+                                  <div className="p-2">
+                                    <div className="text-xs font-medium truncate">{segment.segment_name}</div>
+                                    <div className="text-xs text-gray-500">
+                                      {Math.round(segment.start_time / 1000)}s - {Math.round(segment.end_time / 1000)}s
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="text-sm text-gray-500 text-center py-8">
+                            Click "Load Segments" to preview video segmentation
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
                   
-                  {/* Generated Tags Response */}
+                  {/* Selected Segment Details */}
+                  {selectedSegment && (
+                    <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-md">
+                      <div className="flex justify-between items-start mb-3">
+                        <h4 className="text-sm font-medium text-blue-900">Segment Details</h4>
+                        <button
+                          onClick={() => setSelectedSegment(null)}
+                          className="text-blue-600 hover:text-blue-800"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <div className="text-sm text-blue-800 mb-2">
+                            <strong>{(selectedSegment as any).segment_name || `Segment ${selectedSegment.segment_id}`}</strong>
+                          </div>
+                          <div className="text-sm text-blue-700 mb-2">
+                            Time: {Math.round(selectedSegment.start_time / 1000)}s - {Math.round(selectedSegment.end_time / 1000)}s
+                          </div>
+                          <div className="text-sm text-blue-700 mb-2">
+                            Duration: {Math.round(selectedSegment.duration / 1000)} seconds
+                          </div>
+                          {(selectedSegment as any).confidence && (
+                            <div className="text-sm text-blue-700 mb-2">
+                              Confidence: {((selectedSegment as any).confidence * 100).toFixed(1)}%
+                            </div>
+                          )}
+                        </div>
+                        <div>
+                          {(selectedSegment as any).segment_visual_description && (
+                            <div className="text-sm text-blue-700 mb-2">
+                              <strong>Visual:</strong> {(selectedSegment as any).segment_visual_description}
+                            </div>
+                          )}
+                          {(selectedSegment as any).segment_audio_description && (
+                            <div className="text-sm text-blue-700">
+                              <strong>Audio:</strong> {(selectedSegment as any).segment_audio_description}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Dynamic Analysis Output */}
                   {responseText && (
                     <div className="mt-4 border border-gray-200 rounded-md p-4">
-                      <h3 className="font-medium text-gray-900 mb-2">Generated Tags & Topics</h3>
-                      {isHashtagsResponse(responseText) ? (
-                        <HashtagsAndTopics content={responseText} />
-                      ) : (
-                        <div className="prose max-w-none">
-                          <ReactMarkdown>{responseText}</ReactMarkdown>
+                      <div className="mb-4">
+                        <div className="flex justify-between items-center mb-2">
+                          <h3 className="font-medium text-gray-900">Analysis Output</h3>
+                          <select
+                            value={selectedAnalysisType}
+                            onChange={(e) => setSelectedAnalysisType(e.target.value)}
+                            className="px-3 py-1 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
+                          >
+                            <option value="comprehensive">Comprehensive Analysis</option>
+                            <option value="detailed_description">Detailed Description per Segment</option>
+                            <option value="summary_keywords">Summary & Keywords per Segment</option>
+                            <option value="categorization_tags">Categorization Tags per Segment</option>
+                          </select>
+                        </div>
+                      </div>
+                      
+                      {selectedAnalysisType === 'comprehensive' && (
+                        <div className="space-y-4">
+                          <div className="bg-blue-50 border border-blue-200 rounded-md p-4">
+                            <h4 className="font-medium text-blue-900 mb-2">Comprehensive Video Analysis</h4>
+                            {isHashtagsResponse(responseText) ? (
+                              <HashtagsAndTopics content={responseText} />
+                            ) : (
+                              <div className="prose max-w-none text-blue-800">
+                                <ReactMarkdown>{responseText}</ReactMarkdown>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                      
+                      {selectedAnalysisType === 'detailed_description' && (
+                        <div className="space-y-4">
+                          <div className="bg-green-50 border border-green-200 rounded-md p-4">
+                            <h4 className="font-medium text-green-900 mb-2">Detailed Description per Segment</h4>
+                            {videoSegments.length > 0 ? (
+                              <div className="space-y-3">
+                                {videoSegments.map((segment, index) => (
+                                  <div key={segment.segment_id} className="border border-green-300 rounded-md p-3 bg-white">
+                                    <div className="flex items-center justify-between mb-2">
+                                      <h5 className="font-medium text-green-800">{segment.segment_name}</h5>
+                                      <span className="text-sm text-green-600">
+                                        {Math.round(segment.start_time / 1000)}s - {Math.round(segment.end_time / 1000)}s
+                                      </span>
+                                    </div>
+                                    <div className="text-sm text-green-700">
+                                      <div className="mb-1"><strong>Visual:</strong> {segment.segment_visual_description || 'No description available'}</div>
+                                      <div><strong>Audio:</strong> {segment.segment_audio_description || 'No description available'}</div>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="text-green-700 text-sm">Load segments first to see detailed descriptions</div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                      
+                      {selectedAnalysisType === 'summary_keywords' && (
+                        <div className="space-y-4">
+                          <div className="bg-yellow-50 border border-yellow-200 rounded-md p-4">
+                            <h4 className="font-medium text-yellow-900 mb-2">Summary & Keywords per Segment</h4>
+                            {videoSegments.length > 0 ? (
+                              <div className="space-y-3">
+                                {videoSegments.map((segment, index) => (
+                                  <div key={segment.segment_id} className="border border-yellow-300 rounded-md p-3 bg-white">
+                                    <div className="flex items-center justify-between mb-2">
+                                      <h5 className="font-medium text-yellow-800">{segment.segment_name}</h5>
+                                      <span className="text-sm text-yellow-600">
+                                        {Math.round(segment.start_time / 1000)}s - {Math.round(segment.end_time / 1000)}s
+                                      </span>
+                                    </div>
+                                    <div className="text-sm text-yellow-700">
+                                      <div className="mb-2"><strong>Summary:</strong> {segment.segment_visual_description || 'Segment showing various content'}</div>
+                                      <div className="flex flex-wrap gap-1">
+                                        <strong>Keywords:</strong>
+                                        {segment.segment_visual_description ? (
+                                          segment.segment_visual_description.split(' ').slice(0, 5).map((word: string, idx: number) => (
+                                            <span key={idx} className="bg-yellow-100 text-yellow-800 px-2 py-1 rounded-full text-xs">
+                                              {word.replace(/[^a-zA-Z]/g, '')}
+                                            </span>
+                                          ))
+                                        ) : (
+                                          <span className="text-yellow-600 text-xs">No keywords available</span>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="text-yellow-700 text-sm">Load segments first to see summary and keywords</div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                      
+                      {selectedAnalysisType === 'categorization_tags' && (
+                        <div className="space-y-4">
+                          <div className="bg-purple-50 border border-purple-200 rounded-md p-4">
+                            <h4 className="font-medium text-purple-900 mb-2">Categorization Tags per Segment</h4>
+                            {videoSegments.length > 0 ? (
+                              <div className="space-y-3">
+                                {videoSegments.map((segment, index) => (
+                                  <div key={segment.segment_id} className="border border-purple-300 rounded-md p-3 bg-white">
+                                    <div className="flex items-center justify-between mb-2">
+                                      <h5 className="font-medium text-purple-800">{segment.segment_name}</h5>
+                                      <span className="text-sm text-purple-600">
+                                        {Math.round(segment.start_time / 1000)}s - {Math.round(segment.end_time / 1000)}s
+                                      </span>
+                                    </div>
+                                    <div className="flex flex-wrap gap-1">
+                                      <span className="bg-purple-100 text-purple-800 px-2 py-1 rounded-full text-xs">
+                                        #{segment.segment_name.toLowerCase().replace(/\s+/g, '_')}
+                                      </span>
+                                      <span className="bg-purple-100 text-purple-800 px-2 py-1 rounded-full text-xs">
+                                        #video_segment
+                                      </span>
+                                      <span className="bg-purple-100 text-purple-800 px-2 py-1 rounded-full text-xs">
+                                        #duration_{Math.round(segment.duration / 1000)}s
+                                      </span>
+                                      {segment.confidence && (
+                                        <span className="bg-purple-100 text-purple-800 px-2 py-1 rounded-full text-xs">
+                                          #confidence_{(segment.confidence * 100).toFixed(0)}pct
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="text-purple-700 text-sm">Load segments first to see categorization tags</div>
+                            )}
+                          </div>
                         </div>
                       )}
                     </div>
@@ -1328,7 +1663,8 @@ export default function AdsTaggingPage() {
                 </div>
               )}
             </div>
-          </div>
+            </div>
+          </>
         ) : (
           /* Analytics Panel */
           <div className="space-y-6">
@@ -1538,6 +1874,86 @@ export default function AdsTaggingPage() {
           </div>
         )}
       </div>
+
+      {/* Segment Video Player Modal */}
+      {isSegmentPlayerOpen && playingSegment && selectedVideo && (
+        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg max-w-4xl max-h-[90vh] w-full mx-4 overflow-hidden">
+            <div className="flex justify-between items-center p-4 border-b">
+              <div>
+                <h3 className="text-lg font-medium">{playingSegment.segment_name}</h3>
+                <p className="text-sm text-gray-600">
+                  {Math.round(playingSegment.start_time / 1000)}s - {Math.round(playingSegment.end_time / 1000)}s 
+                  ({Math.round(playingSegment.duration / 1000)}s duration)
+                </p>
+              </div>
+              <button
+                onClick={() => setIsSegmentPlayerOpen(false)}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            
+            <div className="p-4">
+              <div className="aspect-video bg-black rounded-lg overflow-hidden mb-4">
+                {selectedVideo.videoPreviewUrl ? (
+                  <video
+                    controls
+                    autoPlay
+                    className="w-full h-full"
+                    poster={playingSegment.thumbnailUrl}
+                  >
+                    <source src={`${selectedVideo.videoPreviewUrl}#t=${playingSegment.start_time / 1000},${playingSegment.end_time / 1000}`} type="video/mp4" />
+                    Your browser does not support the video tag.
+                  </video>
+                ) : (
+                  <div className="w-full h-full bg-gray-200 flex items-center justify-center">
+                    <div className="text-center text-gray-500">
+                      <svg className="w-16 h-16 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                      </svg>
+                      <p>Video preview not available</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+              
+              {/* Segment Details */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <h4 className="font-medium text-gray-900 mb-2">Segment Information</h4>
+                  <div className="space-y-1 text-sm">
+                    <div><strong>Name:</strong> {playingSegment.segment_name}</div>
+                    <div><strong>Duration:</strong> {Math.round(playingSegment.duration / 1000)} seconds</div>
+                    <div><strong>Time Range:</strong> {Math.round(playingSegment.start_time / 1000)}s - {Math.round(playingSegment.end_time / 1000)}s</div>
+                    {playingSegment.confidence && (
+                      <div><strong>Confidence:</strong> {(playingSegment.confidence * 100).toFixed(1)}%</div>
+                    )}
+                  </div>
+                </div>
+                
+                <div>
+                  <h4 className="font-medium text-gray-900 mb-2">Content Description</h4>
+                  <div className="space-y-1 text-sm">
+                    {playingSegment.segment_visual_description && (
+                      <div><strong>Visual:</strong> {playingSegment.segment_visual_description}</div>
+                    )}
+                    {playingSegment.segment_audio_description && (
+                      <div><strong>Audio:</strong> {playingSegment.segment_audio_description}</div>
+                    )}
+                    {!playingSegment.segment_visual_description && !playingSegment.segment_audio_description && (
+                      <div className="text-gray-500 italic">No detailed description available</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

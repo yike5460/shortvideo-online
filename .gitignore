@@ -59,3 +59,5 @@ cdk.context.json
 media/
 src/layers/ffmpeg/bin/
 src/layers/yt-dlp/bin/
+.kilocode
+.roo

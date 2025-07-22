@@ -5,6 +5,9 @@ import { DynamoDBDocumentClient, GetCommand, PutCommand } from '@aws-sdk/lib-dyn
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
+import { Client } from '@opensearch-project/opensearch';
+import { defaultProvider } from '@aws-sdk/credential-provider-node';
+import { AwsSigv4Signer } from '@opensearch-project/opensearch/aws';
 import { v4 as uuidv4 } from 'uuid';
 import * as crypto from 'crypto';
 
@@ -644,6 +647,100 @@ export async function initHandler(event: APIGatewayProxyEvent): Promise<LambdaRe
   }
 }
 
+// Handler for video segmentation preview
+export async function segmentationPreviewHandler(event: APIGatewayProxyEvent): Promise<LambdaResponse> {
+  try {
+    const { videoId, indexId } = event.pathParameters || {};
+    
+    if (!videoId || !indexId) {
+      return {
+        statusCode: STATUS_CODES.BAD_REQUEST,
+        headers: corsHeaders,
+        body: JSON.stringify({ error: 'Missing required parameters: videoId and indexId' })
+      };
+    }
+
+    // Get video details from DynamoDB
+    const videoDetails = await getVideoDetails(videoId, indexId);
+    if (!videoDetails) {
+      return {
+        statusCode: STATUS_CODES.NOT_FOUND,
+        headers: corsHeaders,
+        body: JSON.stringify({ error: 'Video not found' })
+      };
+    }
+
+    // Extract video segments from DynamoDB first (this contains the raw segment detection results)
+    let segments = videoDetails.video_segments || [];
+    
+    // If no segments in DynamoDB, this might be an older video - segments are stored only in OpenSearch
+    if (segments.length === 0) {
+      console.log(`No segments found in DynamoDB for video ${videoId}, checking OpenSearch...`);
+    }
+    
+    // Format segments for preview with thumbnail URLs
+    const segmentPreviews = await Promise.all(
+      segments.map(async (segment: any, index: number) => {
+        let thumbnailUrl = segment.segment_video_thumbnail_url;
+        
+        // If no pre-signed URL exists, generate one from S3 path
+        if (!thumbnailUrl && segment.segment_video_thumbnail_s3_path) {
+          try {
+            const bucket = VIDEO_BUCKET;
+            const key = segment.segment_video_thumbnail_s3_path.replace(`s3://${bucket}/`, '');
+            
+            const getObjectCommand = new GetObjectCommand({
+              Bucket: bucket,
+              Key: key
+            });
+            
+            thumbnailUrl = await getSignedUrl(s3 as any, getObjectCommand as any, { expiresIn: 3600 });
+          } catch (error) {
+            console.error(`Error generating thumbnail URL for segment ${index}:`, error);
+            thumbnailUrl = null;
+          }
+        }
+
+        return {
+          segment_id: segment.segment_id || `${videoId}_segment_${index}`,
+          start_time: segment.start_time,
+          end_time: segment.end_time,
+          duration: segment.duration,
+          confidence: segment.confidence,
+          thumbnailUrl,
+          segment_name: segment.segment_name || `Segment ${index + 1}`,
+          segment_visual_description: segment.segment_visual?.segment_visual_description,
+          segment_audio_description: segment.segment_audio?.segment_audio_description
+        };
+      })
+    );
+
+    // Return segmentation preview data
+    return {
+      statusCode: STATUS_CODES.OK,
+      headers: corsHeaders,
+      body: JSON.stringify({
+        videoId,
+        indexId,
+        totalSegments: segments.length,
+        videoDuration: videoDetails.video_duration,
+        segments: segmentPreviews
+      })
+    };
+
+  } catch (error) {
+    console.error('Error in segmentation preview handler:', error);
+    return {
+      statusCode: STATUS_CODES.INTERNAL_SERVER_ERROR,
+      headers: corsHeaders,
+      body: JSON.stringify({ 
+        error: 'Internal server error',
+        details: error instanceof Error ? error.message : 'Unknown error'
+      })
+    };
+  }
+}
+
 // Handler for streaming responses
 export async function streamHandler(event: APIGatewayProxyEvent): Promise<LambdaResponse> {
   try {
@@ -832,6 +929,8 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
     return await initHandler(event);
   } else if (path.match(/\/videos\/ask\/stream\/[^\/]+$/) && event.httpMethod === 'GET') {
     return await streamHandler(event);
+  } else if (path.match(/\/videos\/segmentation\/[^\/]+\/[^\/]+$/) && event.httpMethod === 'GET') {
+    return await segmentationPreviewHandler(event);
   } else {
     return {
       statusCode: STATUS_CODES.NOT_FOUND,

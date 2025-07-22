@@ -404,6 +404,8 @@ async function handleSNSEvent(event: SNSEvent): Promise<LambdaResponse> {
       // Get job results based on job type
       if (message.API === 'StartSegmentDetection') {
         const segments = await getSegmentDetectionResults(jobId);
+        // Store the raw segment detection results in DynamoDB for preview purposes
+        await storeSegmentDetectionResults(videoIndex, videoId, segments);
         await sendSegmentSlicingRequest(videoIndex, videoId, segments);
       } else if (message.API === 'StartLabelDetection') {
         const labels = await getLabelDetectionResults(jobId);
@@ -1155,6 +1157,58 @@ async function getSegmentDetectionResults(jobId: string): Promise<SegmentDetecti
 }
 
 /**
+ * Store segment detection results in DynamoDB for preview purposes
+ * This allows the UI to show segment previews before the actual video slicing is complete
+ */
+async function storeSegmentDetectionResults(videoIndex: string, videoId: string, segments: SegmentDetection[]): Promise<void> {
+  try {
+    // Convert Rekognition SegmentDetection to VideoSegment format for consistent storage
+    const videoSegments: VideoSegment[] = segments.map((segment, index) => ({
+      segment_id: `${videoId}_segment_${index + 1}`,
+      video_id: videoId,
+      start_time: segment.StartTimestampMillis || 0,
+      end_time: segment.EndTimestampMillis || 0,
+      duration: segment.DurationMillis || 0,
+      confidence: segment.ShotSegment?.Confidence || segment.TechnicalCueSegment?.Confidence || 0,
+      segment_name: `Segment ${index + 1}`,
+      // Add basic visual description based on segment type
+      segment_visual: {
+        segment_visual_description: segment.ShotSegment 
+          ? `Shot boundary detected (confidence: ${Math.round(segment.ShotSegment.Confidence || 0)}%)` 
+          : segment.TechnicalCueSegment 
+            ? `Technical cue detected: ${segment.TechnicalCueSegment.Type || 'Unknown'} (confidence: ${Math.round(segment.TechnicalCueSegment.Confidence || 0)}%)`
+            : 'Segment boundary detected'
+      }
+    }));
+
+    // Store in DynamoDB INDEXES_TABLE
+    await withRetry(
+      async () => docClient.send(new UpdateCommand({
+        TableName: process.env.INDEXES_TABLE,
+        Key: { 
+          indexId: videoIndex,
+          videoId 
+        },
+        UpdateExpression: "SET video_segments = :segments, segment_count = :count, video_status = :status, updated_at = :updated_at",
+        ExpressionAttributeValues: {
+          ":segments": videoSegments,
+          ":count": videoSegments.length,
+          ":status": "processing",
+          ":updated_at": new Date().toISOString()
+        }
+      })),
+      3,
+      `Store segment detection results for video ${videoId} in index ${videoIndex}`
+    );
+
+    console.log(`Successfully stored ${videoSegments.length} segment detection results for video ${videoId} in index ${videoIndex}`);
+  } catch (error) {
+    console.error(`Error storing segment detection results for video ${videoId}:`, error);
+    throw error;
+  }
+}
+
+/**
  * Utility function to perform OpenSearch operations with retry logic
  *
  * This function is critical for handling version conflicts in OpenSearch/AOSS,
@@ -1266,9 +1320,25 @@ async function updateVideoSegments(videoIndex: string, videoId: string, segments
                   ctx._source.video_segments = [];
                 }
                 
-                // Add each new segment to the array
+                // Update existing segments with new data or add new ones
                 for (int i = 0; i < params.newSegments.length; i++) {
-                  ctx._source.video_segments.add(params.newSegments[i]);
+                  def newSegment = params.newSegments[i];
+                  def found = false;
+                  
+                  // Try to find existing segment with same segment_id
+                  for (int j = 0; j < ctx._source.video_segments.length; j++) {
+                    if (ctx._source.video_segments[j].segment_id == newSegment.segment_id) {
+                      // Update existing segment with new data (merge)
+                      ctx._source.video_segments[j] = newSegment;
+                      found = true;
+                      break;
+                    }
+                  }
+                  
+                  // If not found, add as new segment
+                  if (!found) {
+                    ctx._source.video_segments.add(newSegment);
+                  }
                 }
                 
                 // Update the segment count and status
