@@ -1074,7 +1074,7 @@ export default function AdsTaggingPage() {
                   )}
                   
                   {/* Tag Selection Area */}
-                  <div className="border border-gray-200 rounded-md p-3 bg-gray-50 h-[200px] overflow-y-auto">
+                  <div className="border border-gray-200 rounded-md p-3 bg-gray-50 h-[350px] overflow-y-auto">
                     {allTags.length > 0 ? (
                       <div className="flex flex-wrap gap-1">
                         {allTags.map(({ tag, count, type }) => (
@@ -1195,19 +1195,6 @@ export default function AdsTaggingPage() {
                 <h2 className="text-lg font-medium">Enhanced Video Analysis</h2>
                 
                 <div className="flex items-center gap-2">
-                  <div className="relative">
-                    <select
-                      value={selectedAnalysisType}
-                      onChange={(e) => setSelectedAnalysisType(e.target.value)}
-                      className="px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                    >
-                      {ANALYSIS_TYPES.map((type) => (
-                        <option key={type.id} value={type.id}>{type.name}</option>
-                      ))}
-                    </select>
-                  </div>
-                  
-                  
                   <div className="flex gap-3">
                     <button
                       onClick={generateTags}
@@ -1245,13 +1232,6 @@ export default function AdsTaggingPage() {
                       )}
                     </button>
                   </div>
-                </div>
-              </div>
-              
-              {/* Analysis Type Description */}
-              <div className="mb-4">
-                <div className="text-sm text-gray-600">
-                  {ANALYSIS_TYPES.find(type => type.id === selectedAnalysisType)?.description}
                 </div>
               </div>
               
@@ -1307,7 +1287,7 @@ export default function AdsTaggingPage() {
                         {videoSegments.length > 0 ? (
                           <div className="space-y-3">
                             <div className="text-sm text-gray-600">
-                              Found {videoSegments.length} segments • Total Duration: {selectedVideo.duration}
+                              Found {videoSegments.length} segments
                             </div>
                             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 max-h-64 overflow-y-auto">
                               {videoSegments.map((segment, index) => (
@@ -1426,140 +1406,21 @@ export default function AdsTaggingPage() {
                       <div className="mb-4">
                         <div className="flex justify-between items-center mb-2">
                           <h3 className="font-medium text-gray-900">Analysis Output</h3>
-                          <select
-                            value={selectedAnalysisType}
-                            onChange={(e) => setSelectedAnalysisType(e.target.value)}
-                            className="px-3 py-1 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
-                          >
-                            <option value="comprehensive">Comprehensive Analysis</option>
-                            <option value="detailed_description">Detailed Description per Segment</option>
-                            <option value="summary_keywords">Summary & Keywords per Segment</option>
-                            <option value="categorization_tags">Categorization Tags per Segment</option>
-                          </select>
                         </div>
                       </div>
                       
-                      {selectedAnalysisType === 'comprehensive' && (
-                        <div className="space-y-4">
-                          <div className="bg-blue-50 border border-blue-200 rounded-md p-4">
-                            <h4 className="font-medium text-blue-900 mb-2">Comprehensive Video Analysis</h4>
-                            {isHashtagsResponse(responseText) ? (
-                              <HashtagsAndTopics content={responseText} />
-                            ) : (
-                              <div className="prose max-w-none text-blue-800">
-                                <ReactMarkdown>{responseText}</ReactMarkdown>
-                              </div>
-                            )}
-                          </div>
+                      <div className="space-y-4">
+                        <div className="bg-blue-50 border border-blue-200 rounded-md p-4">
+                          <h4 className="font-medium text-blue-900 mb-2">Video Analysis</h4>
+                          {isHashtagsResponse(responseText) ? (
+                            <HashtagsAndTopics content={responseText} />
+                          ) : (
+                            <div className="prose max-w-none text-blue-800">
+                              <ReactMarkdown>{responseText}</ReactMarkdown>
+                            </div>
+                          )}
                         </div>
-                      )}
-                      
-                      {selectedAnalysisType === 'detailed_description' && (
-                        <div className="space-y-4">
-                          <div className="bg-green-50 border border-green-200 rounded-md p-4">
-                            <h4 className="font-medium text-green-900 mb-2">Detailed Description per Segment</h4>
-                            {videoSegments.length > 0 ? (
-                              <div className="space-y-3">
-                                {videoSegments.map((segment, index) => (
-                                  <div key={segment.segment_id} className="border border-green-300 rounded-md p-3 bg-white">
-                                    <div className="flex items-center justify-between mb-2">
-                                      <h5 className="font-medium text-green-800">{segment.segment_name}</h5>
-                                      <span className="text-sm text-green-600">
-                                        {Math.round(segment.start_time / 1000)}s - {Math.round(segment.end_time / 1000)}s
-                                      </span>
-                                    </div>
-                                    <div className="text-sm text-green-700">
-                                      <div className="mb-1"><strong>Visual:</strong> {segment.segment_visual_description || 'No description available'}</div>
-                                      <div><strong>Audio:</strong> {segment.segment_audio_description || 'No description available'}</div>
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            ) : (
-                              <div className="text-green-700 text-sm">Load segments first to see detailed descriptions</div>
-                            )}
-                          </div>
-                        </div>
-                      )}
-                      
-                      {selectedAnalysisType === 'summary_keywords' && (
-                        <div className="space-y-4">
-                          <div className="bg-yellow-50 border border-yellow-200 rounded-md p-4">
-                            <h4 className="font-medium text-yellow-900 mb-2">Summary & Keywords per Segment</h4>
-                            {videoSegments.length > 0 ? (
-                              <div className="space-y-3">
-                                {videoSegments.map((segment, index) => (
-                                  <div key={segment.segment_id} className="border border-yellow-300 rounded-md p-3 bg-white">
-                                    <div className="flex items-center justify-between mb-2">
-                                      <h5 className="font-medium text-yellow-800">{segment.segment_name}</h5>
-                                      <span className="text-sm text-yellow-600">
-                                        {Math.round(segment.start_time / 1000)}s - {Math.round(segment.end_time / 1000)}s
-                                      </span>
-                                    </div>
-                                    <div className="text-sm text-yellow-700">
-                                      <div className="mb-2"><strong>Summary:</strong> {segment.segment_visual_description || 'Segment showing various content'}</div>
-                                      <div className="flex flex-wrap gap-1">
-                                        <strong>Keywords:</strong>
-                                        {segment.segment_visual_description ? (
-                                          segment.segment_visual_description.split(' ').slice(0, 5).map((word: string, idx: number) => (
-                                            <span key={idx} className="bg-yellow-100 text-yellow-800 px-2 py-1 rounded-full text-xs">
-                                              {word.replace(/[^a-zA-Z]/g, '')}
-                                            </span>
-                                          ))
-                                        ) : (
-                                          <span className="text-yellow-600 text-xs">No keywords available</span>
-                                        )}
-                                      </div>
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            ) : (
-                              <div className="text-yellow-700 text-sm">Load segments first to see summary and keywords</div>
-                            )}
-                          </div>
-                        </div>
-                      )}
-                      
-                      {selectedAnalysisType === 'categorization_tags' && (
-                        <div className="space-y-4">
-                          <div className="bg-purple-50 border border-purple-200 rounded-md p-4">
-                            <h4 className="font-medium text-purple-900 mb-2">Categorization Tags per Segment</h4>
-                            {videoSegments.length > 0 ? (
-                              <div className="space-y-3">
-                                {videoSegments.map((segment, index) => (
-                                  <div key={segment.segment_id} className="border border-purple-300 rounded-md p-3 bg-white">
-                                    <div className="flex items-center justify-between mb-2">
-                                      <h5 className="font-medium text-purple-800">{segment.segment_name}</h5>
-                                      <span className="text-sm text-purple-600">
-                                        {Math.round(segment.start_time / 1000)}s - {Math.round(segment.end_time / 1000)}s
-                                      </span>
-                                    </div>
-                                    <div className="flex flex-wrap gap-1">
-                                      <span className="bg-purple-100 text-purple-800 px-2 py-1 rounded-full text-xs">
-                                        #{segment.segment_name.toLowerCase().replace(/\s+/g, '_')}
-                                      </span>
-                                      <span className="bg-purple-100 text-purple-800 px-2 py-1 rounded-full text-xs">
-                                        #video_segment
-                                      </span>
-                                      <span className="bg-purple-100 text-purple-800 px-2 py-1 rounded-full text-xs">
-                                        #duration_{Math.round(segment.duration / 1000)}s
-                                      </span>
-                                      {segment.confidence && (
-                                        <span className="bg-purple-100 text-purple-800 px-2 py-1 rounded-full text-xs">
-                                          #confidence_{segment.confidence > 1 ? segment.confidence.toFixed(0) : (segment.confidence * 100).toFixed(0)}pct
-                                        </span>
-                                      )}
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            ) : (
-                              <div className="text-purple-700 text-sm">Load segments first to see categorization tags</div>
-                            )}
-                          </div>
-                        </div>
-                      )}
+                      </div>
                     </div>
                   )}
                 </div>
