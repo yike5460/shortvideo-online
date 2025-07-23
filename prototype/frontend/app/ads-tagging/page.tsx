@@ -307,10 +307,8 @@ export default function AdsTaggingPage() {
   const [hasError, setHasError] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string>('')
   const [isDropdownOpen, setIsDropdownOpen] = useState(false)
-  const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
-  const modelDropdownRef = useRef<HTMLDivElement>(null)
-  const [selectedModel, setSelectedModel] = useState<string>('qwen-vl-2.5')
+  const [selectedModel] = useState<string>('qwen-vl-2.5')
   const videoRef = useRef<HTMLVideoElement>(null)
   const [isVideoModalOpen, setIsVideoModalOpen] = useState(false)
   const [tags, setTags] = useState<VideoTag[]>([])
@@ -353,11 +351,6 @@ export default function AdsTaggingPage() {
       setSelectedIndexId(indexParam);
     }
     
-    // Load saved model from localStorage
-    const savedModel = localStorage.getItem('selectedVideoUnderstandingModel');
-    if (savedModel) {
-      setSelectedModel(savedModel);
-    }
     
     // Fetch available indexes
     const fetchIndexes = async () => {
@@ -415,10 +408,6 @@ export default function AdsTaggingPage() {
     fetchIndexes();
   }, [searchParams, state.session, API_ENDPOINT]);
   
-  // Save selected model to localStorage when it changes
-  useEffect(() => {
-    localStorage.setItem('selectedVideoUnderstandingModel', selectedModel);
-  }, [selectedModel]);
 
   // Fetch videos when selectedIndexId changes
   useEffect(() => {
@@ -593,12 +582,6 @@ export default function AdsTaggingPage() {
   const handleIndexSelect = (indexId: string) => {
     setSelectedIndexId(indexId);
     setIsDropdownOpen(false);
-  };
-  
-  // Handle model selection
-  const handleModelSelect = (modelId: string) => {
-    setSelectedModel(modelId);
-    setIsModelDropdownOpen(false);
   };
 
   // Generate tags for the selected video
@@ -894,9 +877,6 @@ export default function AdsTaggingPage() {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
         setIsDropdownOpen(false);
       }
-      if (modelDropdownRef.current && !modelDropdownRef.current.contains(event.target as Node)) {
-        setIsModelDropdownOpen(false);
-      }
     }
     
     document.addEventListener("mousedown", handleClickOutside);
@@ -927,19 +907,19 @@ export default function AdsTaggingPage() {
           Ads Asset Tagging
         </h1>
         
-        <div className="flex space-x-3">
+        <div className="flex bg-gray-100 p-1 rounded-lg">
           <button 
-            className={`px-4 py-2 rounded-md ${activePanel === 'operational' 
-              ? 'bg-purple-600 text-white shadow-md' 
-              : 'bg-white text-gray-700 border border-gray-300'}`}
+            className={`px-4 py-2 rounded-md transition-all duration-200 ${activePanel === 'operational' 
+              ? 'bg-white text-purple-600 shadow-sm font-medium' 
+              : 'text-gray-600 hover:text-gray-800'}`}
             onClick={() => setActivePanel('operational')}
           >
             Operational
           </button>
           <button 
-            className={`px-4 py-2 rounded-md ${activePanel === 'analytics' 
-              ? 'bg-purple-600 text-white shadow-md' 
-              : 'bg-white text-gray-700 border border-gray-300'}`}
+            className={`px-4 py-2 rounded-md transition-all duration-200 ${activePanel === 'analytics' 
+              ? 'bg-white text-purple-600 shadow-sm font-medium' 
+              : 'text-gray-600 hover:text-gray-800'}`}
             onClick={() => setActivePanel('analytics')}
           >
             Analytics
@@ -1019,7 +999,17 @@ export default function AdsTaggingPage() {
                 <div className="border-t pt-6">
                   <div className="flex justify-between items-center mb-4">
                     <div>
-                      <h2 className="text-lg font-medium">Filter by Tags</h2>
+                      <div className="flex items-center gap-2">
+                        <h2 className="text-lg font-medium">Filter by Tags</h2>
+                        <div className="relative group">
+                          <svg className="w-4 h-4 text-gray-400 cursor-help" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                          <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-3 py-2 bg-gray-900 text-white text-xs rounded-md opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap z-10">
+                            Click on tags below to select them for filtering
+                          </div>
+                        </div>
+                      </div>
                       <p className="text-xs text-gray-600 mt-1">
                         Select tags to filter videos
                       </p>
@@ -1217,41 +1207,6 @@ export default function AdsTaggingPage() {
                     </select>
                   </div>
                   
-                  <div className="relative" ref={modelDropdownRef}>
-                    <button
-                      type="button"
-                      className="flex items-center px-3 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-50"
-                      onClick={() => setIsModelDropdownOpen(!isModelDropdownOpen)}
-                    >
-                      <span className="mr-2">Model:</span>
-                      <span className="font-medium">{AVAILABLE_MODELS.find(model => model.id === selectedModel)?.name}</span>
-                      <svg className={`ml-2 h-5 w-5 transition-transform duration-200 ${isModelDropdownOpen ? 'transform rotate-180' : ''}`} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
-                        <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
-                      </svg>
-                    </button>
-                    
-                    {isModelDropdownOpen && (
-                      <div className="absolute right-0 z-10 mt-1 w-48 bg-white shadow-lg rounded-md py-1 text-sm ring-1 ring-black ring-opacity-5 overflow-auto focus:outline-none">
-                        {AVAILABLE_MODELS.map((model) => (
-                          <div
-                            key={model.id}
-                            className={`cursor-pointer select-none relative py-2 px-3 hover:bg-purple-50 ${selectedModel === model.id ? 'bg-purple-100 text-purple-900' : 'text-gray-900'}`}
-                            onClick={() => handleModelSelect(model.id)}
-                          >
-                            {model.name}
-                            
-                            {selectedModel === model.id && (
-                              <span className="absolute inset-y-0 right-0 flex items-center pr-3 text-purple-600">
-                                <svg className="h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                                  <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                                </svg>
-                              </span>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
                   
                   <div className="flex gap-3">
                     <button
@@ -1275,7 +1230,7 @@ export default function AdsTaggingPage() {
                     <button
                       onClick={loadVideoSegmentation}
                       disabled={!selectedVideo || isLoadingSegmentation}
-                      className={`px-4 py-2 rounded-md text-white ${!selectedVideo || isLoadingSegmentation ? 'bg-gray-400 cursor-not-allowed' : 'bg-purple-600 hover:bg-purple-700'}`}
+                      className={`px-4 py-2 rounded-md text-white ${!selectedVideo || isLoadingSegmentation ? 'bg-gray-400 cursor-not-allowed' : 'bg-indigo-600 hover:bg-indigo-700'}`}
                     >
                       {isLoadingSegmentation ? (
                         <span className="flex items-center">
@@ -1332,50 +1287,6 @@ export default function AdsTaggingPage() {
                             <span>Index: {selectedVideo.indexId}</span>
                           </div>
                           
-                          {/* Custom Tag Input */}
-                          <div className="flex mb-4">
-                            <input
-                              type="text"
-                              value={tagInput}
-                              onChange={(e) => setTagInput(e.target.value)}
-                              placeholder="Add custom tag (e.g. #professional)"
-                              className="flex-1 px-3 py-2 border border-gray-300 rounded-l-md focus:outline-none focus:ring-purple-500 focus:border-purple-500"
-                            />
-                            <button
-                              onClick={handleAddTag}
-                              disabled={!tagInput.trim()}
-                              className={`px-4 py-2 rounded-r-md text-white ${!tagInput.trim() ? 'bg-gray-400 cursor-not-allowed' : 'bg-purple-600 hover:bg-purple-700'}`}
-                            >
-                              Add
-                            </button>
-                          </div>
-                          
-                          {/* Current Tags */}
-                          <div className="mb-2">
-                            <h4 className="text-sm font-medium text-gray-700 mb-2">Current Tags:</h4>
-                            <div className="flex flex-wrap gap-2">
-                              {selectedVideoTags.length > 0 ? (
-                                selectedVideoTags.map((tag, index) => (
-                                  <div
-                                    key={`${tag}-${index}`}
-                                    className="bg-purple-100 text-purple-800 px-3 py-1 rounded-full flex items-center text-sm"
-                                  >
-                                    <span className="mr-1">{tag}</span>
-                                    <button
-                                      onClick={() => handleRemoveTag(tag)}
-                                      className="text-purple-600 hover:text-purple-800"
-                                    >
-                                      <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                                      </svg>
-                                    </button>
-                                  </div>
-                                ))
-                              ) : (
-                                <span className="text-sm text-gray-500">No tags yet. Generate or add custom tags.</span>
-                              )}
-                            </div>
-                          </div>
                         </div>
                       </div>
                       
@@ -1439,7 +1350,7 @@ export default function AdsTaggingPage() {
                                     </div>
                                     {segment.confidence && (
                                       <div className="absolute top-0 right-0 bg-green-500 text-white text-xs px-2 py-1 rounded-bl-md">
-                                        {(segment.confidence * 100).toFixed(1)}%
+                                        {segment.confidence > 1 ? segment.confidence.toFixed(1) : (segment.confidence * 100).toFixed(1)}%
                                       </div>
                                     )}
                                   </div>
@@ -1489,7 +1400,7 @@ export default function AdsTaggingPage() {
                           </div>
                           {(selectedSegment as any).confidence && (
                             <div className="text-sm text-blue-700 mb-2">
-                              Confidence: {((selectedSegment as any).confidence * 100).toFixed(1)}%
+                              Confidence: {(selectedSegment as any).confidence > 1 ? (selectedSegment as any).confidence.toFixed(1) : ((selectedSegment as any).confidence * 100).toFixed(1)}%
                             </div>
                           )}
                         </div>
@@ -1636,7 +1547,7 @@ export default function AdsTaggingPage() {
                                       </span>
                                       {segment.confidence && (
                                         <span className="bg-purple-100 text-purple-800 px-2 py-1 rounded-full text-xs">
-                                          #confidence_{(segment.confidence * 100).toFixed(0)}pct
+                                          #confidence_{segment.confidence > 1 ? segment.confidence.toFixed(0) : (segment.confidence * 100).toFixed(0)}pct
                                         </span>
                                       )}
                                     </div>
@@ -1930,7 +1841,7 @@ export default function AdsTaggingPage() {
                     <div><strong>Duration:</strong> {Math.round(playingSegment.duration / 1000)} seconds</div>
                     <div><strong>Time Range:</strong> {Math.round(playingSegment.start_time / 1000)}s - {Math.round(playingSegment.end_time / 1000)}s</div>
                     {playingSegment.confidence && (
-                      <div><strong>Confidence:</strong> {(playingSegment.confidence * 100).toFixed(1)}%</div>
+                      <div><strong>Confidence:</strong> {playingSegment.confidence > 1 ? playingSegment.confidence.toFixed(1) : (playingSegment.confidence * 100).toFixed(1)}%</div>
                     )}
                   </div>
                 </div>

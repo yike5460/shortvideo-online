@@ -52,6 +52,7 @@ cdk.context.json
 .parcel-cache/
 !/.projenrc.ts
 .next/
+.vercel/
 # All environment variables
 .env
 .env.local
