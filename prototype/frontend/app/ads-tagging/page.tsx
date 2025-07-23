@@ -343,6 +343,9 @@ export default function AdsTaggingPage() {
   const [segmentationError, setSegmentationError] = useState<string | null>(null)
   const [isSegmentPlayerOpen, setIsSegmentPlayerOpen] = useState(false)
   const [playingSegment, setPlayingSegment] = useState<any>(null)
+  
+  // Polling management
+  const pollingTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
   // Initialize selectedIndexId from URL parameter and fetch indexes on mount
   useEffect(() => {
@@ -584,7 +587,7 @@ export default function AdsTaggingPage() {
     setIsDropdownOpen(false);
   };
 
-  // Generate tags for the selected video
+  // Generate tags for the selected video using async polling
   const generateTags = async () => {
     if (!selectedVideo) {
       setError('Please select a video first');
@@ -594,8 +597,15 @@ export default function AdsTaggingPage() {
     try {
       setIsProcessing(true);
       setError(null);
+      setResponseText('');
       
-      // Use the Ask API with a specific prompt to generate tags
+      // Clear any existing polling
+      if (pollingTimeoutRef.current) {
+        clearTimeout(pollingTimeoutRef.current);
+        pollingTimeoutRef.current = null;
+      }
+      
+      // Submit the video analysis job
       const initResponse = await fetch(`${API_ENDPOINT}/videos/ask/init`, {
         method: 'POST',
         headers: {
@@ -617,78 +627,84 @@ export default function AdsTaggingPage() {
       
       const { sessionId } = await initResponse.json();
       
-      // Connect to the streaming endpoint
-      const eventSource = new EventSource(`${API_ENDPOINT}/videos/ask/stream/${sessionId}`);
-      let fullResponse = '';
-      
-      // Handle incoming message events
-      eventSource.addEventListener('message', (event) => {
+      // Start polling for results
+      const pollForResults = async () => {
         try {
-          const data = JSON.parse(event.data);
-          fullResponse += data.text;
-          setResponseText(fullResponse);
-        } catch (error) {
-          console.error('Error parsing SSE message:', error);
-        }
-      });
-      
-      // Handle completion event
-      eventSource.addEventListener('complete', () => {
-        setIsProcessing(false);
-        eventSource.close();
-        
-        // Parse the hashtags from the response
-        if (isHashtagsResponse(fullResponse)) {
-          // Extract hashtags
-          const hashtagsMatch = fullResponse.match(/## Hashtags\s*([\s\S]*?)(?=##|$)/);
-          if (hashtagsMatch && hashtagsMatch[1]) {
-            const hashtagMatches = hashtagsMatch[1].match(/#\w+/g);
-            if (hashtagMatches) {
-              // Update the selected video with the new tags
-              setSelectedVideoTags(hashtagMatches);
-              
-              // Update the video in the videos array
-              const updatedVideos = videos.map(video => {
-                if (video.id === selectedVideo.id) {
-                  return {
-                    ...video,
-                    tags: hashtagMatches
-                  };
+          const statusResponse = await fetch(`${API_ENDPOINT}/videos/ask/status/${sessionId}`, {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+              ...(state.session ? { 'Authorization': `Bearer ${state.session.token}` } : {})
+            }
+          });
+          
+          if (!statusResponse.ok) {
+            throw new Error(`Failed to check status: ${statusResponse.statusText}`);
+          }
+          
+          const statusData = await statusResponse.json();
+          
+          if (statusData.status === 'completed') {
+            // Processing completed
+            setIsProcessing(false);
+            const fullResponse = statusData.result || '';
+            setResponseText(fullResponse);
+            
+            // Parse the hashtags from the response
+            if (isHashtagsResponse(fullResponse)) {
+              // Extract hashtags
+              const hashtagsMatch = fullResponse.match(/## Hashtags\s*([\s\S]*?)(?=##|$)/);
+              if (hashtagsMatch && hashtagsMatch[1]) {
+                const hashtagMatches = hashtagsMatch[1].match(/#\w+/g);
+                if (hashtagMatches) {
+                  // Update the selected video with the new tags
+                  setSelectedVideoTags(hashtagMatches);
+                  
+                  // Update the video in the videos array
+                  const updatedVideos = videos.map(video => {
+                    if (video.id === selectedVideo.id) {
+                      return {
+                        ...video,
+                        tags: hashtagMatches
+                      };
+                    }
+                    return video;
+                  });
+                  
+                  setVideos(updatedVideos);
+                  
+                  // Update tag statistics
+                  updateTagStatistics(updatedVideos);
                 }
-                return video;
-              });
-              
-              setVideos(updatedVideos);
-              
-              // Update tag statistics
-              updateTagStatistics(updatedVideos);
+              }
             }
+          } else if (statusData.status === 'error') {
+            // Processing failed
+            setIsProcessing(false);
+            setError(statusData.error || 'Processing failed');
+            setErrorMessage(statusData.error || 'Processing failed');
+            setHasError(true);
+          } else if (statusData.status === 'processing') {
+            // Still processing, show partial results if available
+            if (statusData.partialResult) {
+              setResponseText(statusData.partialResult);
+            }
+            // Continue polling
+            pollingTimeoutRef.current = setTimeout(pollForResults, 2000); // Poll every 2 seconds
+          } else {
+            // Still pending, continue polling
+            pollingTimeoutRef.current = setTimeout(pollForResults, 2000); // Poll every 2 seconds
           }
+        } catch (pollError) {
+          console.error('Error polling for results:', pollError);
+          setIsProcessing(false);
+          setError(pollError instanceof Error ? pollError.message : 'Failed to check processing status');
         }
-      });
+      };
       
-      // Handle errors
-      eventSource.addEventListener('error', (event) => {
-        console.error('SSE Error:', event);
-        
-        let errorMsg = 'Error receiving response from server';
-        try {
-          if (event instanceof MessageEvent && event.data) {
-            const errorData = JSON.parse(event.data);
-            if (errorData.error) {
-              errorMsg = errorData.error;
-            }
-          }
-        } catch (parseError) {
-          console.error('Error parsing error message:', parseError);
-        }
-        
-        setError(errorMsg);
-        setErrorMessage(errorMsg);
-        setIsProcessing(false);
-        setHasError(true);
-        eventSource.close();
-      });
+      // Start polling
+      pollForResults();
+      
     } catch (error) {
       console.error('Error generating tags:', error);
       setError(error instanceof Error ? error.message : 'Failed to generate tags');
@@ -882,6 +898,15 @@ export default function AdsTaggingPage() {
     document.addEventListener("mousedown", handleClickOutside);
     return () => {
       document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, []);
+
+  // Cleanup polling when component unmounts
+  useEffect(() => {
+    return () => {
+      if (pollingTimeoutRef.current) {
+        clearTimeout(pollingTimeoutRef.current);
+      }
     };
   }, []);
 

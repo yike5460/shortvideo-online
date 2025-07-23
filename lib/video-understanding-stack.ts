@@ -6,6 +6,8 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as sqs from 'aws-cdk-lib/aws-sqs';
+import * as lambdaEventSources from 'aws-cdk-lib/aws-lambda-event-sources';
 import * as nodejslambda from 'aws-cdk-lib/aws-lambda-nodejs';
 import { Construct } from 'constructs';
 
@@ -32,6 +34,20 @@ export class VideoUnderstandingStack extends Construct {
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       timeToLiveAttribute: 'ttl',
+    });
+
+    // Create SQS queue for async video processing
+    const processingQueue = new sqs.Queue(this, 'VideoProcessingQueue', {
+      queueName: `video-processing-${props.deploymentEnvironment}`,
+      visibilityTimeout: cdk.Duration.minutes(15), // Match Lambda timeout
+      retentionPeriod: cdk.Duration.days(14),
+      deadLetterQueue: {
+        queue: new sqs.Queue(this, 'VideoProcessingDLQ', {
+          queueName: `video-processing-dlq-${props.deploymentEnvironment}`,
+          retentionPeriod: cdk.Duration.days(14)
+        }),
+        maxReceiveCount: 3
+      }
     });
 
     // Create the Lambda security group
@@ -81,6 +97,8 @@ export class VideoUnderstandingStack extends Construct {
         NOVA_MODEL_ID: 'apac.amazon.nova-pro-v1:0',
         // External video understanding endpoint (Qwen-VL)
         EXTERNAL_VIDEO_UNDERSTANDING_ENDPOINT: props.externalVideoUnderstandingEndpoint || '',
+        // SQS queue URL for async processing
+        PROCESSING_QUEUE_URL: processingQueue.queueUrl,
       },
       bundling: {
         minify: true,
@@ -90,6 +108,15 @@ export class VideoUnderstandingStack extends Construct {
       },
       depsLockFilePath: 'src/lambdas/video-understanding/package.json'
     });
+
+    // Add SQS event source to the Lambda function
+    this.videoUnderstandingFunction.addEventSource(
+      new lambdaEventSources.SqsEventSource(processingQueue, {
+        batchSize: 1, // Process one message at a time
+        maxBatchingWindow: cdk.Duration.seconds(0), // No batching window
+        enabled: true,
+      })
+    );
 
     // Grant permissions to the Lambda function
     sessionsTable.grantReadWriteData(this.videoUnderstandingFunction);
@@ -133,13 +160,32 @@ export class VideoUnderstandingStack extends Construct {
     });
     this.videoUnderstandingFunction.addToRolePolicy(bedrockPolicy);
 
+    // Grant SQS permissions
+    const sqsPolicy = new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'sqs:SendMessage',
+        'sqs:ReceiveMessage',
+        'sqs:DeleteMessage',
+        'sqs:GetQueueAttributes',
+      ],
+      resources: [
+        processingQueue.queueArn,
+        processingQueue.deadLetterQueue?.queue.queueArn || '',
+      ].filter(Boolean),
+    });
+    this.videoUnderstandingFunction.addToRolePolicy(sqsPolicy);
+
     // Add API Gateway endpoints
     // POST /video/ask/init
+    // GET /video/ask/status/{sessionId}
     // GET /video/ask/stream/{sessionId}
     // GET /videos/segmentation/{videoId}/{indexId}
     const videos = props.api.root.getResource('videos') || props.api.root.addResource('videos');
     const ask = videos.addResource('ask');
     const init = ask.addResource('init');
+    const status = ask.addResource('status');
+    const statusSession = status.addResource('{sessionId}');
     const stream = ask.addResource('stream');
     const streamSession = stream.addResource('{sessionId}');
     
@@ -230,6 +276,7 @@ export class VideoUnderstandingStack extends Construct {
 
     // Add endpoints
     addMethodWithCors(init, 'POST', this.videoUnderstandingFunction);
+    addMethodWithCors(statusSession, 'GET', this.videoUnderstandingFunction);
     addMethodWithCors(streamSession, 'GET', this.videoUnderstandingFunction);
     addMethodWithCors(segmentationIndex, 'GET', this.videoUnderstandingFunction);
   }

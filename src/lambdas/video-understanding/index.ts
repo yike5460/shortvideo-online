@@ -1,10 +1,11 @@
-import { APIGatewayProxyEvent } from 'aws-lambda';
+import { APIGatewayProxyEvent, SQSEvent } from 'aws-lambda';
 import { LambdaContext, LambdaResponse } from '../../types/aws-lambda';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
+import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { Client } from '@opensearch-project/opensearch';
 import { defaultProvider } from '@aws-sdk/credential-provider-node';
 import { AwsSigv4Signer } from '@opensearch-project/opensearch/aws';
@@ -15,6 +16,7 @@ import * as crypto from 'crypto';
 const dynamoClient = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(dynamoClient);
 const s3 = new S3Client({});
+const sqs = new SQSClient({});
 const bedrock = new BedrockRuntimeClient({
   // Align with the inference profile region
   region: process.env.AWS_REGION || 'ap-northeast-1',
@@ -28,6 +30,8 @@ const SESSION_TTL = 60 * 60; // 1 hour in seconds
 const NOVA_MODEL_ID = process.env.NOVA_MODEL_ID || 'apac.amazon.nova-pro-v1:0';
 // External video understanding endpoint (Qwen-VL)
 const EXTERNAL_VIDEO_UNDERSTANDING_ENDPOINT = process.env.EXTERNAL_VIDEO_UNDERSTANDING_ENDPOINT || '';
+// SQS queue for async processing
+const PROCESSING_QUEUE_URL = process.env.PROCESSING_QUEUE_URL || '';
 
 // Define question types for specialized prompts
 enum QuestionType {
@@ -282,6 +286,8 @@ interface SessionData {
   createdAt: number;
   ttl: number;
   error?: string;
+  result?: string;  // Store the final result
+  partialResult?: string;  // Store partial results for streaming
 }
 
 // Interface for the initialization request
@@ -570,7 +576,7 @@ async function processVideoWithQwenVL(s3Path: string, question: string, videoMet
   }
 }
 
-// Handler for initializing a streaming session
+// Handler for initializing an async processing session
 export async function initHandler(event: APIGatewayProxyEvent): Promise<LambdaResponse> {
   try {
     if (!event.body) {
@@ -629,13 +635,94 @@ export async function initHandler(event: APIGatewayProxyEvent): Promise<LambdaRe
 
     await createSession(sessionData);
 
+    // Queue the processing job
+    if (PROCESSING_QUEUE_URL) {
+      try {
+        const sqsMessage = {
+          QueueUrl: PROCESSING_QUEUE_URL,
+          MessageBody: JSON.stringify({
+            sessionId,
+            videoId,
+            indexId,
+            question,
+            model,
+            bypassPromptEnhancement
+          })
+        };
+        
+        await sqs.send(new SendMessageCommand(sqsMessage));
+        console.log(`Processing job queued for session ${sessionId}`);
+      } catch (sqsError) {
+        console.error('Error queuing processing job:', sqsError);
+        // Update session status to error
+        await updateSession(sessionId, { 
+          status: 'error',
+          error: 'Failed to queue processing job'
+        });
+        
+        return {
+          statusCode: STATUS_CODES.INTERNAL_SERVER_ERROR,
+          headers: corsHeaders,
+          body: JSON.stringify({ error: 'Failed to queue processing job' })
+        };
+      }
+    }
+
     return {
       statusCode: STATUS_CODES.CREATED,
       headers: corsHeaders,
       body: JSON.stringify({ sessionId })
     };
   } catch (error) {
-    console.error('Error initializing streaming session:', error);
+    console.error('Error initializing async processing session:', error);
+    return {
+      statusCode: STATUS_CODES.INTERNAL_SERVER_ERROR,
+      headers: corsHeaders,
+      body: JSON.stringify({ 
+        error: 'Internal server error',
+        details: error instanceof Error ? error.message : 'Unknown error'
+      })
+    };
+  }
+}
+
+// Handler for checking processing status
+export async function statusHandler(event: APIGatewayProxyEvent): Promise<LambdaResponse> {
+  try {
+    const sessionId = event.pathParameters?.sessionId;
+    
+    if (!sessionId) {
+      return {
+        statusCode: STATUS_CODES.BAD_REQUEST,
+        headers: corsHeaders,
+        body: JSON.stringify({ error: 'Missing sessionId parameter' })
+      };
+    }
+
+    // Get the session
+    const session = await getSession(sessionId);
+    if (!session) {
+      return {
+        statusCode: STATUS_CODES.NOT_FOUND,
+        headers: corsHeaders,
+        body: JSON.stringify({ error: 'Session not found' })
+      };
+    }
+
+    // Return the session status
+    return {
+      statusCode: STATUS_CODES.OK,
+      headers: corsHeaders,
+      body: JSON.stringify({
+        sessionId,
+        status: session.status,
+        result: session.result,
+        partialResult: session.partialResult,
+        error: session.error
+      })
+    };
+  } catch (error) {
+    console.error('Error checking status:', error);
     return {
       statusCode: STATUS_CODES.INTERNAL_SERVER_ERROR,
       headers: corsHeaders,
@@ -738,6 +825,89 @@ export async function segmentationPreviewHandler(event: APIGatewayProxyEvent): P
         details: error instanceof Error ? error.message : 'Unknown error'
       })
     };
+  }
+}
+
+// Handler for processing SQS messages
+export async function sqsHandler(event: SQSEvent): Promise<void> {
+  console.log('Processing SQS messages:', JSON.stringify(event, null, 2));
+  
+  for (const record of event.Records) {
+    try {
+      const message = JSON.parse(record.body);
+      const { sessionId, videoId, indexId, question, model, bypassPromptEnhancement } = message;
+      
+      console.log(`Processing session ${sessionId}`);
+      
+      // Update session status to processing
+      await updateSession(sessionId, { status: 'processing' });
+      
+      // Get video details
+      const videoDetails = await getVideoDetails(videoId, indexId);
+      if (!videoDetails) {
+        console.error(`Video details not found for ${videoId}/${indexId}`);
+        await updateSession(sessionId, { 
+          status: 'error',
+          error: 'Video details not found'
+        });
+        continue;
+      }
+      
+      // Get the S3 path from the video details
+      const videoS3Path = videoDetails.video_s3_path || '';
+      
+      if (!videoS3Path) {
+        console.error('No video_s3_path found in video details');
+        await updateSession(sessionId, { 
+          status: 'error',
+          error: 'Video S3 path not found in metadata'
+        });
+        continue;
+      }
+      
+      // Extract video metadata
+      const videoMetadata = {
+        duration: videoDetails.video_duration || '00:00:00',
+        fps: videoDetails.video_fps || 1,
+        startTime: '00:00:00'
+      };
+      
+      console.log('Video metadata:', JSON.stringify(videoMetadata, null, 2));
+      
+      // Get the appropriate model processor based on the selected model
+      const modelProcessor = getModelProcessor(model);
+      console.log(`Using model: ${model || 'default'}`);
+      console.log(`Session bypassPromptEnhancement:`, bypassPromptEnhancement, 'type:', typeof bypassPromptEnhancement);
+      
+      // Process the video with the selected model
+      const response = await modelProcessor.processVideo(videoS3Path, question, videoMetadata, bypassPromptEnhancement || false);
+      
+      // Update session with the result
+      await updateSession(sessionId, { 
+        status: 'completed',
+        result: response
+      });
+      
+      console.log(`Session ${sessionId} completed successfully`);
+      
+    } catch (error) {
+      console.error('Error processing SQS message:', error);
+      
+      try {
+        // Try to parse sessionId from the message to update status
+        const message = JSON.parse(record.body);
+        const { sessionId } = message;
+        
+        if (sessionId) {
+          await updateSession(sessionId, { 
+            status: 'error',
+            error: error instanceof Error ? error.message : 'Unknown error'
+          });
+        }
+      } catch (parseError) {
+        console.error('Error parsing message for error handling:', parseError);
+      }
+    }
   }
 }
 
@@ -912,9 +1082,17 @@ function simulateStreamingChunks(fullResponse: string): string[] {
 }
 
 // Main handler function
-export const handler = async (event: APIGatewayProxyEvent, _context: LambdaContext): Promise<LambdaResponse> => {
+export const handler = async (event: APIGatewayProxyEvent | SQSEvent, _context: LambdaContext): Promise<LambdaResponse | void> => {
+  // Check if this is an SQS event
+  if ('Records' in event) {
+    return await sqsHandler(event as SQSEvent);
+  }
+  
+  // Handle API Gateway events
+  const apiEvent = event as APIGatewayProxyEvent;
+  
   // Handle OPTIONS requests for CORS
-  if (event.httpMethod === 'OPTIONS') {
+  if (apiEvent.httpMethod === 'OPTIONS') {
     return {
       statusCode: 200,
       headers: corsHeaders,
@@ -923,14 +1101,16 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
   }
 
   // Route the request based on the path
-  const path = event.path;
+  const path = apiEvent.path;
   
-  if (path.endsWith('/videos/ask/init') && event.httpMethod === 'POST') {
-    return await initHandler(event);
-  } else if (path.match(/\/videos\/ask\/stream\/[^\/]+$/) && event.httpMethod === 'GET') {
-    return await streamHandler(event);
-  } else if (path.match(/\/videos\/segmentation\/[^\/]+\/[^\/]+$/) && event.httpMethod === 'GET') {
-    return await segmentationPreviewHandler(event);
+  if (path.endsWith('/videos/ask/init') && apiEvent.httpMethod === 'POST') {
+    return await initHandler(apiEvent);
+  } else if (path.match(/\/videos\/ask\/status\/[^\/]+$/) && apiEvent.httpMethod === 'GET') {
+    return await statusHandler(apiEvent);
+  } else if (path.match(/\/videos\/ask\/stream\/[^\/]+$/) && apiEvent.httpMethod === 'GET') {
+    return await streamHandler(apiEvent);
+  } else if (path.match(/\/videos\/segmentation\/[^\/]+\/[^\/]+$/) && apiEvent.httpMethod === 'GET') {
+    return await segmentationPreviewHandler(apiEvent);
   } else {
     return {
       statusCode: STATUS_CODES.NOT_FOUND,
