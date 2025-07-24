@@ -220,6 +220,14 @@ const estimateProcessingTime = (duration: string): number => {
   return Math.max(totalSeconds * 0.15, 10); // Minimum 10 seconds
 };
 
+// Helper function to estimate processing time for a segment
+const estimateSegmentProcessingTime = (segmentDurationMs: number): number => {
+  const durationSeconds = segmentDurationMs / 1000;
+  // Estimate: roughly 8-12 seconds processing per minute of segment
+  return Math.max(durationSeconds * 0.2, 8); // Minimum 8 seconds
+};
+
+
 
 // Generate detailed analysis prompt
 const generateDetailedPrompt = (options: any, segment: any): string => {
@@ -744,6 +752,14 @@ export default function AdsTaggingPage() {
   // Batch segment selection states
   const [selectedSegments, setSelectedSegments] = useState<string[]>([])
   const [selectAllSegments, setSelectAllSegments] = useState(false)
+  
+  // Progress tracking for batch analysis
+  const [batchAnalysisProgress, setBatchAnalysisProgress] = useState<{
+    current: number;
+    total: number;
+    currentSegmentId?: string;
+    estimatedTimeRemaining?: number;
+  }>({ current: 0, total: 0 })
 
   // Initialize selectedIndexId from URL parameter and fetch indexes on mount
   useEffect(() => {
@@ -1113,6 +1129,7 @@ export default function AdsTaggingPage() {
       setSegmentationError(null);
       
       // Call the video segmentation preview endpoint
+      // The backend now always generates fresh pre-signed URLs to prevent expiration
       const response = await fetch(`${API_ENDPOINT}/videos/segmentation/${selectedVideo.id}/${selectedVideo.indexId}`, {
         method: 'GET',
         headers: {
@@ -1142,23 +1159,68 @@ export default function AdsTaggingPage() {
     setIsSegmentPlayerOpen(true);
   };
 
-  // Batch analyze multiple segments
+  // Batch analyze multiple segments with progress tracking
   const batchAnalyzeSegments = async () => {
-    if (selectedSegments.length === 0 || !selectedVideo) return;
+    if (selectedSegments.length === 0 || !selectedVideo || !selectedAnalysisPanel) return;
     
     setIsAnalyzingSegment(true);
+    setBatchAnalysisProgress({ current: 0, total: selectedSegments.length });
     
     try {
-      // Process segments sequentially to avoid overwhelming the API
+      // Calculate estimated total time
+      const totalEstimatedTime = selectedSegments.reduce((total, segmentId) => {
+        const segment = videoSegments.find(s => s.segment_id === segmentId);
+        if (segment) {
+          const duration = (segment.end_time || 0) - (segment.start_time || 0);
+          return total + estimateSegmentProcessingTime(duration);
+        }
+        return total + 8; // Default 8 seconds if segment not found
+      }, 0);
+
+      let processedCount = 0;
+      const startTime = Date.now();
+
+      // Process segments sequentially to avoid overwhelming the backend
       for (const segmentId of selectedSegments) {
-        await new Promise(resolve => setTimeout(resolve, 500)); // Small delay between requests
-        await analyzeSegmentInternal(segmentId, selectedAnalysisPanel || 'detailed');
+        const segment = videoSegments.find(s => s.segment_id === segmentId);
+        const segmentDuration = segment ? (segment.end_time || 0) - (segment.start_time || 0) : 0;
+        const estimatedTime = estimateSegmentProcessingTime(segmentDuration);
+        
+        // Update progress
+        setBatchAnalysisProgress({
+          current: processedCount,
+          total: selectedSegments.length,
+          currentSegmentId: segmentId,
+          estimatedTimeRemaining: Math.max(0, totalEstimatedTime - ((Date.now() - startTime) / 1000))
+        });
+
+        // Process the segment
+        await analyzeSegmentInternal(segmentId, selectedAnalysisPanel);
+        
+        processedCount++;
+        
+        // Add delay between requests to prevent backend overload (2-3 seconds)
+        if (processedCount < selectedSegments.length) {
+          await new Promise(resolve => setTimeout(resolve, 2500));
+        }
       }
+
+      // Final progress update
+      setBatchAnalysisProgress({
+        current: selectedSegments.length,
+        total: selectedSegments.length,
+        estimatedTimeRemaining: 0
+      });
+
     } catch (error) {
       console.error('Error in batch analysis:', error);
       setError(error instanceof Error ? error.message : 'Failed to analyze segments');
     } finally {
       setIsAnalyzingSegment(false);
+      // Reset progress after a short delay
+      setTimeout(() => {
+        setBatchAnalysisProgress({ current: 0, total: 0 });
+      }, 2000);
     }
   };
   
@@ -1175,6 +1237,46 @@ export default function AdsTaggingPage() {
         return newSelection;
       }
     });
+  };
+
+  // Export analysis results
+  const exportAnalysisResults = () => {
+    const results: any = {
+      exportDate: new Date().toISOString(),
+      videoId: selectedVideo?.id,
+      videoTitle: selectedVideo?.title,
+      analysisType: selectedAnalysisPanel,
+      totalSegments: selectedSegments.length,
+      segments: []
+    };
+
+    // Collect all analysis results for selected segments
+    selectedSegments.forEach(segmentId => {
+      const segment = videoSegments.find(s => s.segment_id === segmentId);
+      const analysisResult = segmentAnalysisResults[`${segmentId}_${selectedAnalysisPanel}`];
+      
+      if (segment && analysisResult) {
+        results.segments.push({
+          segment_id: segmentId,
+          segment_name: segment.segment_name,
+          start_time: segment.start_time,
+          end_time: segment.end_time,
+          duration: segment.end_time - segment.start_time,
+          analysis_result: analysisResult
+        });
+      }
+    });
+
+    // Create and download JSON file
+    const blob = new Blob([JSON.stringify(results, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `video-analysis-${selectedVideo?.id}-${selectedAnalysisPanel}-${new Date().toISOString().split('T')[0]}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   // Internal segment analysis function (renamed to avoid conflict with batch function)
@@ -1974,36 +2076,51 @@ export default function AdsTaggingPage() {
                                   <div className="flex items-center space-x-4">
                                     {/* Analysis Type Tabs */}
                                     <div className="inline-flex bg-gray-100 p-1 rounded-lg border border-gray-200">
-                                      <button
-                                        onClick={() => setSelectedAnalysisPanel('detailed')}
-                                        className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all duration-200 ${
-                                          selectedAnalysisPanel === 'detailed' 
-                                            ? 'bg-purple-600 text-white shadow-sm' 
-                                            : 'bg-white text-gray-700 hover:bg-purple-50 hover:text-purple-700'
-                                        }`}
-                                      >
-                                        DETAILED
-                                      </button>
-                                      <button
-                                        onClick={() => setSelectedAnalysisPanel('summary')}
-                                        className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all duration-200 ml-1 ${
-                                          selectedAnalysisPanel === 'summary' 
-                                            ? 'bg-indigo-600 text-white shadow-sm' 
-                                            : 'bg-white text-gray-700 hover:bg-indigo-50 hover:text-indigo-700'
-                                        }`}
-                                      >
-                                        SUMMARY
-                                      </button>
-                                      <button
-                                        onClick={() => setSelectedAnalysisPanel('categorization')}
-                                        className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all duration-200 ml-1 ${
-                                          selectedAnalysisPanel === 'categorization' 
-                                            ? 'bg-gray-600 text-white shadow-sm' 
-                                            : 'bg-white text-gray-700 hover:bg-gray-50'
-                                        }`}
-                                      >
-                                        TAGS
-                                      </button>
+                                      <div className="relative group">
+                                        <button
+                                          onClick={() => setSelectedAnalysisPanel('detailed')}
+                                          className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all duration-200 ${
+                                            selectedAnalysisPanel === 'detailed' 
+                                              ? 'bg-purple-600 text-white shadow-sm' 
+                                              : 'bg-white text-gray-700 hover:bg-purple-50 hover:text-purple-700'
+                                          }`}
+                                        >
+                                          DETAILED
+                                        </button>
+                                        <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-3 py-2 bg-gray-900 text-white text-xs rounded-md opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap z-10">
+                                          Visual elements, body language, and scene analysis
+                                        </div>
+                                      </div>
+                                      <div className="relative group ml-1">
+                                        <button
+                                          onClick={() => setSelectedAnalysisPanel('summary')}
+                                          className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all duration-200 ${
+                                            selectedAnalysisPanel === 'summary' 
+                                              ? 'bg-purple-600 text-white shadow-sm' 
+                                              : 'bg-white text-gray-700 hover:bg-purple-50 hover:text-purple-700'
+                                          }`}
+                                        >
+                                          SUMMARY
+                                        </button>
+                                        <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-3 py-2 bg-gray-900 text-white text-xs rounded-md opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap z-10">
+                                          Core summary and key insights
+                                        </div>
+                                      </div>
+                                      <div className="relative group ml-1">
+                                        <button
+                                          onClick={() => setSelectedAnalysisPanel('categorization')}
+                                          className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all duration-200 ${
+                                            selectedAnalysisPanel === 'categorization' 
+                                              ? 'bg-purple-600 text-white shadow-sm' 
+                                              : 'bg-white text-gray-700 hover:bg-purple-50 hover:text-purple-700'
+                                          }`}
+                                        >
+                                          TAGS
+                                        </button>
+                                        <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-3 py-2 bg-gray-900 text-white text-xs rounded-md opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap z-10">
+                                          Thematic categories and utility tags
+                                        </div>
+                                      </div>
                                     </div>
                                     
                                     {/* Quick Selection Controls */}
@@ -2030,33 +2147,54 @@ export default function AdsTaggingPage() {
                                     </div>
                                   </div>
                                   
-                                  {/* Analyze Button */}
-                                  <button
-                                    onClick={() => batchAnalyzeSegments()}
-                                    disabled={selectedSegments.length === 0 || isAnalyzingSegment || !selectedAnalysisPanel}
-                                    className={`px-4 py-2 rounded-lg text-xs font-semibold transition-all duration-200 shadow-sm ${
-                                      selectedSegments.length === 0 || isAnalyzingSegment || !selectedAnalysisPanel
-                                        ? 'bg-gray-400 text-gray-600 cursor-not-allowed'
-                                        : 'bg-purple-600 hover:bg-purple-700 text-white shadow-purple-200/50'
-                                    }`}
-                                  >
-                                    {isAnalyzingSegment ? (
-                                      <span className="flex items-center">
-                                        <svg className="animate-spin -ml-1 mr-2 h-3 w-3 text-current" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                        </svg>
-                                        Analyzing...
-                                      </span>
-                                    ) : (
-                                      'Analyze Selected'
-                                    )}
-                                  </button>
+                                  {/* Analyze and Export Buttons */}
+                                  <div className="flex items-center space-x-2">
+                                    <button
+                                      onClick={() => batchAnalyzeSegments()}
+                                      disabled={selectedSegments.length === 0 || isAnalyzingSegment || !selectedAnalysisPanel}
+                                      className={`px-4 py-2 rounded-lg text-xs font-semibold transition-all duration-200 shadow-sm ${
+                                        selectedSegments.length === 0 || isAnalyzingSegment || !selectedAnalysisPanel
+                                          ? 'bg-gray-400 text-gray-600 cursor-not-allowed'
+                                          : 'bg-purple-600 hover:bg-purple-700 text-white shadow-purple-200/50'
+                                      }`}
+                                    >
+                                      {isAnalyzingSegment ? (
+                                        <span className="flex items-center">
+                                          <svg className="animate-spin -ml-1 mr-2 h-3 w-3 text-current" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 714 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                          </svg>
+                                          Analyzing...
+                                        </span>
+                                      ) : (
+                                        'Analyze Selected'
+                                      )}
+                                    </button>
+                                    
+                                    <button
+                                      onClick={exportAnalysisResults}
+                                      disabled={!selectedAnalysisPanel || selectedSegments.length === 0 || !selectedSegments.some(segmentId => 
+                                        segmentAnalysisResults[`${segmentId}_${selectedAnalysisPanel}`]
+                                      )}
+                                      className={`px-3 py-2 rounded-lg text-xs font-semibold transition-all duration-200 shadow-sm border-2 ${
+                                        !selectedAnalysisPanel || selectedSegments.length === 0 || !selectedSegments.some(segmentId => 
+                                          segmentAnalysisResults[`${segmentId}_${selectedAnalysisPanel}`]
+                                        )
+                                          ? 'bg-gray-100 text-gray-400 border-gray-300 cursor-not-allowed'
+                                          : 'bg-white text-purple-600 border-purple-600 hover:bg-purple-50'
+                                      }`}
+                                      title="Export analysis results as JSON"
+                                    >
+                                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                                      </svg>
+                                    </button>
+                                  </div>
                                 </div>
                               </div>
 
                               {/* Time Axis with Professional Markers */}
-                              <div className="relative mb-4">
+                              <div className="relative mb-4 mt-6">
                                 {(() => {
                                   const totalDurationMs = videoSegments.length > 0 
                                     ? Math.max(...videoSegments.map(s => s.end_time || 0))
@@ -2119,24 +2257,27 @@ export default function AdsTaggingPage() {
                                           {/* Segment Block */}
                                           <div className={`relative h-20 rounded-lg overflow-hidden border-2 transition-all duration-300 ${
                                             isSelected 
-                                              ? 'border-purple-500 shadow-lg shadow-purple-500/30 bg-gradient-to-br from-purple-500 to-indigo-600' 
-                                              : 'border-gray-300 hover:border-purple-400/70 bg-gradient-to-br from-gray-100 to-gray-200'
+                                              ? 'border-purple-500 shadow-lg shadow-purple-500/30' 
+                                              : 'border-gray-300 hover:border-purple-400/70'
                                           }`}>
                                             
                                             {/* Thumbnail Background */}
-                                            {segment.thumbnailUrl && (
+                                            {segment.thumbnailUrl ? (
                                               <div className="absolute inset-0">
                                                 <img
                                                   src={segment.thumbnailUrl}
                                                   alt={segment.segment_name}
-                                                  className="w-full h-full object-cover opacity-60"
+                                                  className="w-full h-full object-cover"
                                                   loading="lazy"
                                                 />
-                                                <div className={`absolute inset-0 bg-gradient-to-t ${
-                                                  isSelected 
-                                                    ? 'from-purple-900/70 via-purple-800/30 to-transparent' 
-                                                    : 'from-gray-900/60 via-gray-700/20 to-transparent'
-                                                }`}></div>
+                                                {/* Subtle overlay only for text readability */}
+                                                <div className="absolute inset-0 bg-gradient-to-t from-black/30 via-transparent to-transparent"></div>
+                                              </div>
+                                            ) : (
+                                              <div className="absolute inset-0 bg-gray-100 flex items-center justify-center">
+                                                <svg className="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                                </svg>
                                               </div>
                                             )}
                                             
@@ -2352,6 +2493,36 @@ export default function AdsTaggingPage() {
                               </div>
                             </div>
                             
+                            {/* Analysis Progress Bar */}
+                            {isAnalyzingSegment && batchAnalysisProgress.total > 0 && (
+                              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+                                <div className="flex items-center justify-between mb-2">
+                                  <h4 className="text-sm font-medium text-blue-900">Analyzing Segments</h4>
+                                  <span className="text-sm text-blue-700">
+                                    {batchAnalysisProgress.current}/{batchAnalysisProgress.total}
+                                  </span>
+                                </div>
+                                <div className="w-full bg-blue-200 rounded-full h-3 mb-2">
+                                  <div 
+                                    className="bg-blue-600 h-3 rounded-full transition-all duration-300 ease-out"
+                                    style={{ width: `${(batchAnalysisProgress.current / batchAnalysisProgress.total) * 100}%` }}
+                                  ></div>
+                                </div>
+                                <div className="flex items-center justify-between text-xs text-blue-600">
+                                  <span>
+                                    {batchAnalysisProgress.currentSegmentId && (
+                                      <>Processing: {videoSegments.find(s => s.segment_id === batchAnalysisProgress.currentSegmentId)?.segment_name || 'Unknown segment'}</>
+                                    )}
+                                  </span>
+                                  <span>
+                                    {batchAnalysisProgress.estimatedTimeRemaining && batchAnalysisProgress.estimatedTimeRemaining > 0 && (
+                                      <>Est. {Math.ceil(batchAnalysisProgress.estimatedTimeRemaining)}s remaining</>
+                                    )}
+                                  </span>
+                                </div>
+                              </div>
+                            )}
+
                             {/* Analysis Results Display */}
                             {selectedAnalysisPanel && selectedSegments.length > 0 && (
                               <div className="bg-white border border-gray-300 rounded-lg overflow-hidden">
@@ -2367,7 +2538,7 @@ export default function AdsTaggingPage() {
                                       {selectedAnalysisPanel === 'categorization' && 'Tag Analysis Results'}
                                     </h3>
                                     <div className="text-xs text-gray-600 bg-white px-2 py-1 rounded border">
-                                      {selectedSegments.length} segment{selectedSegments.length !== 1 ? 's' : ''} analyzed
+                                      {selectedSegments.length} segment{selectedSegments.length !== 1 ? 's' : ''} selected
                                     </div>
                                   </div>
                                 </div>

@@ -768,10 +768,10 @@ export async function segmentationPreviewHandler(event: APIGatewayProxyEvent): P
     // Format segments for preview with thumbnail URLs
     const segmentPreviews = await Promise.all(
       segments.map(async (segment: any, index: number) => {
-        let thumbnailUrl = segment.segment_video_thumbnail_url;
+        let thumbnailUrl = null;
         
-        // If no pre-signed URL exists, generate one from S3 path
-        if (!thumbnailUrl && segment.segment_video_thumbnail_s3_path) {
+        // Always generate fresh pre-signed URLs to prevent expiration issues
+        if (segment.segment_video_thumbnail_s3_path) {
           try {
             const bucket = VIDEO_BUCKET;
             // Handle both s3:// prefixed paths and direct S3 keys
