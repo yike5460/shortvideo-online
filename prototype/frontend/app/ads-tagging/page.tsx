@@ -740,6 +740,10 @@ export default function AdsTaggingPage() {
   })
   const [segmentAnalysisResults, setSegmentAnalysisResults] = useState<{[key: string]: any}>({})
   const [isAnalyzingSegment, setIsAnalyzingSegment] = useState(false)
+  
+  // Batch segment selection states
+  const [selectedSegments, setSelectedSegments] = useState<string[]>([])
+  const [selectAllSegments, setSelectAllSegments] = useState(false)
 
   // Initialize selectedIndexId from URL parameter and fetch indexes on mount
   useEffect(() => {
@@ -1138,14 +1142,75 @@ export default function AdsTaggingPage() {
     setIsSegmentPlayerOpen(true);
   };
 
-  // Analyze individual segment
-  const analyzeSegment = async (segmentId: string, analysisType: 'detailed' | 'summary' | 'categorization') => {
+  // Batch analyze multiple segments
+  const batchAnalyzeSegments = async () => {
+    if (selectedSegments.length === 0 || !selectedVideo) return;
+    
+    setIsAnalyzingSegment(true);
+    
+    try {
+      // Process segments sequentially to avoid overwhelming the API
+      for (const segmentId of selectedSegments) {
+        await new Promise(resolve => setTimeout(resolve, 500)); // Small delay between requests
+        await analyzeSegmentInternal(segmentId, selectedAnalysisPanel || 'detailed');
+      }
+    } catch (error) {
+      console.error('Error in batch analysis:', error);
+      setError(error instanceof Error ? error.message : 'Failed to analyze segments');
+    } finally {
+      setIsAnalyzingSegment(false);
+    }
+  };
+  
+  // Toggle segment selection
+  const toggleSegmentSelection = (segmentId: string) => {
+    setSelectedSegments(prev => {
+      if (prev.includes(segmentId)) {
+        const newSelection = prev.filter(id => id !== segmentId);
+        setSelectAllSegments(newSelection.length === videoSegments.length);
+        return newSelection;
+      } else {
+        const newSelection = [...prev, segmentId];
+        setSelectAllSegments(newSelection.length === videoSegments.length);
+        return newSelection;
+      }
+    });
+  };
+
+  // Internal segment analysis function (renamed to avoid conflict with batch function)
+  const analyzeSegmentInternal = async (segmentId: string, analysisType: 'detailed' | 'summary' | 'categorization') => {
     if (!selectedVideo) return;
     
     const segment = videoSegments.find(s => s.segment_id === segmentId);
     if (!segment) return;
     
+    // Don't set isAnalyzingSegment here as batch function handles it
+    return new Promise<void>(async (resolve, reject) => {
+      try {
+        await performSegmentAnalysis(segmentId, analysisType);
+        resolve();
+      } catch (error) {
+        reject(error);
+      }
+    });
+  };
+
+  // Analyze individual segment (for direct calls)
+  const analyzeSegment = async (segmentId: string, analysisType: 'detailed' | 'summary' | 'categorization') => {
     setIsAnalyzingSegment(true);
+    try {
+      await analyzeSegmentInternal(segmentId, analysisType);
+    } finally {
+      setIsAnalyzingSegment(false);
+    }
+  };
+  
+  // Core segment analysis logic
+  const performSegmentAnalysis = async (segmentId: string, analysisType: 'detailed' | 'summary' | 'categorization') => {
+    if (!selectedVideo) return;
+    
+    const segment = videoSegments.find(s => s.segment_id === segmentId);
+    if (!segment) return;
     
     try {
       // Generate specialized prompt based on analysis type
@@ -1205,7 +1270,6 @@ export default function AdsTaggingPage() {
           const statusData = await statusResponse.json();
           
           if (statusData.status === 'completed') {
-            setIsAnalyzingSegment(false);
             const result = statusData.result || '';
             
             // Store result
@@ -1214,16 +1278,14 @@ export default function AdsTaggingPage() {
               [`${segmentId}_${analysisType}`]: result
             }));
           } else if (statusData.status === 'error') {
-            setIsAnalyzingSegment(false);
-            setError(statusData.error || 'Segment analysis failed');
+            throw new Error(statusData.error || 'Segment analysis failed');
           } else {
             // Continue polling
             setTimeout(pollSegmentResults, 2000);
           }
         } catch (pollError) {
           console.error('Error polling segment results:', pollError);
-          setIsAnalyzingSegment(false);
-          setError(pollError instanceof Error ? pollError.message : 'Failed to check segment analysis status');
+          throw pollError;
         }
       };
       
@@ -1231,8 +1293,7 @@ export default function AdsTaggingPage() {
       
     } catch (error) {
       console.error('Error analyzing segment:', error);
-      setError(error instanceof Error ? error.message : 'Failed to analyze segment');
-      setIsAnalyzingSegment(false);
+      throw error;
     }
   };
 
@@ -1415,19 +1476,19 @@ export default function AdsTaggingPage() {
           Ads Asset Tagging
         </h1>
         
-        <div className="flex bg-gray-100 p-1 rounded-lg">
+        <div className="flex bg-gray-100 p-1 rounded-lg border border-gray-200">
           <button 
-            className={`px-4 py-2 rounded-md transition-all duration-200 ${activePanel === 'operational' 
-              ? 'bg-white text-purple-600 shadow-sm font-medium' 
-              : 'text-gray-600 hover:text-gray-800'}`}
+            className={`px-4 py-2 rounded-md font-semibold border-2 transition-all duration-300 transform ${activePanel === 'operational' 
+              ? 'bg-purple-600 text-white border-purple-600 shadow-lg scale-105' 
+              : 'bg-white text-gray-700 border-gray-300 hover:border-purple-400 hover:bg-purple-50 hover:text-purple-700 hover:scale-102'}`}
             onClick={() => setActivePanel('operational')}
           >
             Operational
           </button>
           <button 
-            className={`px-4 py-2 rounded-md transition-all duration-200 ${activePanel === 'analytics' 
-              ? 'bg-white text-purple-600 shadow-sm font-medium' 
-              : 'text-gray-600 hover:text-gray-800'}`}
+            className={`px-4 py-2 rounded-md font-semibold border-2 transition-all duration-300 transform ml-1 ${activePanel === 'analytics' 
+              ? 'bg-indigo-600 text-white border-indigo-600 shadow-lg scale-105' 
+              : 'bg-white text-gray-700 border-gray-300 hover:border-indigo-400 hover:bg-indigo-50 hover:text-indigo-700 hover:scale-102'}`}
             onClick={() => setActivePanel('analytics')}
           >
             Analytics
@@ -1441,13 +1502,13 @@ export default function AdsTaggingPage() {
         </div>
       )}
       
-      {/* Top Row - Three equal-height components */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+      {/* Top Row - Three fixed-height components */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6 h-96">
         {activePanel === 'operational' ? (
           /* Operational Panel */
           <>
             {/* Left Component - Index Selection and Tag Filtering */}
-            <div className="bg-white rounded-lg shadow-md p-6 flex flex-col h-full">
+            <div className="bg-white rounded-lg shadow-md p-6 flex flex-col h-96 overflow-hidden">
               {/* Index Selection */}
               <div className="mb-6">
                 <h2 className="text-lg font-medium mb-4 text-blue-900">Select an Index</h2>
@@ -1503,7 +1564,7 @@ export default function AdsTaggingPage() {
               </div>
 
               {/* Tag Filtering Section */}
-              <div className="border-t pt-6 flex-1 flex flex-col">
+              <div className="border-t pt-6 flex-1 flex flex-col overflow-hidden">
                 <div className="flex justify-between items-center mb-4">
                   <div>
                     <div className="flex items-center gap-2">
@@ -1581,7 +1642,7 @@ export default function AdsTaggingPage() {
                 )}
                 
                 {/* Tag Selection Area */}
-                <div className="border border-gray-200 rounded-md p-3 bg-gray-50 flex-1 overflow-y-auto">
+                <div className="border border-gray-200 rounded-md p-3 bg-gray-50 flex-1 overflow-y-auto max-h-48">
                   {allTags.length > 0 ? (
                     <div className="flex flex-wrap gap-1">
                       {allTags.map(({ tag, count, type }) => (
@@ -1625,7 +1686,7 @@ export default function AdsTaggingPage() {
             </div>
 
             {/* Middle Component - Video Selection */}
-            <div className="bg-white rounded-lg shadow-md p-6 flex flex-col h-full">
+            <div className="bg-white rounded-lg shadow-md p-6 flex flex-col h-96 overflow-hidden">
               <div className="flex justify-between items-center mb-4">
                 <h2 className="text-lg font-medium text-blue-900">Select a Video Asset</h2>
                 <div className="text-sm text-gray-600">
@@ -1637,7 +1698,7 @@ export default function AdsTaggingPage() {
                 </div>
               </div>
               
-              <div className="flex-1 overflow-y-auto">
+              <div className="flex-1 overflow-y-auto max-h-72">
                 {!selectedIndexId ? (
                   <div className="bg-gray-100 p-4 rounded-md text-gray-600">
                     Please select an index first
@@ -1700,7 +1761,7 @@ export default function AdsTaggingPage() {
                   <button
                     onClick={generateVideoSummary}
                     disabled={!selectedVideo || isProcessing}
-                    className={`px-4 py-2 rounded-md text-white ${!selectedVideo || isProcessing ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}
+                    className={`px-4 py-2 rounded-md font-semibold transition-all duration-200 border-2 ${!selectedVideo || isProcessing ? 'bg-gray-400 text-white border-gray-400 cursor-not-allowed' : 'bg-white text-gray-700 border-gray-300 hover:border-purple-400 hover:bg-purple-50 hover:text-purple-700'}`}
                   >
                     {isProcessing ? (
                       <span className="flex items-center">
@@ -1718,7 +1779,7 @@ export default function AdsTaggingPage() {
                   <button
                     onClick={loadVideoSegmentation}
                     disabled={!selectedVideo || isLoadingSegmentation}
-                    className={`px-4 py-2 rounded-md text-white ${!selectedVideo || isLoadingSegmentation ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}
+                    className={`px-4 py-2 rounded-md font-semibold transition-all duration-200 border-2 ${!selectedVideo || isLoadingSegmentation ? 'bg-gray-400 text-white border-gray-400 cursor-not-allowed' : 'bg-white text-gray-700 border-gray-300 hover:border-indigo-400 hover:bg-indigo-50 hover:text-indigo-700'}`}
                   >
                     {isLoadingSegmentation ? (
                       <span className="flex items-center">
@@ -1737,12 +1798,12 @@ export default function AdsTaggingPage() {
             </div>
             
             {/* Right Component - Video Summary */}
-            <div className="bg-white rounded-lg shadow-md p-6 flex flex-col h-full">
+            <div className="bg-white rounded-lg shadow-md p-6 flex flex-col h-96 overflow-hidden">
               <div className="mb-4">
                 <h2 className="text-lg font-medium text-blue-900">Video Summary</h2>
               </div>
               
-              <div className="flex-1 overflow-y-auto">
+              <div className="flex-1 overflow-y-auto max-h-80">
                 {!selectedVideo ? (
                   <div className="flex items-center justify-center h-full">
                     <div className="text-center text-gray-500">
@@ -1889,37 +1950,37 @@ export default function AdsTaggingPage() {
                               Found {videoSegments.length} segments
                             </div>
                             
-                            {/* Analysis Type Tabs */}
-                            <div className="flex space-x-1 bg-gray-100 p-1 rounded-lg">
+                            {/* Analysis Type Tabs - System-aligned design */}
+                            <div className="inline-flex bg-gray-100 p-1 rounded-lg border border-gray-200">
                               <button
                                 onClick={() => setSelectedAnalysisPanel('detailed')}
-                                className={`px-4 py-2 text-sm rounded-md transition-colors ${
+                                className={`px-4 py-2 text-sm font-semibold rounded-md transition-all duration-200 border-2 ${
                                   selectedAnalysisPanel === 'detailed' 
-                                    ? 'bg-blue-600 text-white shadow-sm' 
-                                    : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                                    ? 'bg-purple-600 text-white border-purple-600 shadow-md' 
+                                    : 'bg-white text-gray-700 border-gray-300 hover:border-purple-400 hover:bg-purple-50 hover:text-purple-700'
                                 }`}
                               >
-                                Detailed
+                                DETAILED
                               </button>
                               <button
                                 onClick={() => setSelectedAnalysisPanel('summary')}
-                                className={`px-4 py-2 text-sm rounded-md transition-colors ${
+                                className={`px-4 py-2 text-sm font-semibold rounded-md transition-all duration-200 border-2 ml-1 ${
                                   selectedAnalysisPanel === 'summary' 
-                                    ? 'bg-blue-600 text-white shadow-sm' 
-                                    : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-md' 
+                                    : 'bg-white text-gray-700 border-gray-300 hover:border-indigo-400 hover:bg-indigo-50 hover:text-indigo-700'
                                 }`}
                               >
-                                Summary
+                                SUMMARY
                               </button>
                               <button
                                 onClick={() => setSelectedAnalysisPanel('categorization')}
-                                className={`px-4 py-2 text-sm rounded-md transition-colors ${
+                                className={`px-4 py-2 text-sm font-semibold rounded-md transition-all duration-200 border-2 ml-1 ${
                                   selectedAnalysisPanel === 'categorization' 
-                                    ? 'bg-blue-600 text-white shadow-sm' 
-                                    : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                                    ? 'bg-gray-600 text-white border-gray-600 shadow-md' 
+                                    : 'bg-white text-gray-700 border-gray-300 hover:border-gray-400 hover:bg-gray-50'
                                 }`}
                               >
-                                Categorization
+                                TAGS
                               </button>
                             </div>
                             
@@ -1979,11 +2040,75 @@ export default function AdsTaggingPage() {
                               </div>
                             </div>
                             
+                            {/* Batch Analysis Controls */}
+                            {videoSegments.length > 0 && (
+                              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                                <div className="flex items-center justify-between mb-3">
+                                  <div className="flex items-center space-x-4">
+                                    <label className="flex items-center">
+                                      <input
+                                        type="checkbox"
+                                        checked={selectAllSegments}
+                                        onChange={(e) => {
+                                          setSelectAllSegments(e.target.checked)
+                                          if (e.target.checked) {
+                                            setSelectedSegments(videoSegments.map(s => s.segment_id))
+                                          } else {
+                                            setSelectedSegments([])
+                                          }
+                                        }}
+                                        className="mr-2"
+                                      />
+                                      <span className="text-sm font-medium text-blue-900">Select All Segments</span>
+                                    </label>
+                                    <span className="text-sm text-blue-700">
+                                      {selectedSegments.length} of {videoSegments.length} selected
+                                    </span>
+                                  </div>
+                                  <button
+                                    onClick={() => batchAnalyzeSegments()}
+                                    disabled={selectedSegments.length === 0 || isAnalyzingSegment}
+                                    className={`px-4 py-2 rounded-md text-white font-medium ${
+                                      selectedSegments.length === 0 || isAnalyzingSegment
+                                        ? 'bg-gray-400 cursor-not-allowed'
+                                        : 'bg-blue-600 hover:bg-blue-700 shadow-sm'
+                                    }`}
+                                  >
+                                    {isAnalyzingSegment ? (
+                                      <span className="flex items-center">
+                                        <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                        </svg>
+                                        Analyzing...
+                                      </span>
+                                    ) : (
+                                      `Analyze Selected (${selectedSegments.length})`
+                                    )}
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                            
                             {/* Enhanced Analysis Results Display */}
-                            <div className="space-y-3">
+                            <div className="max-h-96 overflow-y-auto space-y-3 border border-gray-200 rounded-lg p-4 bg-gray-50">
                               {videoSegments.map((segment) => (
-                                <div key={segment.segment_id} className="bg-white border border-gray-200 rounded-lg p-4">
+                                <div key={segment.segment_id} className={`bg-white border-2 rounded-lg p-4 transition-all duration-200 ${
+                                  selectedSegments.includes(segment.segment_id) 
+                                    ? 'border-blue-500 shadow-md bg-blue-50' 
+                                    : 'border-gray-200 hover:border-gray-300'
+                                }`}>
                                   <div className="flex items-start space-x-4">
+                                    {/* Selection Checkbox */}
+                                    <div className="flex-shrink-0 pt-2">
+                                      <input
+                                        type="checkbox"
+                                        checked={selectedSegments.includes(segment.segment_id)}
+                                        onChange={() => toggleSegmentSelection(segment.segment_id)}
+                                        className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 focus:ring-2"
+                                      />
+                                    </div>
+                                    
                                     {/* Segment Thumbnail */}
                                     <div className="flex-shrink-0 w-24 h-16 bg-gray-100 rounded-md overflow-hidden border border-gray-200">
                                       {segment.thumbnailUrl ? (
@@ -2004,21 +2129,20 @@ export default function AdsTaggingPage() {
                                     
                                     {/* Analysis Results */}
                                     <div className="flex-1 min-w-0">
-                                      <div className="flex items-center justify-between mb-2">
-                                        <h4 className="text-sm font-medium text-gray-900">
-                                          {segment.segment_name} ({Math.round(segment.start_time / 1000)}s - {Math.round(segment.end_time / 1000)}s)
-                                        </h4>
-                                        <button
-                                          onClick={() => analyzeSegment(segment.segment_id, selectedAnalysisPanel || 'detailed')}
-                                          disabled={isAnalyzingSegment}
-                                          className={`px-3 py-1 text-xs rounded-md ${
-                                            isAnalyzingSegment 
-                                              ? 'bg-gray-300 text-gray-500 cursor-not-allowed' 
-                                              : 'bg-blue-600 text-white hover:bg-blue-700'
-                                          }`}
-                                        >
-                                          {isAnalyzingSegment ? 'Analyzing...' : 'Analyze'}
-                                        </button>
+                                      <div className="mb-2">
+                                        <div className="flex items-center justify-between">
+                                          <h4 className="text-sm font-medium text-gray-900">
+                                            {segment.segment_name} ({Math.round(segment.start_time / 1000)}s - {Math.round(segment.end_time / 1000)}s)
+                                          </h4>
+                                          {selectedSegments.includes(segment.segment_id) && (
+                                            <span className="inline-flex items-center px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded-full">
+                                              <svg className="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                                                <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                                              </svg>
+                                              Selected
+                                            </span>
+                                          )}
+                                        </div>
                                       </div>
                                       
                                       {/* Analysis Options */}
