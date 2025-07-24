@@ -24,7 +24,7 @@ import * as fs from 'fs';
 // path module for handling file paths and directories
 import * as path from 'path';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { DynamoDBDocumentClient, PutCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, PutCommand, UpdateCommand, GetCommand } from '@aws-sdk/lib-dynamodb';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 
 const rekognition = new RekognitionClient({});
@@ -459,6 +459,8 @@ async function handleSQSEvent(event: SQSEvent): Promise<LambdaResponse> {
     
     if (slicedSegments) {
       await updateVideoSegments(videoIndex, videoId, [slicedSegments]);
+      // Also update the DynamoDB record with the complete segment data
+      await updateDynamoDBSegment(videoIndex, videoId, slicedSegments);
     }
 
     // Use DynamoDB's atomic operations to decrement the pending segments counter
@@ -1205,6 +1207,64 @@ async function storeSegmentDetectionResults(videoIndex: string, videoId: string,
   } catch (error) {
     console.error(`Error storing segment detection results for video ${videoId}:`, error);
     throw error;
+  }
+}
+
+/**
+ * Update a single segment in the DynamoDB video_segments array
+ * This is called after segment processing is complete to add S3 paths and thumbnails
+ */
+async function updateDynamoDBSegment(videoIndex: string, videoId: string, processedSegment: VideoSegment): Promise<void> {
+  try {
+    console.log(`Updating DynamoDB segment ${processedSegment.segment_id} for video ${videoId} in index ${videoIndex}`);
+    
+    // Get current record to find the segment index
+    const getResult = await docClient.send(new GetCommand({
+      TableName: process.env.INDEXES_TABLE,
+      Key: { 
+        indexId: videoIndex,
+        videoId 
+      }
+    }));
+    
+    if (!getResult.Item || !getResult.Item.video_segments) {
+      console.warn(`No video segments found in DynamoDB for video ${videoId}`);
+      return;
+    }
+    
+    // Find the segment index in the array
+    const segments = getResult.Item.video_segments as VideoSegment[];
+    const segmentIndex = segments.findIndex(s => s.segment_id === processedSegment.segment_id);
+    
+    if (segmentIndex === -1) {
+      console.warn(`Segment ${processedSegment.segment_id} not found in DynamoDB array`);
+      return;
+    }
+    
+    // Update the specific segment in the array
+    await withRetry(
+      async () => docClient.send(new UpdateCommand({
+        TableName: process.env.INDEXES_TABLE,
+        Key: { 
+          indexId: videoIndex,
+          videoId 
+        },
+        UpdateExpression: `SET video_segments[${segmentIndex}].segment_video_s3_path = :video_path, video_segments[${segmentIndex}].segment_video_thumbnail_s3_path = :thumbnail_path, video_segments[${segmentIndex}].segment_video_preview_url = :preview_url, video_segments[${segmentIndex}].segment_video_thumbnail_url = :thumbnail_url`,
+        ExpressionAttributeValues: {
+          ":video_path": processedSegment.segment_video_s3_path,
+          ":thumbnail_path": processedSegment.segment_video_thumbnail_s3_path,
+          ":preview_url": processedSegment.segment_video_preview_url,
+          ":thumbnail_url": processedSegment.segment_video_thumbnail_url
+        }
+      })),
+      3,
+      `Update DynamoDB segment ${processedSegment.segment_id}`
+    );
+    
+    console.log(`Successfully updated DynamoDB segment ${processedSegment.segment_id} for video ${videoId}`);
+  } catch (error) {
+    console.error(`Error updating DynamoDB segment ${processedSegment.segment_id}:`, error);
+    // Don't throw error - segment processing should continue even if DynamoDB update fails
   }
 }
 

@@ -1718,7 +1718,7 @@ export default function AdsTaggingPage() {
                     {filteredVideos.map((video) => (
                       <div
                         key={video.id}
-                        className={`cursor-pointer rounded-md overflow-hidden ${selectedVideo?.id === video.id ? 'ring-4 ring-purple-500 shadow-md' : 'hover:shadow-md'}`}
+                        className={`cursor-pointer rounded-md overflow-hidden transition-all duration-200 ${selectedVideo?.id === video.id ? 'ring-2 ring-inset ring-purple-500 shadow-lg border-2 border-purple-500' : 'border-2 border-transparent hover:shadow-md hover:border-gray-300'}`}
                         onClick={() => handleVideoSelect(video)}
                       >
                         <div className="relative aspect-video bg-gray-100">
@@ -1950,308 +1950,498 @@ export default function AdsTaggingPage() {
                               Found {videoSegments.length} segments
                             </div>
                             
-                            {/* Analysis Type Tabs - System-aligned design */}
-                            <div className="inline-flex bg-gray-100 p-1 rounded-lg border border-gray-200">
-                              <button
-                                onClick={() => setSelectedAnalysisPanel('detailed')}
-                                className={`px-4 py-2 text-sm font-semibold rounded-md transition-all duration-200 border-2 ${
-                                  selectedAnalysisPanel === 'detailed' 
-                                    ? 'bg-purple-600 text-white border-purple-600 shadow-md' 
-                                    : 'bg-white text-gray-700 border-gray-300 hover:border-purple-400 hover:bg-purple-50 hover:text-purple-700'
-                                }`}
-                              >
-                                DETAILED
-                              </button>
-                              <button
-                                onClick={() => setSelectedAnalysisPanel('summary')}
-                                className={`px-4 py-2 text-sm font-semibold rounded-md transition-all duration-200 border-2 ml-1 ${
-                                  selectedAnalysisPanel === 'summary' 
-                                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-md' 
-                                    : 'bg-white text-gray-700 border-gray-300 hover:border-indigo-400 hover:bg-indigo-50 hover:text-indigo-700'
-                                }`}
-                              >
-                                SUMMARY
-                              </button>
-                              <button
-                                onClick={() => setSelectedAnalysisPanel('categorization')}
-                                className={`px-4 py-2 text-sm font-semibold rounded-md transition-all duration-200 border-2 ml-1 ${
-                                  selectedAnalysisPanel === 'categorization' 
-                                    ? 'bg-gray-600 text-white border-gray-600 shadow-md' 
-                                    : 'bg-white text-gray-700 border-gray-300 hover:border-gray-400 hover:bg-gray-50'
-                                }`}
-                              >
-                                TAGS
-                              </button>
-                            </div>
                             
-                            {/* Horizontal Timeline */}
-                            <div className="bg-white border border-gray-200 rounded-lg p-4">
-                              <div className="flex space-x-3 overflow-x-auto pb-2">
-                                {videoSegments.map((segment) => (
-                                  <div
-                                    key={segment.segment_id}
-                                    className="flex-shrink-0 cursor-pointer group"
-                                    onClick={() => setSelectedSegment(segment)}
-                                  >
-                                    <div className="relative w-24 h-16 bg-gray-100 rounded-md overflow-hidden border border-gray-200 hover:border-blue-300 transition-colors">
-                                      {segment.thumbnailUrl ? (
-                                        <img
-                                          src={segment.thumbnailUrl}
-                                          alt={segment.segment_name}
-                                          className="w-full h-full object-cover"
-                                          loading="lazy"
-                                        />
-                                      ) : (
-                                        <div className="w-full h-full bg-gray-200 flex items-center justify-center">
-                                          <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                                          </svg>
-                                        </div>
-                                      )}
-                                      {/* Play button overlay */}
-                                      <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-30 transition-all duration-200 flex items-center justify-center">
-                                        <button
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            playSegment(segment);
-                                          }}
-                                          className="opacity-0 group-hover:opacity-100 transition-opacity duration-200 bg-white bg-opacity-90 hover:bg-opacity-100 rounded-full p-1 shadow-lg"
-                                        >
-                                          <svg className="w-3 h-3 text-gray-700" fill="currentColor" viewBox="0 0 24 24">
-                                            <path d="M8 5v14l11-7z"/>
-                                          </svg>
-                                        </button>
-                                      </div>
-                                    </div>
-                                    <div className="mt-1 text-center">
-                                      <div className="text-xs text-gray-600">
-                                        {Math.round(segment.start_time / 1000)}s
-                                      </div>
+                            {/* Professional Video Timeline */}
+                            <div className="bg-gradient-to-b from-gray-50 to-indigo-50/80 border border-purple-300/40 rounded-xl p-6 shadow-2xl">
+                              {/* Timeline Header with Integrated Analysis Controls */}
+                              <div className="space-y-4">
+                                {/* Main Header */}
+                                <div className="flex items-center justify-between">
+                                  <div className="flex items-center space-x-3">
+                                    <div className="w-3 h-3 bg-purple-500 rounded-full shadow-lg recording-indicator"></div>
+                                    <span className="text-gray-800 font-semibold text-lg">Video Timeline</span>
+                                    <div className="bg-purple-100 border border-purple-300 px-3 py-1 rounded-full">
+                                      <span className="text-purple-800 text-sm font-medium">{videoSegments.length} segments</span>
                                     </div>
                                   </div>
-                                ))}
-                              </div>
-                              
-                              {/* Time Axis */}
-                              <div className="mt-4 pt-3 border-t border-gray-300">
-                                <div className="text-center text-sm text-gray-600">
-                                  Time Axis (HH:MM:SS)
+                                  <div className="text-gray-700 text-sm font-medium">
+                                    Duration: {selectedVideo?.duration || '00:00'}
+                                  </div>
                                 </div>
-                              </div>
-                            </div>
-                            
-                            {/* Batch Analysis Controls */}
-                            {videoSegments.length > 0 && (
-                              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                                <div className="flex items-center justify-between mb-3">
+                                
+                                {/* Integrated Analysis Controls */}
+                                <div className="flex items-center justify-between">
                                   <div className="flex items-center space-x-4">
-                                    <label className="flex items-center">
-                                      <input
-                                        type="checkbox"
-                                        checked={selectAllSegments}
-                                        onChange={(e) => {
-                                          setSelectAllSegments(e.target.checked)
-                                          if (e.target.checked) {
-                                            setSelectedSegments(videoSegments.map(s => s.segment_id))
-                                          } else {
-                                            setSelectedSegments([])
-                                          }
-                                        }}
-                                        className="mr-2"
-                                      />
-                                      <span className="text-sm font-medium text-blue-900">Select All Segments</span>
-                                    </label>
-                                    <span className="text-sm text-blue-700">
-                                      {selectedSegments.length} of {videoSegments.length} selected
-                                    </span>
+                                    {/* Analysis Type Tabs */}
+                                    <div className="inline-flex bg-gray-100 p-1 rounded-lg border border-gray-200">
+                                      <button
+                                        onClick={() => setSelectedAnalysisPanel('detailed')}
+                                        className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all duration-200 ${
+                                          selectedAnalysisPanel === 'detailed' 
+                                            ? 'bg-purple-600 text-white shadow-sm' 
+                                            : 'bg-white text-gray-700 hover:bg-purple-50 hover:text-purple-700'
+                                        }`}
+                                      >
+                                        DETAILED
+                                      </button>
+                                      <button
+                                        onClick={() => setSelectedAnalysisPanel('summary')}
+                                        className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all duration-200 ml-1 ${
+                                          selectedAnalysisPanel === 'summary' 
+                                            ? 'bg-indigo-600 text-white shadow-sm' 
+                                            : 'bg-white text-gray-700 hover:bg-indigo-50 hover:text-indigo-700'
+                                        }`}
+                                      >
+                                        SUMMARY
+                                      </button>
+                                      <button
+                                        onClick={() => setSelectedAnalysisPanel('categorization')}
+                                        className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all duration-200 ml-1 ${
+                                          selectedAnalysisPanel === 'categorization' 
+                                            ? 'bg-gray-600 text-white shadow-sm' 
+                                            : 'bg-white text-gray-700 hover:bg-gray-50'
+                                        }`}
+                                      >
+                                        TAGS
+                                      </button>
+                                    </div>
+                                    
+                                    {/* Quick Selection Controls */}
+                                    <div className="flex items-center space-x-2">
+                                      <label className="inline-flex items-center">
+                                        <input
+                                          type="checkbox"
+                                          checked={selectAllSegments}
+                                          onChange={(e) => {
+                                            setSelectAllSegments(e.target.checked)
+                                            if (e.target.checked) {
+                                              setSelectedSegments(videoSegments.map(s => s.segment_id))
+                                            } else {
+                                              setSelectedSegments([])
+                                            }
+                                          }}
+                                          className="w-3 h-3 text-purple-600 border-gray-300 rounded focus:ring-purple-500 mr-1"
+                                        />
+                                        <span className="text-xs text-gray-600 font-medium">All</span>
+                                      </label>
+                                      <span className="text-xs text-gray-500">
+                                        {selectedSegments.length}/{videoSegments.length}
+                                      </span>
+                                    </div>
                                   </div>
+                                  
+                                  {/* Analyze Button */}
                                   <button
                                     onClick={() => batchAnalyzeSegments()}
-                                    disabled={selectedSegments.length === 0 || isAnalyzingSegment}
-                                    className={`px-4 py-2 rounded-md text-white font-medium ${
-                                      selectedSegments.length === 0 || isAnalyzingSegment
-                                        ? 'bg-gray-400 cursor-not-allowed'
-                                        : 'bg-blue-600 hover:bg-blue-700 shadow-sm'
+                                    disabled={selectedSegments.length === 0 || isAnalyzingSegment || !selectedAnalysisPanel}
+                                    className={`px-4 py-2 rounded-lg text-xs font-semibold transition-all duration-200 shadow-sm ${
+                                      selectedSegments.length === 0 || isAnalyzingSegment || !selectedAnalysisPanel
+                                        ? 'bg-gray-400 text-gray-600 cursor-not-allowed'
+                                        : 'bg-purple-600 hover:bg-purple-700 text-white shadow-purple-200/50'
                                     }`}
                                   >
                                     {isAnalyzingSegment ? (
                                       <span className="flex items-center">
-                                        <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                        <svg className="animate-spin -ml-1 mr-2 h-3 w-3 text-current" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                                           <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                                           <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                                         </svg>
                                         Analyzing...
                                       </span>
                                     ) : (
-                                      `Analyze Selected (${selectedSegments.length})`
+                                      'Analyze Selected'
                                     )}
                                   </button>
                                 </div>
                               </div>
-                            )}
-                            
-                            {/* Enhanced Analysis Results Display */}
-                            <div className="max-h-96 overflow-y-auto space-y-3 border border-gray-200 rounded-lg p-4 bg-gray-50">
-                              {videoSegments.map((segment) => (
-                                <div key={segment.segment_id} className={`bg-white border-2 rounded-lg p-4 transition-all duration-200 ${
-                                  selectedSegments.includes(segment.segment_id) 
-                                    ? 'border-blue-500 shadow-md bg-blue-50' 
-                                    : 'border-gray-200 hover:border-gray-300'
-                                }`}>
-                                  <div className="flex items-start space-x-4">
-                                    {/* Selection Checkbox */}
-                                    <div className="flex-shrink-0 pt-2">
-                                      <input
-                                        type="checkbox"
-                                        checked={selectedSegments.includes(segment.segment_id)}
-                                        onChange={() => toggleSegmentSelection(segment.segment_id)}
-                                        className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 focus:ring-2"
-                                      />
-                                    </div>
+
+                              {/* Time Axis with Professional Markers */}
+                              <div className="relative mb-4">
+                                {(() => {
+                                  const totalDurationMs = videoSegments.length > 0 
+                                    ? Math.max(...videoSegments.map(s => s.end_time || 0))
+                                    : 180000; // Default 3 minutes
+                                  const totalSeconds = Math.ceil(totalDurationMs / 1000);
+                                  const intervalSeconds = totalSeconds <= 60 ? 10 : totalSeconds <= 300 ? 30 : 60;
+                                  const markers = [];
+                                  
+                                  for (let i = 0; i <= totalSeconds; i += intervalSeconds) {
+                                    const percentage = (i / totalSeconds) * 100;
+                                    const minutes = Math.floor(i / 60);
+                                    const seconds = i % 60;
+                                    const timeLabel = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
                                     
-                                    {/* Segment Thumbnail */}
-                                    <div className="flex-shrink-0 w-24 h-16 bg-gray-100 rounded-md overflow-hidden border border-gray-200">
-                                      {segment.thumbnailUrl ? (
-                                        <img
-                                          src={segment.thumbnailUrl}
-                                          alt={segment.segment_name}
-                                          className="w-full h-full object-cover"
-                                          loading="lazy"
-                                        />
-                                      ) : (
-                                        <div className="w-full h-full bg-gray-200 flex items-center justify-center">
-                                          <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                                          </svg>
-                                        </div>
-                                      )}
-                                    </div>
-                                    
-                                    {/* Analysis Results */}
-                                    <div className="flex-1 min-w-0">
-                                      <div className="mb-2">
-                                        <div className="flex items-center justify-between">
-                                          <h4 className="text-sm font-medium text-gray-900">
-                                            {segment.segment_name} ({Math.round(segment.start_time / 1000)}s - {Math.round(segment.end_time / 1000)}s)
-                                          </h4>
-                                          {selectedSegments.includes(segment.segment_id) && (
-                                            <span className="inline-flex items-center px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded-full">
-                                              <svg className="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20">
-                                                <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                                              </svg>
-                                              Selected
-                                            </span>
-                                          )}
-                                        </div>
+                                    markers.push(
+                                      <div 
+                                        key={i} 
+                                        className="absolute flex flex-col items-center timeline-marker"
+                                        style={{ left: `${percentage}%`, transform: 'translateX(-50%)' }}
+                                      >
+                                        <div className="w-px h-4 bg-gray-600"></div>
+                                        <span className="text-xs text-purple-800 mt-1 font-mono font-semibold">{timeLabel}</span>
                                       </div>
+                                    );
+                                  }
+                                  
+                                  return (
+                                    <div className="relative h-8 bg-gray-200 border border-gray-300 rounded">
+                                      <div className="absolute inset-0 bg-gradient-to-r from-purple-100/60 to-indigo-100/60 rounded"></div>
+                                      {markers}
+                                    </div>
+                                  );
+                                })()}
+                              </div>
+
+                              {/* Professional Segment Timeline */}
+                              <div className="relative">
+                                <div className="flex overflow-x-auto pb-4 timeline-scrollbar">
+                                  <div className="flex space-x-1 min-w-full">
+                                    {videoSegments.map((segment, index) => {
+                                      const totalDurationMs = Math.max(...videoSegments.map(s => s.end_time || 0));
+                                      const segmentDurationMs = (segment.end_time || 0) - (segment.start_time || 0);
+                                      const widthPercent = Math.max((segmentDurationMs / totalDurationMs) * 100, 8); // Minimum 8% width
+                                      const isSelected = selectedSegments.includes(segment.segment_id);
                                       
-                                      {/* Analysis Options */}
-                                      {selectedAnalysisPanel && (
-                                        <div className="mb-3">
-                                          {selectedAnalysisPanel === 'detailed' && (
-                                            <div className="flex flex-wrap gap-2 text-xs">
-                                              <label className="flex items-center">
-                                                <input
-                                                  type="checkbox"
-                                                  checked={analysisOptions.detailed.visualElements}
-                                                  onChange={(e) => setAnalysisOptions(prev => ({
-                                                    ...prev,
-                                                    detailed: {...prev.detailed, visualElements: e.target.checked}
-                                                  }))}
-                                                  className="mr-1"
+                                      return (
+                                        <div
+                                          key={segment.segment_id}
+                                          className={`timeline-segment group relative flex-shrink-0 cursor-pointer ${isSelected ? 'selected selection-ripple' : ''}`}
+                                          style={{ width: `${widthPercent}%`, minWidth: '120px' }}
+                                          onClick={() => {
+                                            if (isSelected) {
+                                              setSelectedSegments(prev => prev.filter(id => id !== segment.segment_id));
+                                            } else {
+                                              setSelectedSegments(prev => [...prev, segment.segment_id]);
+                                            }
+                                            setSelectedSegment(segment);
+                                          }}
+                                        >
+                                          {/* Segment Block */}
+                                          <div className={`relative h-20 rounded-lg overflow-hidden border-2 transition-all duration-300 ${
+                                            isSelected 
+                                              ? 'border-purple-500 shadow-lg shadow-purple-500/30 bg-gradient-to-br from-purple-500 to-indigo-600' 
+                                              : 'border-gray-300 hover:border-purple-400/70 bg-gradient-to-br from-gray-100 to-gray-200'
+                                          }`}>
+                                            
+                                            {/* Thumbnail Background */}
+                                            {segment.thumbnailUrl && (
+                                              <div className="absolute inset-0">
+                                                <img
+                                                  src={segment.thumbnailUrl}
+                                                  alt={segment.segment_name}
+                                                  className="w-full h-full object-cover opacity-60"
+                                                  loading="lazy"
                                                 />
-                                                Visual Elements
-                                              </label>
-                                              <label className="flex items-center">
-                                                <input
-                                                  type="checkbox"
-                                                  checked={analysisOptions.detailed.bodyLanguage}
-                                                  onChange={(e) => setAnalysisOptions(prev => ({
-                                                    ...prev,
-                                                    detailed: {...prev.detailed, bodyLanguage: e.target.checked}
-                                                  }))}
-                                                  className="mr-1"
-                                                />
-                                                Body Language
-                                              </label>
+                                                <div className={`absolute inset-0 bg-gradient-to-t ${
+                                                  isSelected 
+                                                    ? 'from-purple-900/70 via-purple-800/30 to-transparent' 
+                                                    : 'from-gray-900/60 via-gray-700/20 to-transparent'
+                                                }`}></div>
+                                              </div>
+                                            )}
+                                            
+                                            {/* Visual Waveform Effect */}
+                                            <div className="absolute bottom-0 left-0 right-0 h-6 flex items-end justify-center space-x-px overflow-hidden">
+                                              {Array.from({ length: 20 }, (_, i) => (
+                                                <div
+                                                  key={i}
+                                                  className={`waveform-bar w-1 bg-gradient-to-t transition-all duration-1000 ${
+                                                    isSelected 
+                                                      ? 'from-white/90 to-purple-200' 
+                                                      : 'from-purple-400 to-purple-200'
+                                                  }`}
+                                                  style={{ 
+                                                    height: `${Math.random() * 16 + 4}px`,
+                                                    animationDelay: `${i * 100}ms`
+                                                  }}
+                                                ></div>
+                                              ))}
                                             </div>
-                                          )}
+                                            
+                                            {/* Segment Info Overlay */}
+                                            <div className="absolute inset-0 p-2 flex flex-col justify-between">
+                                              <div className="flex justify-between items-start">
+                                                {/* Selection Checkbox */}
+                                                <div className={`w-4 h-4 rounded border-2 flex items-center justify-center transition-all duration-200 ${
+                                                  isSelected 
+                                                    ? 'bg-white border-white shadow-lg' 
+                                                    : 'bg-white/90 border-gray-400 group-hover:border-purple-500'
+                                                }`}>
+                                                  {isSelected && (
+                                                    <svg className="w-3 h-3 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                                                    </svg>
+                                                  )}
+                                                </div>
+                                                
+                                                {/* Segment Number Badge */}
+                                                <div className={`px-2 py-1 rounded text-xs font-bold shadow-sm ${
+                                                  isSelected 
+                                                    ? 'bg-white/95 text-purple-700' 
+                                                    : 'bg-gray-800/80 text-white'
+                                                }`}>
+                                                  #{index + 1}
+                                                </div>
+                                              </div>
+                                              
+                                              {/* Bottom Info */}
+                                              <div>
+                                                <div className={`text-xs font-mono px-2 py-1 rounded shadow-sm font-semibold ${
+                                                  isSelected 
+                                                    ? 'bg-white/95 text-purple-700' 
+                                                    : 'bg-gray-800/80 text-white'
+                                                }`}>
+                                                  {Math.round((segment.start_time || 0) / 1000)}s - {Math.round((segment.end_time || 0) / 1000)}s
+                                                </div>
+                                              </div>
+                                            </div>
+                                            
+                                            {/* Play Button Overlay */}
+                                            <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-all duration-200 flex items-center justify-center">
+                                              <button
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  playSegment(segment);
+                                                }}
+                                                className="opacity-0 group-hover:opacity-100 transition-all duration-200 bg-white/90 hover:bg-white hover:scale-110 rounded-full p-2 shadow-xl"
+                                              >
+                                                <svg className="w-4 h-4 text-gray-800" fill="currentColor" viewBox="0 0 24 24">
+                                                  <path d="M8 5v14l11-7z"/>
+                                                </svg>
+                                              </button>
+                                            </div>
+                                            
+                                            {/* Confidence Indicator */}
+                                            {segment.confidence && (
+                                              <div className="absolute top-1 right-1">
+                                                <div className={`w-2 h-2 rounded-full shadow-lg ${
+                                                  (segment.confidence || 0) > 0.8 ? 'bg-green-400 confidence-high' :
+                                                  (segment.confidence || 0) > 0.6 ? 'bg-indigo-400' : 'bg-purple-400'
+                                                }`}></div>
+                                              </div>
+                                            )}
+                                          </div>
                                           
-                                          {selectedAnalysisPanel === 'summary' && (
-                                            <div className="flex flex-wrap gap-2 text-xs">
-                                              <label className="flex items-center">
-                                                <input
-                                                  type="checkbox"
-                                                  checked={analysisOptions.summary.coreSummary}
-                                                  onChange={(e) => setAnalysisOptions(prev => ({
-                                                    ...prev,
-                                                    summary: {...prev.summary, coreSummary: e.target.checked}
-                                                  }))}
-                                                  className="mr-1"
-                                                />
-                                                Core Summary
-                                              </label>
-                                              <label className="flex items-center">
-                                                <input
-                                                  type="checkbox"
-                                                  checked={analysisOptions.summary.primaryKeywords}
-                                                  onChange={(e) => setAnalysisOptions(prev => ({
-                                                    ...prev,
-                                                    summary: {...prev.summary, primaryKeywords: e.target.checked}
-                                                  }))}
-                                                  className="mr-1"
-                                                />
-                                                Keywords
-                                              </label>
-                                            </div>
-                                          )}
-                                          
-                                          {selectedAnalysisPanel === 'categorization' && (
-                                            <div className="flex flex-wrap gap-2 text-xs">
-                                              <label className="flex items-center">
-                                                <input
-                                                  type="checkbox"
-                                                  checked={analysisOptions.categorization.thematicCategory}
-                                                  onChange={(e) => setAnalysisOptions(prev => ({
-                                                    ...prev,
-                                                    categorization: {...prev.categorization, thematicCategory: e.target.checked}
-                                                  }))}
-                                                  className="mr-1"
-                                                />
-                                                Thematic
-                                              </label>
-                                              <label className="flex items-center">
-                                                <input
-                                                  type="checkbox"
-                                                  checked={analysisOptions.categorization.technicalAttributes}
-                                                  onChange={(e) => setAnalysisOptions(prev => ({
-                                                    ...prev,
-                                                    categorization: {...prev.categorization, technicalAttributes: e.target.checked}
-                                                  }))}
-                                                  className="mr-1"
-                                                />
-                                                Technical
-                                              </label>
-                                            </div>
-                                          )}
-                                        </div>
-                                      )}
-                                      
-                                      {/* Analysis Result */}
-                                      {segmentAnalysisResults[`${segment.segment_id}_${selectedAnalysisPanel}`] && (
-                                        <div className="bg-blue-50 border border-blue-200 rounded-md p-3 text-sm">
-                                          <div className="prose prose-sm max-w-none">
-                                            <ReactMarkdown>
-                                              {segmentAnalysisResults[`${segment.segment_id}_${selectedAnalysisPanel}`]}
-                                            </ReactMarkdown>
+                                          {/* Segment Metadata Tooltip */}
+                                          <div className="absolute -top-16 left-1/2 transform -translate-x-1/2 segment-tooltip text-white p-2 rounded-lg text-xs opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none z-10 min-w-max shadow-xl">
+                                            <div className="font-semibold">{segment.segment_name || `Segment ${index + 1}`}</div>
+                                            <div>Duration: {Math.round(((segment.end_time || 0) - (segment.start_time || 0)) / 1000)}s</div>
+                                            {segment.confidence && (
+                                              <div>Confidence: {Math.round((segment.confidence || 0) * 100)}%</div>
+                                            )}
                                           </div>
                                         </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                                
+                                {/* Timeline Scale */}
+                                <div className="mt-2 h-1 bg-gradient-to-r from-purple-300 via-indigo-300 to-blue-300 rounded-full opacity-90 timeline-scale"></div>
+                              </div>
+                              
+                              {/* Timeline Controls */}
+                              <div className="flex items-center justify-between mt-4 pt-4 border-t border-gray-300">
+                                <div className="flex items-center space-x-4">
+                                  <button className="text-gray-600 hover:text-purple-600 zoom-control">
+                                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                                    </svg>
+                                  </button>
+                                  <span className="text-gray-700 text-sm font-medium">Zoom to fit</span>
+                                </div>
+                                
+                                {/* Analysis Options - Condensed */}
+                                {selectedAnalysisPanel && (
+                                  <div className="flex items-center space-x-3">
+                                    <span className="text-xs text-gray-600 font-medium">
+                                      {selectedAnalysisPanel === 'detailed' && 'Options:'}
+                                      {selectedAnalysisPanel === 'summary' && 'Include:'}
+                                      {selectedAnalysisPanel === 'categorization' && 'Generate:'}
+                                    </span>
+                                    <div className="flex space-x-2">
+                                      {selectedAnalysisPanel === 'detailed' && (
+                                        <>
+                                          <label className="inline-flex items-center">
+                                            <input
+                                              type="checkbox"
+                                              checked={analysisOptions.detailed.visualElements}
+                                              onChange={(e) => setAnalysisOptions(prev => ({
+                                                ...prev,
+                                                detailed: {...prev.detailed, visualElements: e.target.checked}
+                                              }))}
+                                              className="w-3 h-3 text-purple-600 border-gray-300 rounded focus:ring-purple-500 mr-1"
+                                            />
+                                            <span className="text-xs text-gray-700">Visual</span>
+                                          </label>
+                                          <label className="inline-flex items-center">
+                                            <input
+                                              type="checkbox"
+                                              checked={analysisOptions.detailed.bodyLanguage}
+                                              onChange={(e) => setAnalysisOptions(prev => ({
+                                                ...prev,
+                                                detailed: {...prev.detailed, bodyLanguage: e.target.checked}
+                                              }))}
+                                              className="w-3 h-3 text-purple-600 border-gray-300 rounded focus:ring-purple-500 mr-1"
+                                            />
+                                            <span className="text-xs text-gray-700">Body Language</span>
+                                          </label>
+                                        </>
+                                      )}
+                                      
+                                      {selectedAnalysisPanel === 'summary' && (
+                                        <>
+                                          <label className="inline-flex items-center">
+                                            <input
+                                              type="checkbox"
+                                              checked={analysisOptions.summary.coreSummary}
+                                              onChange={(e) => setAnalysisOptions(prev => ({
+                                                ...prev,
+                                                summary: {...prev.summary, coreSummary: e.target.checked}
+                                              }))}
+                                              className="w-3 h-3 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500 mr-1"
+                                            />
+                                            <span className="text-xs text-gray-700">Summary</span>
+                                          </label>
+                                          <label className="inline-flex items-center">
+                                            <input
+                                              type="checkbox"
+                                              checked={analysisOptions.summary.primaryKeywords}
+                                              onChange={(e) => setAnalysisOptions(prev => ({
+                                                ...prev,
+                                                summary: {...prev.summary, primaryKeywords: e.target.checked}
+                                              }))}
+                                              className="w-3 h-3 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500 mr-1"
+                                            />
+                                            <span className="text-xs text-gray-700">Keywords</span>
+                                          </label>
+                                        </>
+                                      )}
+                                      
+                                      {selectedAnalysisPanel === 'categorization' && (
+                                        <>
+                                          <label className="inline-flex items-center">
+                                            <input
+                                              type="checkbox"
+                                              checked={analysisOptions.categorization.thematicCategory}
+                                              onChange={(e) => setAnalysisOptions(prev => ({
+                                                ...prev,
+                                                categorization: {...prev.categorization, thematicCategory: e.target.checked}
+                                              }))}
+                                              className="w-3 h-3 text-gray-600 border-gray-300 rounded focus:ring-gray-500 mr-1"
+                                            />
+                                            <span className="text-xs text-gray-700">Thematic</span>
+                                          </label>
+                                          <label className="inline-flex items-center">
+                                            <input
+                                              type="checkbox"
+                                              checked={analysisOptions.categorization.technicalAttributes}
+                                              onChange={(e) => setAnalysisOptions(prev => ({
+                                                ...prev,
+                                                categorization: {...prev.categorization, technicalAttributes: e.target.checked}
+                                              }))}
+                                              className="w-3 h-3 text-gray-600 border-gray-300 rounded focus:ring-gray-500 mr-1"
+                                            />
+                                            <span className="text-xs text-gray-700">Technical</span>
+                                          </label>
+                                        </>
                                       )}
                                     </div>
                                   </div>
-                                </div>
-                              ))}
+                                )}
+                              </div>
                             </div>
+                            
+                            {/* Analysis Results Display */}
+                            {selectedAnalysisPanel && selectedSegments.length > 0 && (
+                              <div className="bg-white border border-gray-300 rounded-lg overflow-hidden">
+                                {/* Results Header */}
+                                <div className="bg-gradient-to-r from-purple-50 to-indigo-50 border-b border-gray-200 px-4 py-3">
+                                  <div className="flex items-center justify-between">
+                                    <h3 className="text-sm font-semibold text-gray-800 flex items-center">
+                                      <svg className="w-4 h-4 mr-2 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                                      </svg>
+                                      {selectedAnalysisPanel === 'detailed' && 'Detailed Analysis Results'}
+                                      {selectedAnalysisPanel === 'summary' && 'Summary Analysis Results'}
+                                      {selectedAnalysisPanel === 'categorization' && 'Tag Analysis Results'}
+                                    </h3>
+                                    <div className="text-xs text-gray-600 bg-white px-2 py-1 rounded border">
+                                      {selectedSegments.length} segment{selectedSegments.length !== 1 ? 's' : ''} analyzed
+                                    </div>
+                                  </div>
+                                </div>
+                                
+                                {/* Compact Results Display */}
+                                <div className="max-h-64 overflow-y-auto">
+                                  {selectedSegments.length > 0 ? (
+                                    <div className="divide-y divide-gray-200">
+                                      {videoSegments
+                                        .filter(segment => selectedSegments.includes(segment.segment_id))
+                                        .map((segment) => (
+                                          <div key={segment.segment_id} className="p-4 hover:bg-gray-50">
+                                            <div className="flex items-start space-x-3">
+                                              {/* Compact Thumbnail */}
+                                              <div className="flex-shrink-0 w-16 h-12 bg-gray-100 rounded overflow-hidden border border-gray-200">
+                                                {segment.thumbnailUrl ? (
+                                                  <img
+                                                    src={segment.thumbnailUrl}
+                                                    alt={segment.segment_name}
+                                                    className="w-full h-full object-cover"
+                                                    loading="lazy"
+                                                  />
+                                                ) : (
+                                                  <div className="w-full h-full bg-gray-200 flex items-center justify-center">
+                                                    <svg className="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                                    </svg>
+                                                  </div>
+                                                )}
+                                              </div>
+                                              
+                                              {/* Segment Info & Results */}
+                                              <div className="flex-1 min-w-0">
+                                                <div className="flex items-center justify-between mb-2">
+                                                  <h4 className="text-sm font-medium text-gray-900 truncate">
+                                                    {segment.segment_name}
+                                                  </h4>
+                                                  <span className="text-xs text-gray-500 font-mono ml-2">
+                                                    {Math.round(segment.start_time / 1000)}s - {Math.round(segment.end_time / 1000)}s
+                                                  </span>
+                                                </div>
+                                                
+                                                {/* Analysis Result */}
+                                                {segmentAnalysisResults[`${segment.segment_id}_${selectedAnalysisPanel}`] ? (
+                                                  <div className="bg-gray-50 border border-gray-200 rounded p-2 text-xs">
+                                                    <div className="prose prose-xs max-w-none">
+                                                      <ReactMarkdown>
+                                                        {segmentAnalysisResults[`${segment.segment_id}_${selectedAnalysisPanel}`]}
+                                                      </ReactMarkdown>
+                                                    </div>
+                                                  </div>
+                                                ) : (
+                                                  <div className="text-xs text-gray-500 italic">
+                                                    Click "Analyze" to process this segment
+                                                  </div>
+                                                )}
+                                              </div>
+                                            </div>
+                                          </div>
+                                        ))
+                                      }
+                                    </div>
+                                  ) : (
+                                    <div className="p-8 text-center text-gray-500">
+                                      <svg className="w-12 h-12 mx-auto mb-4 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                                      </svg>
+                                      <p className="text-sm">Select segments from the timeline above to analyze them</p>
+                                      <p className="text-xs text-gray-400 mt-1">Choose analysis options and click the analyze button</p>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            )}
                           </div>
                         ) : (
                           <div className="text-sm text-gray-500 text-center py-8">
@@ -2262,52 +2452,6 @@ export default function AdsTaggingPage() {
                     </div>
                   </div>
                   
-                  {/* Selected Segment Details */}
-                  {selectedSegment && (
-                    <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-md">
-                      <div className="flex justify-between items-start mb-3">
-                        <h4 className="text-sm font-medium text-blue-900">Segment Details</h4>
-                        <button
-                          onClick={() => setSelectedSegment(null)}
-                          className="text-blue-600 hover:text-blue-800"
-                        >
-                          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                          </svg>
-                        </button>
-                      </div>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div>
-                          <div className="text-sm text-blue-800 mb-2">
-                            <strong>{(selectedSegment as any).segment_name || `Segment ${selectedSegment.segment_id}`}</strong>
-                          </div>
-                          <div className="text-sm text-blue-700 mb-2">
-                            Time: {Math.round(selectedSegment.start_time / 1000)}s - {Math.round(selectedSegment.end_time / 1000)}s
-                          </div>
-                          <div className="text-sm text-blue-700 mb-2">
-                            Duration: {Math.round(selectedSegment.duration / 1000)} seconds
-                          </div>
-                          {(selectedSegment as any).confidence && (
-                            <div className="text-sm text-blue-700 mb-2">
-                              Confidence: {(selectedSegment as any).confidence > 1 ? (selectedSegment as any).confidence.toFixed(1) : ((selectedSegment as any).confidence * 100).toFixed(1)}%
-                            </div>
-                          )}
-                        </div>
-                        <div>
-                          {(selectedSegment as any).segment_visual_description && (
-                            <div className="text-sm text-blue-700 mb-2">
-                              <strong>Visual:</strong> {(selectedSegment as any).segment_visual_description}
-                            </div>
-                          )}
-                          {(selectedSegment as any).segment_audio_description && (
-                            <div className="text-sm text-blue-700">
-                              <strong>Audio:</strong> {(selectedSegment as any).segment_audio_description}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  )}
                   
                   
                 </div>

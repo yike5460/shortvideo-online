@@ -566,7 +566,7 @@ async function processVideoWithQwenVL(s3Path: string, question: string, videoMet
       throw new Error(`Error from Qwen-VL endpoint: ${response.status} ${response.statusText}`);
     }
     
-    const responseData = await response.json();
+    const responseData = await response.json() as any;
     
     // Extract the response text
     return responseData.response || '';
@@ -774,7 +774,18 @@ export async function segmentationPreviewHandler(event: APIGatewayProxyEvent): P
         if (!thumbnailUrl && segment.segment_video_thumbnail_s3_path) {
           try {
             const bucket = VIDEO_BUCKET;
-            const key = segment.segment_video_thumbnail_s3_path.replace(`s3://${bucket}/`, '');
+            // Handle both s3:// prefixed paths and direct S3 keys
+            let key = segment.segment_video_thumbnail_s3_path;
+            if (key.startsWith(`s3://${bucket}/`)) {
+              key = key.replace(`s3://${bucket}/`, '');
+            } else if (key.startsWith('s3://')) {
+              // Handle s3://other-bucket/key format
+              const s3Parts = key.replace('s3://', '').split('/', 1);
+              if (s3Parts.length > 1) {
+                key = key.replace(`s3://${s3Parts[0]}/`, '');
+              }
+            }
+            // If key doesn't have s3:// prefix, use it directly
             
             const getObjectCommand = new GetObjectCommand({
               Bucket: bucket,
