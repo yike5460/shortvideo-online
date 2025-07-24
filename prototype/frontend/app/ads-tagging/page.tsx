@@ -304,30 +304,44 @@ const generateCategorizationPrompt = (options: any, segment: any): string => {
   const sections = [];
   
   if (options.thematicCategory) {
-    sections.push('- Thematic category (genre, subject matter)');
+    sections.push('thematic_category');
   }
   
   if (options.emotionalIntensity) {
-    sections.push('- Emotional intensity (low/medium/high with descriptors)');
+    sections.push('emotional_intensity');
   }
   
   if (options.technicalAttributes) {
-    sections.push('- Technical attributes (shot type, movement, lighting, color grading)');
+    sections.push('technical_attributes');
   }
   
   if (options.practicalUtility) {
-    sections.push('- Practical utility tags (suitable for: opening, ending, B-roll, transition, etc.)');
+    sections.push('practical_utility');
   }
   
   if (options.customTags) {
-    sections.push('- Custom contextual tags');
+    sections.push('custom_tags');
   }
   
-  return `Analyze this video segment (${Math.round(segment.start_time / 1000)}s - ${Math.round(segment.end_time / 1000)}s) and provide categorization tags for:
+  return `Analyze this video segment (${Math.round(segment.start_time / 1000)}s - ${Math.round(segment.end_time / 1000)}s) and provide categorization tags in JSON format.
 
-${sections.join('\n')}
+Return ONLY a valid JSON object with the following structure:
+{
+  ${options.thematicCategory ? '"thematic_category": ["tag1", "tag2", "tag3"],' : ''}
+  ${options.emotionalIntensity ? '"emotional_intensity": {"level": "medium", "descriptors": ["tag1", "tag2"]},' : ''}
+  ${options.technicalAttributes ? '"technical_attributes": {"shot_type": "close-up", "movement": "static", "lighting": "natural", "color_grading": "warm"},' : ''}
+  ${options.practicalUtility ? '"practical_utility": ["opening", "b-roll", "transition"],' : ''}
+  ${options.customTags ? '"custom_tags": ["context1", "context2"]' : ''}
+}
 
-Format your response as clear categories with specific tags for each aspect.`;
+Guidelines:
+- For thematic_category: Provide 2-4 genre/subject matter tags
+- For emotional_intensity: Use level (low/medium/high) and 2-3 descriptive tags
+- For technical_attributes: Specify shot_type, movement, lighting, color_grading
+- For practical_utility: List suitable use cases (opening, ending, b-roll, transition, etc.)
+- For custom_tags: Add contextual tags specific to the content
+
+Ensure the JSON is valid and parseable. Do not include any explanations or markdown formatting.`;
 };
 
 // Helper function to get a color for a category tag based on its name (for consistent colors)
@@ -760,6 +774,9 @@ export default function AdsTaggingPage() {
     currentSegmentId?: string;
     estimatedTimeRemaining?: number;
   }>({ current: 0, total: 0 })
+  
+  // Collapsible segments state
+  const [collapsedSegments, setCollapsedSegments] = useState<Set<string>>(new Set())
 
   // Initialize selectedIndexId from URL parameter and fetch indexes on mount
   useEffect(() => {
@@ -1237,6 +1254,122 @@ export default function AdsTaggingPage() {
         return newSelection;
       }
     });
+  };
+
+  // Toggle segment collapse state
+  const toggleSegmentCollapse = (segmentId: string) => {
+    setCollapsedSegments(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(segmentId)) {
+        newSet.delete(segmentId);
+      } else {
+        newSet.add(segmentId);
+      }
+      return newSet;
+    });
+  };
+
+  // Parse and render structured analysis results
+  const renderStructuredAnalysis = (result: string, analysisType: string) => {
+    if (analysisType === 'categorization') {
+      try {
+        const parsed = JSON.parse(result);
+        return (
+          <div className="space-y-3">
+            {parsed.thematic_category && (
+              <div>
+                <h6 className="text-xs font-semibold text-gray-700 mb-1">Thematic Category</h6>
+                <div className="flex flex-wrap gap-1">
+                  {parsed.thematic_category.map((tag: string, index: number) => (
+                    <span key={index} className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                      {tag}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            
+            {parsed.emotional_intensity && (
+              <div>
+                <h6 className="text-xs font-semibold text-gray-700 mb-1">Emotional Intensity</h6>
+                <div className="flex items-center space-x-2">
+                  <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+                    parsed.emotional_intensity.level === 'high' ? 'bg-red-100 text-red-800' :
+                    parsed.emotional_intensity.level === 'medium' ? 'bg-yellow-100 text-yellow-800' :
+                    'bg-green-100 text-green-800'
+                  }`}>
+                    {parsed.emotional_intensity.level}
+                  </span>
+                  <div className="flex flex-wrap gap-1">
+                    {parsed.emotional_intensity.descriptors?.map((desc: string, index: number) => (
+                      <span key={index} className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
+                        {desc}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+            
+            {parsed.technical_attributes && (
+              <div>
+                <h6 className="text-xs font-semibold text-gray-700 mb-1">Technical Attributes</h6>
+                <div className="grid grid-cols-2 gap-2">
+                  {Object.entries(parsed.technical_attributes).map(([key, value]) => (
+                    <div key={key} className="flex items-center space-x-2">
+                      <span className="text-xs text-gray-500 capitalize">{key.replace('_', ' ')}:</span>
+                      <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                        {value as string}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            
+            {parsed.practical_utility && (
+              <div>
+                <h6 className="text-xs font-semibold text-gray-700 mb-1">Practical Utility</h6>
+                <div className="flex flex-wrap gap-1">
+                  {parsed.practical_utility.map((tag: string, index: number) => (
+                    <span key={index} className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800">
+                      {tag}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            
+            {parsed.custom_tags && (
+              <div>
+                <h6 className="text-xs font-semibold text-gray-700 mb-1">Custom Tags</h6>
+                <div className="flex flex-wrap gap-1">
+                  {parsed.custom_tags.map((tag: string, index: number) => (
+                    <span key={index} className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-teal-100 text-teal-800">
+                      {tag}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      } catch (error) {
+        // Fallback to markdown if JSON parsing fails
+        return (
+          <div className="prose prose-xs max-w-none">
+            <ReactMarkdown>{result}</ReactMarkdown>
+          </div>
+        );
+      }
+    } else {
+      // For detailed and summary analysis, use markdown
+      return (
+        <div className="prose prose-xs max-w-none">
+          <ReactMarkdown>{result}</ReactMarkdown>
+        </div>
+      );
+    }
   };
 
   // Export analysis results
@@ -2549,56 +2682,78 @@ export default function AdsTaggingPage() {
                                     <div className="divide-y divide-gray-200">
                                       {videoSegments
                                         .filter(segment => selectedSegments.includes(segment.segment_id))
-                                        .map((segment) => (
-                                          <div key={segment.segment_id} className="p-4 hover:bg-gray-50">
-                                            <div className="flex items-start space-x-3">
-                                              {/* Compact Thumbnail */}
-                                              <div className="flex-shrink-0 w-16 h-12 bg-gray-100 rounded overflow-hidden border border-gray-200">
-                                                {segment.thumbnailUrl ? (
-                                                  <img
-                                                    src={segment.thumbnailUrl}
-                                                    alt={segment.segment_name}
-                                                    className="w-full h-full object-cover"
-                                                    loading="lazy"
-                                                  />
-                                                ) : (
-                                                  <div className="w-full h-full bg-gray-200 flex items-center justify-center">
-                                                    <svg className="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                                                    </svg>
-                                                  </div>
-                                                )}
-                                              </div>
-                                              
-                                              {/* Segment Info & Results */}
-                                              <div className="flex-1 min-w-0">
-                                                <div className="flex items-center justify-between mb-2">
-                                                  <h4 className="text-sm font-medium text-gray-900 truncate">
-                                                    {segment.segment_name}
-                                                  </h4>
-                                                  <span className="text-xs text-gray-500 font-mono ml-2">
-                                                    {Math.round(segment.start_time / 1000)}s - {Math.round(segment.end_time / 1000)}s
-                                                  </span>
+                                        .map((segment) => {
+                                          const isCollapsed = collapsedSegments.has(segment.segment_id);
+                                          const hasResult = segmentAnalysisResults[`${segment.segment_id}_${selectedAnalysisPanel}`];
+                                          
+                                          return (
+                                            <div key={segment.segment_id} className="p-4 hover:bg-gray-50">
+                                              <div className="flex items-start space-x-3">
+                                                {/* Compact Thumbnail */}
+                                                <div className="flex-shrink-0 w-16 h-12 bg-gray-100 rounded overflow-hidden border border-gray-200">
+                                                  {segment.thumbnailUrl ? (
+                                                    <img
+                                                      src={segment.thumbnailUrl}
+                                                      alt={segment.segment_name}
+                                                      className="w-full h-full object-cover"
+                                                      loading="lazy"
+                                                    />
+                                                  ) : (
+                                                    <div className="w-full h-full bg-gray-200 flex items-center justify-center">
+                                                      <svg className="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                                      </svg>
+                                                    </div>
+                                                  )}
                                                 </div>
                                                 
-                                                {/* Analysis Result */}
-                                                {segmentAnalysisResults[`${segment.segment_id}_${selectedAnalysisPanel}`] ? (
-                                                  <div className="bg-gray-50 border border-gray-200 rounded p-2 text-xs">
-                                                    <div className="prose prose-xs max-w-none">
-                                                      <ReactMarkdown>
-                                                        {segmentAnalysisResults[`${segment.segment_id}_${selectedAnalysisPanel}`]}
-                                                      </ReactMarkdown>
+                                                {/* Segment Info & Results */}
+                                                <div className="flex-1 min-w-0">
+                                                  <div className="flex items-center justify-between mb-2">
+                                                    <div className="flex items-center space-x-2">
+                                                      <h4 className="text-sm font-medium text-gray-900 truncate">
+                                                        {segment.segment_name}
+                                                      </h4>
+                                                      {hasResult && (
+                                                        <button
+                                                          onClick={() => toggleSegmentCollapse(segment.segment_id)}
+                                                          className="flex items-center justify-center w-5 h-5 rounded-full hover:bg-gray-200 transition-colors duration-200"
+                                                          title={isCollapsed ? 'Expand results' : 'Collapse results'}
+                                                        >
+                                                          <svg 
+                                                            className={`w-3 h-3 text-gray-500 transform transition-transform duration-200 ${isCollapsed ? 'rotate-90' : 'rotate-0'}`}
+                                                            fill="none" 
+                                                            stroke="currentColor" 
+                                                            viewBox="0 0 24 24"
+                                                          >
+                                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                                          </svg>
+                                                        </button>
+                                                      )}
                                                     </div>
+                                                    <span className="text-xs text-gray-500 font-mono ml-2">
+                                                      {Math.round(segment.start_time / 1000)}s - {Math.round(segment.end_time / 1000)}s
+                                                    </span>
                                                   </div>
-                                                ) : (
-                                                  <div className="text-xs text-gray-500 italic">
-                                                    Click "Analyze" to process this segment
-                                                  </div>
-                                                )}
+                                                  
+                                                  {/* Analysis Result */}
+                                                  {hasResult ? (
+                                                    <div className={`bg-gray-50 border border-gray-200 rounded p-3 text-xs transition-all duration-200 ${isCollapsed ? 'max-h-0 overflow-hidden opacity-0 p-0 border-0' : 'max-h-96 overflow-y-auto opacity-100'}`}>
+                                                      {renderStructuredAnalysis(
+                                                        segmentAnalysisResults[`${segment.segment_id}_${selectedAnalysisPanel}`],
+                                                        selectedAnalysisPanel || 'detailed'
+                                                      )}
+                                                    </div>
+                                                  ) : (
+                                                    <div className="text-xs text-gray-500 italic">
+                                                      Click "Analyze" to process this segment
+                                                    </div>
+                                                  )}
+                                                </div>
                                               </div>
                                             </div>
-                                          </div>
-                                        ))
+                                          );
+                                        })
                                       }
                                     </div>
                                   ) : (
