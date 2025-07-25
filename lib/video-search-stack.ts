@@ -32,6 +32,8 @@ interface VideoSearchStackProps extends cdk.StackProps {
   externalVideoUnderstandingEndpoint?: string;
   siliconflowApiKey?: string;
   appDomain?: string;
+  googleApiKey?: string;
+  validationModel?: string;
 }
 
 export class VideoSearchStack extends cdk.Stack {
@@ -51,6 +53,8 @@ export class VideoSearchStack extends cdk.Stack {
   private readonly externalVideoEmbeddingEndpoint: string;
   private readonly externalVideoUnderstandingEndpoint: string;
   private readonly siliconflowApiKey?: string;
+  private readonly googleApiKey?: string;
+  private readonly validationModel?: string;
   private readonly appDomain?: string;
   private readonly userPool: cognito.UserPool;
   private readonly userPoolClient: cognito.UserPoolClient;
@@ -64,6 +68,8 @@ export class VideoSearchStack extends cdk.Stack {
     this.externalVideoEmbeddingEndpoint = props.externalVideoEmbeddingEndpoint || '';
     this.externalVideoUnderstandingEndpoint = props.externalVideoUnderstandingEndpoint || '';
     this.siliconflowApiKey = props.siliconflowApiKey || '';
+    this.googleApiKey = props.googleApiKey || '';
+    this.validationModel = props.validationModel || '';
     this.appDomain = props.appDomain;
     const deploymentEnv = props.deploymentEnvironment || 'dev';
 
@@ -547,6 +553,8 @@ export class VideoSearchStack extends cdk.Stack {
         // Explicitly specify the DynamoDB endpoint since Private DNS can't be enabled because the service com.amazonaws.<region>.dynamodb does not provide a privateDNS name. Use Fn.select to properly extract the first DNS entry from the list
         INDEXES_TABLE_DYNAMODB_DNS_NAME: dynamoDbEndpointDnsHttp,
         EXTERNAL_EMBEDDING_ENDPOINT: this.externalVideoEmbeddingEndpoint || '',
+        GOOGLE_API_KEY: this.googleApiKey || '',
+        VALIDATION_MODEL: this.validationModel || ''
       },
       bundling: {
         minify: true,
@@ -829,6 +837,8 @@ export class VideoSearchStack extends cdk.Stack {
         INDEXES_TABLE_DYNAMODB_DNS_NAME: dynamoDbEndpointDnsHttp,
         EXTERNAL_EMBEDDING_ENDPOINT: this.externalVideoEmbeddingEndpoint || '',
         SILICONFLOW_API_KEY: this.siliconflowApiKey || '',
+        GOOGLE_API_KEY: this.googleApiKey || '',
+        VALIDATION_MODEL: this.validationModel || ''
       },
       bundling: {
         // Minify the code to reduce bundle size
@@ -1440,6 +1450,21 @@ export class VideoSearchStack extends cdk.Stack {
     indexesTable.grantReadWriteData(lambdaFunctions.indexCrudFunction);
     indexesTable.grantReadData(lambdaFunctions.videoSearchFunction);
     indexesTable.grantReadWriteData(lambdaFunctions.videoMergeFunction);
+
+    // Grant Bedrock permissions for video search function
+    const bedrockPolicy = new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'bedrock:InvokeModel',
+        'bedrock:InvokeModelWithResponseStream'
+      ],
+      resources: [
+        'arn:aws:bedrock:*:*:foundation-model/*',
+        'arn:aws:bedrock:*:*:inference-profile/*'
+      ]
+    });
+
+    lambdaFunctions.videoSearchFunction.addToRolePolicy(bedrockPolicy);
   }
 
   private createMonitoringInfrastructure(

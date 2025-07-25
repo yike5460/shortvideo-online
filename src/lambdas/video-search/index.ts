@@ -4,7 +4,7 @@ import { VideoResult, VideoSegment, VideoStatus, SearchOptions, TimestampedLabel
 import { Client } from '@opensearch-project/opensearch';
 import { defaultProvider } from '@aws-sdk/credential-provider-node';
 import { RedisClientType, createClient } from 'redis';
-import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
+import { BedrockRuntimeClient, ConverseCommand, ConversationRole } from '@aws-sdk/client-bedrock-runtime';
 import { AwsSigv4Signer } from '@opensearch-project/opensearch/aws';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand } from '@aws-sdk/lib-dynamodb';
@@ -18,6 +18,7 @@ import { promisify } from 'util';
 import axios from 'axios';
 import { execSync } from 'child_process';
 import { spawn } from 'child_process';
+import { GoogleGenAI } from '@google/genai';
 
 // Update search query interface to match frontend
 interface SearchQuery {
@@ -100,11 +101,10 @@ let redisClient: RedisClientType | null = null;
 const dynamoClient = new DynamoDBClient({endpoint: process.env.INDEXES_TABLE_DYNAMODB_DNS_NAME});
 const docClient = DynamoDBDocumentClient.from(dynamoClient);
 
-// Add constants for the external embedding endpoint and SiliconFlow API
+// Add constants for the external embedding endpoint and Google GenAI API
 const EXTERNAL_EMBEDDING_ENDPOINT = process.env.EXTERNAL_EMBEDDING_ENDPOINT || '';
-const SILICONFLOW_API_KEY = process.env.SILICONFLOW_API_KEY || '';
-const SILICONFLOW_API_URL = 'https://api.siliconflow.cn/v1/chat/completions';
-const MAX_FRAMES = 5; // Maximum number of frames to extract from video
+const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY || '';
+const VALIDATION_MODEL = process.env.VALIDATION_MODEL || 'gemini'; // 'gemini' or 'nova'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -323,326 +323,106 @@ async function validateMP4Structure(filePath: string): Promise<void> {
   });
 }
 
-// Extract frames from video using ffmpeg
-async function extractFramesFromVideo(videoPath: string, maxFrames: number = MAX_FRAMES): Promise<string[]> {
-  let tempDir: string | null = null;
+// New function to analyze video with Amazon Nova model
+async function analyzeVideoWithNova(s3VideoPath: string, textDescription: string): Promise<any> {
   
   try {
-    // Re-verify that the video file exists and has content
-    if (!fs.existsSync(videoPath)) {
-      throw new Error(`Video file does not exist: ${videoPath}`);
+    const modelId = 'us.amazon.nova-lite-v1:0'; // Using Nova Lite for cost-effectiveness and speed
+    
+    // Parse S3 path to get bucket and key
+    let s3Uri = s3VideoPath;
+    if (!s3VideoPath.startsWith('s3://')) {
+      // If it's just a key, construct the full S3 URI
+      s3Uri = `s3://${process.env.VIDEO_BUCKET}/${s3VideoPath}`;
     }
-    
-    const stats = fs.statSync(videoPath);
-    if (stats.size === 0) {
-      throw new Error(`Video file is empty: ${videoPath}`);
-    }
-    
-    console.log(`Extracting frames from video: ${videoPath}, file size: ${stats.size} bytes`);
-    
-    // Create a temporary directory for the frames
-    tempDir = path.join(os.tmpdir(), `frames_${Date.now()}`);
-    fs.mkdirSync(tempDir, { recursive: true });
-    
-    // Define ffprobe and ffmpeg paths - they're included in the FFmpeg Lambda layer
-    const ffprobePath = process.env.LAMBDA_TASK_ROOT ? '/opt/bin/ffprobe' : 'ffprobe';
-    const ffmpegPath = process.env.LAMBDA_TASK_ROOT ? '/opt/bin/ffmpeg' : 'ffmpeg';
-    
-    // First, get video information with ffprobe to verify it's a valid video
-    let videoInfo: any;
-    try {
-      const infoOutput = await new Promise<string>((resolve, reject) => {
-        const infoProcess = spawn(ffprobePath, [
-          '-v', 'error',
-          '-show_entries', 'format=format_name,duration:stream=codec_type,codec_name',
-          '-of', 'json',
-          videoPath
-        ]);
-        
-        let output = '';
-        let errorOutput = '';
-        
-        infoProcess.stdout.on('data', (data) => {
-          output += data.toString();
-        });
-        
-        infoProcess.stderr.on('data', (data) => {
-          errorOutput += data.toString();
-          console.error(`ffprobe info stderr: ${data}`);
-        });
-        
-        infoProcess.on('close', (code) => {
-          if (code === 0) {
-            resolve(output);
-          } else {
-            reject(new Error(`ffprobe info process exited with code ${code}: ${errorOutput}`));
-          }
-        });
-        
-        infoProcess.on('error', (err) => {
-          reject(new Error(`Failed to start ffprobe info process: ${err}`));
-        });
-      });
-      
-      videoInfo = JSON.parse(infoOutput);
-      console.log(`Video info: ${JSON.stringify(videoInfo, null, 2)}`);
-    } catch (error) {
-      throw new Error(`Failed to get video information: ${error}`);
-    }
-    
-    // Retrieve frame count with ffprobe
-    let ffprobeOutput = '';
-    let ffprobeError = '';
-    
-    try {
-      ffprobeOutput = await new Promise<string>((resolve, reject) => {
-        const ffprobeProcess = spawn(ffprobePath, [
-          '-v', 'error',
-          '-select_streams', 'v:0',
-          '-count_packets',
-          '-show_entries', 'stream=nb_read_packets',
-          '-of', 'csv=p=0',
-          videoPath
-        ]);
-        
-        let output = '';
-        let errorOutput = '';
-        
-        ffprobeProcess.stdout.on('data', (data) => {
-          output += data.toString();
-        });
-        
-        ffprobeProcess.stderr.on('data', (data) => {
-          errorOutput += data.toString();
-          console.error(`ffprobe frame count stderr: ${data}`);
-        });
-        
-        ffprobeProcess.on('close', (code) => {
-          if (code === 0) {
-            resolve(output);
-          } else {
-            reject(new Error(`ffprobe frame count process exited with code ${code}: ${errorOutput}`));
-          }
-        });
-        
-        ffprobeProcess.on('error', (err) => {
-          reject(new Error(`Failed to start ffprobe frame count process: ${err}`));
-        });
-      });
-    } catch (error) {
-      throw new Error(`Failed to get frame count: ${error}`);
-    }
-    
-    // Calculate step based on total frames
-    const totalFrames = parseInt(ffprobeOutput.trim()) || 1;
-    const step = Math.max(1, Math.floor(totalFrames / maxFrames));
-    console.log(`Video has ${totalFrames} frames, extracting every ${step}th frame`);
-    
-    // Use ffmpeg to extract frames
-    try {
-      await new Promise<void>((resolve, reject) => {
-        const ffmpegProcess = spawn(ffmpegPath, [
-          '-loglevel', 'error',  // Only show errors
-          '-i', videoPath,
-          '-vf', `select='not(mod(n,${step}))'`,
-          '-vsync', '0',
-          '-frame_pts', 'true',
-          '-vframes', maxFrames.toString(),
-          '-q:v', '1',
-          `${tempDir}/frame_%03d.jpg`
-        ]);
-        
-        let errorOutput = '';
-        
-        ffmpegProcess.stderr.on('data', (data) => {
-          errorOutput += data.toString();
-          console.log(`ffmpeg frame extraction stderr: ${data}`);
-        });
-        
-        ffmpegProcess.on('close', (code) => {
-          if (code === 0) {
-            resolve();
-          } else {
-            reject(new Error(`ffmpeg frame extraction process exited with code ${code}: ${errorOutput}`));
-          }
-        });
-        
-        ffmpegProcess.on('error', (err) => {
-          reject(new Error(`Failed to start ffmpeg frame extraction process: ${err}`));
-        });
-      });
-    } catch (error) {
-      throw new Error(`Failed to extract frames: ${error}`);
-    }
-    
-    // Check if any frames were extracted
-    const frameFiles = fs.existsSync(tempDir) 
-      ? fs.readdirSync(tempDir).filter(file => file.startsWith('frame_') && file.endsWith('.jpg')).sort()
-      : [];
-      
-    if (frameFiles.length === 0) {
-      throw new Error('No frames were extracted from the video');
-    }
-    
-    console.log(`Successfully extracted ${frameFiles.length} frames from video`);
-    
-    // Read the extracted frames and convert to base64
-    const frames: string[] = [];
-    
-    for (const file of frameFiles) {
-      const filePath = path.join(tempDir, file);
-      const fileData = fs.readFileSync(filePath);
-      const base64Image = fileData.toString('base64');
-      frames.push(base64Image);
-      
-      // Clean up the frame file
-      try {
-        fs.unlinkSync(filePath);
-      } catch (unlinkError) {
-        console.warn(`Failed to clean up frame file ${filePath}:`, unlinkError);
-      }
-    }
-    
-    // Clean up the temporary directory
-    try {
-      if (tempDir && fs.existsSync(tempDir)) {
-        fs.rmdirSync(tempDir);
-      }
-    } catch (rmError) {
-      console.warn(`Failed to clean up temporary directory ${tempDir}:`, rmError);
-    }
-    
-    return frames;
-  } catch (error) {
-    console.error(`Error extracting frames: ${error}`);
-    
-    // Clean up the temporary directory if it exists
-    try {
-      if (tempDir && fs.existsSync(tempDir)) {
-        const files = fs.readdirSync(tempDir);
-        for (const file of files) {
-          try {
-            fs.unlinkSync(path.join(tempDir, file));
-          } catch (unlinkError) {
-            console.warn(`Failed to clean up file ${file}:`, unlinkError);
-          }
-        }
-        fs.rmdirSync(tempDir);
-      }
-    } catch (cleanupError) {
-      console.warn(`Failed to clean up after error: ${cleanupError}`);
-    }
-    
-    throw error;
-  }
-}
 
-// New function to analyze frames with SiliconFlow Qwen model, TODO, use English prompt to align with the search query language
-async function analyzeFramesWithQwen(frames: string[], textDescription: string): Promise<any> {
-  
-  if (!SILICONFLOW_API_KEY) {
-    throw new Error('SiliconFlow API key not configured');
-  }
-  
-  // Refer to the official documentation: https://docs.siliconflow.cn/cn/userguide/capabilities/vision#2-2-%E5%8C%85%E5%90%AB%E5%9B%BE%E5%83%8F%E7%9A%84-message-%E6%B6%88%E6%81%AF%E6%A0%BC%E5%BC%8F%E7%A4%BA%E4%BE%8B
-  try {
-    // Prepare the content for SiliconFlow API
-    const content: any[] = [];
-    
-    // Add each frame to the content
-    for (const frame of frames) {
-      content.push({
-        type: 'image_url',
-        image_url: {
-          url: `data:image/jpeg;base64,${frame}`
-        }
-      });
-    }
-    
-    // Add the prompt text
-    const promptText = `你的任务是判断一个视频镜头和描述是否相符。
+    // Prepare the message following AWS best practices with S3 source
+    const message = {
+      role: ConversationRole.USER,
+      content: [
+        {
+          video: {
+            format: "mp4",
+            source: {
+              s3Location: {
+                uri: s3Uri
+              }
+            }
+          }
+        },
+        {
+          text: `Your task is to determine if this video matches a given text description.
 
-你拿到的描述是：
+The description is:
 \`\`\`
 ${textDescription}
 \`\`\`
 
-我会给你展示 ${frames.length} 个视频帧（每秒一帧）。请评估这个视频镜头和描述的匹配程度，并给出0-5分的评分，其中：
-0分：完全不符合描述
-1分：基本不符合描述
-2分：略微符合描述
-3分：部分符合描述
-4分：大部分符合描述
-5分：完全符合描述
+Please evaluate how well this video matches the description and give a score from 0-5, where:
+0: Completely does not match the description
+1: Barely matches the description
+2: Slightly matches the description
+3: Partially matches the description
+4: Mostly matches the description
+5: Perfectly matches the description
 
-你需要按下面的格式输出：
+Please output in the following format:
 <o>
-评分（0-5的整数）
+Score (integer from 0-5)
 </o>
 <reason>
-评分理由
+Reasoning for the score
 </reason>
 
-输出示例：
+Example output:
 <o>
 4
 </o>
 <reason>
-视频帧展示了一个人在海滩上奔跑的场景，与描述中提到的"一个人在海边跑步"非常吻合。可以清晰看到海浪和沙滩，以及人物跑步的动作。唯一与描述不完全匹配的是视频中没有展示描述中提到的"日落时分"的场景，因此给出4分而非5分。
-</reason>`;
-
-    content.push({
-      type: 'text',
-      text: promptText
-    });
-    
-    // Prepare the request for SiliconFlow API
-    const headers = {
-      'Authorization': `Bearer ${SILICONFLOW_API_KEY}`,
-      'Content-Type': 'application/json'
+The video shows a person running on a beach, which closely matches the description of "a person jogging by the sea". You can clearly see waves and sand, as well as the person's running motion. The only aspect that doesn't completely match is that the video doesn't show the "sunset" scene mentioned in the description, so I give it 4 points instead of 5.
+</reason>`
+        }
+      ]
     };
     
-    const payload = {
-      model: 'Pro/Qwen/Qwen2.5-VL-7B-Instruct',
-      messages: [
+    // Prepare the request following AWS best practices
+    const request = {
+      modelId,
+      messages: [message],
+      system: [
         {
-          role: 'system',
-          content: 'You are an AI assistant that analyzes video frames to determine if they match text descriptions.'
-        },
-        {
-          role: 'user',
-          content: content
+          text: "You are an expert media analyst"
         }
       ],
-      max_tokens: 500
+      inferenceConfig: {
+        maxTokens: 4096,
+        temperature: 0.7,
+        topP: 0.9
+      }
     };
     
-    // Call the SiliconFlow API
-    const response = await axios.post(SILICONFLOW_API_URL, payload, { headers });
+    const response = await bedrock.send(new ConverseCommand(request));
     
-    // Parse the response
-    const analysisText = response.data.choices[0].message.content;
+    // Parse the response from ConverseCommand
+    const analysisText = response.output?.message?.content?.[0]?.text || '';
     
-    // 改进分数提取的正则表达式，使其更加健壮
-    // 查找<o>标签中的任何0-5的数字，忽略周围可能存在的额外文本
+    // Extract score from the response using regex patterns
     const outputMatch = analysisText.match(/<o>[\s\S]*?([0-5])[\s\S]*?<\/o>/);
-    // print outputMatch
-    // 如果第一种匹配方式失败，尝试寻找可能的替代格式
     let score = 0;
     let matches = false;
     
     if (outputMatch) {
       score = parseInt(outputMatch[1].trim());
-      matches = (score >= 1); // 3+ is considered a match
+      matches = (score >= 1);
     } else {
-      // 备用匹配模式：寻找任何包含0-5数字的<o>标签
-      const fallbackMatch = analysisText.match(/<o>.*?([0-5])[\s分点].*?<\/o>/s);
+      // Fallback pattern: look for any 0-5 digits in <o> tags
+      const fallbackMatch = analysisText.match(/<o>.*?([0-5])[\s\.].*?<\/o>/s);
       if (fallbackMatch) {
         score = parseInt(fallbackMatch[1].trim());
         matches = (score >= 1);
       } else {
-        // 最后的尝试：在整个回答中搜索评分相关的模式
-        const numberMatch = analysisText.match(/评分.*?([0-5])[\s分点]/);
+        // Last attempt: search for score-related patterns in the entire response
+        const numberMatch = analysisText.match(/score.*?([0-5])[\s\.]/i);
         if (numberMatch) {
           score = parseInt(numberMatch[1].trim());
           matches = (score >= 1);
@@ -650,10 +430,8 @@ ${textDescription}
       }
     }
     
-    // 提高提取reason的鲁棒性，使用[\s\S]匹配包括换行符在内的所有字符
+    // Extract reasoning with improved robustness
     const reasonMatch = analysisText.match(/<reason>([\s\S]*?)<\/reason>/);
-
-    // 添加多种回退模式，确保即使格式不标准也能尽可能提取到理由
     let explanation = '';
     if (reasonMatch) {
       explanation = reasonMatch[1].trim();
@@ -664,12 +442,12 @@ ${textDescription}
     return {
       matches,
       score,
-      confidence: score / 5.0, // Convert score to 0-1 confidence
+      confidence: score / 5.0,
       explanation,
       fullResponse: analysisText
     };
   } catch (error) {
-    console.error(`Error analyzing frames with Qwen: ${error}`);
+    console.error(`Error analyzing video with Nova: ${error}`);
     return {
       matches: false,
       score: 0,
@@ -679,33 +457,162 @@ ${textDescription}
   }
 }
 
-// New function to validate videos against text description
-async function validateVideos(videosWithScores: [string, number][], textDescription: string): Promise<ValidationResult[]> {
+// New function to analyze video with Google Gemini 2.5 Flash model
+async function analyzeVideoWithGemini(videoPath: string, textDescription: string): Promise<any> {
+  
+  if (!GOOGLE_API_KEY) {
+    throw new Error('Google API key not configured');
+  }
+  
+  try {
+    const ai = new GoogleGenAI({
+      apiKey: GOOGLE_API_KEY
+    });
+    
+    // Read video file as base64
+    const base64VideoFile = fs.readFileSync(videoPath, {
+      encoding: 'base64'
+    });
+    
+    // Prepare the content for Google GenAI API
+    const contents = [
+      {
+        inlineData: {
+          mimeType: 'video/mp4',
+          data: base64VideoFile
+        }
+      },
+      {
+        text: `Your task is to determine if this video matches a given text description.
+
+The description is:
+\`\`\`
+${textDescription}
+\`\`\`
+
+Please evaluate how well this video matches the description and give a score from 0-5, where:
+0: Completely does not match the description
+1: Barely matches the description
+2: Slightly matches the description
+3: Partially matches the description
+4: Mostly matches the description
+5: Perfectly matches the description
+
+Please output in the following format:
+<o>
+Score (integer from 0-5)
+</o>
+<reason>
+Reasoning for the score
+</reason>
+
+Example output:
+<o>
+4
+</o>
+<reason>
+The video shows a person running on a beach, which closely matches the description of "a person jogging by the sea". You can clearly see waves and sand, as well as the person's running motion. The only aspect that doesn't completely match is that the video doesn't show the "sunset" scene mentioned in the description, so I give it 4 points instead of 5.
+</reason>`
+      }
+    ];
+    
+    // Call the Google GenAI API
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: contents,
+      config: {
+        thinkingConfig: {
+          thinkingBudget: 128
+        },
+      },
+    });
+    
+    // Parse the response
+    const analysisText = response.text || '';
+    
+    // Extract score from the response using regex patterns
+    const outputMatch = analysisText.match(/<o>[\s\S]*?([0-5])[\s\S]*?<\/o>/);
+    let score = 0;
+    let matches = false;
+    
+    if (outputMatch) {
+      score = parseInt(outputMatch[1].trim());
+      matches = (score >= 1);
+    } else {
+      // Fallback pattern: look for any 0-5 digits in <o> tags
+      const fallbackMatch = analysisText.match(/<o>.*?([0-5])[\s\.].*?<\/o>/s);
+      if (fallbackMatch) {
+        score = parseInt(fallbackMatch[1].trim());
+        matches = (score >= 1);
+      } else {
+        // Last attempt: search for score-related patterns in the entire response
+        const numberMatch = analysisText.match(/score.*?([0-5])[\s\.]/i);
+        if (numberMatch) {
+          score = parseInt(numberMatch[1].trim());
+          matches = (score >= 1);
+        }
+      }
+    }
+    
+    // Extract reasoning with improved robustness
+    const reasonMatch = analysisText.match(/<reason>([\s\S]*?)<\/reason>/);
+    let explanation = '';
+    if (reasonMatch) {
+      explanation = reasonMatch[1].trim();
+    } else {
+      explanation = analysisText.replace(/<o>[\s\S]*?<\/o>/g, '').trim();
+    }
+
+    return {
+      matches,
+      score,
+      confidence: score / 5.0,
+      explanation,
+      fullResponse: analysisText
+    };
+  } catch (error) {
+    console.error(`Error analyzing video with Gemini: ${error}`);
+    return {
+      matches: false,
+      score: 0,
+      confidence: 0,
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
+// New function to validate videos against text description with configurable model
+async function validateVideos(videosWithScores: [string, number][], textDescription: string, useNova = false): Promise<ValidationResult[]> {
   
   // 并行处理所有视频片段
   const resultsPromises = videosWithScores.map(async ([s3Path, score]) => {
     try {
-      // Download the video segment from S3
-      const tempVideoPath = await downloadVideoFromS3(s3Path);
+      let analysisResult;
       
-      // Extract frames from the video segment
-      const frames = await extractFramesFromVideo(tempVideoPath);
-      
-      // Analyze the frames with Qwen
-      const analysisResult = await analyzeFramesWithQwen(frames, textDescription);
-      
-      // Clean up temporary file
-      try {
-        fs.unlinkSync(tempVideoPath);
-        console.log(`Cleaned up temporary file: ${tempVideoPath}`);
-      } catch (cleanupError) {
-        console.warn(`Failed to clean up temporary file ${tempVideoPath}:`, cleanupError);
+      if (useNova) {
+        // Use Nova with direct S3 access (no download needed)
+        analysisResult = await analyzeVideoWithNova(s3Path, textDescription);
+      } else {
+        // Use Gemini (still needs to download video file)
+        const tempVideoPath = await downloadVideoFromS3(s3Path);
+        
+        try {
+          analysisResult = await analyzeVideoWithGemini(tempVideoPath, textDescription);
+        } finally {
+          // Clean up temporary file
+          try {
+            fs.unlinkSync(tempVideoPath);
+            console.log(`Cleaned up temporary file: ${tempVideoPath}`);
+          } catch (cleanupError) {
+            console.warn(`Failed to clean up temporary file ${tempVideoPath}:`, cleanupError);
+          }
+        }
       }
       
       return {
         videoPath: s3Path,
         originalScore: score,
-        framesAnalyzed: frames.length,
+        framesAnalyzed: 0, // No longer extracting frames for Nova
         matchesDescription: analysisResult.matches || false,
         matchScore: analysisResult.score || 0,
         matchConfidence: analysisResult.confidence || 0,
@@ -1111,10 +1018,14 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
                 .slice(0, maxSegmentsToValidate);
               // print segmentsToValidate
               console.log('Segments to validate:', segmentsToValidate);
-              // Validate against the search query text
+              // Validate against the search query text using configured model
+              const useNova = VALIDATION_MODEL === 'nova';
+              console.log(`Using ${useNova ? 'Nova' : 'Gemini'} for video validation (VALIDATION_MODEL=${VALIDATION_MODEL})`);
+              
               const validationResults = await validateVideos(
                 segmentsToValidate,
-                searchQuery.searchQuery
+                searchQuery.searchQuery,
+                useNova
               );
               // print validationResults
               console.log('Validation results:', validationResults);

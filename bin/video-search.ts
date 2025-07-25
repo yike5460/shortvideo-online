@@ -15,6 +15,8 @@ new VideoSearchStack(app, 'VideoSearchStack', {
   externalVideoUnderstandingEndpoint: app.node.tryGetContext('externalVideoUnderstandingEndpoint') || process.env.EXTERNAL_UNDERSTANDING_ENDPOINT || '',
   appDomain: app.node.tryGetContext('appDomain') || process.env.APP_DOMAIN,
   siliconflowApiKey: app.node.tryGetContext('siliconflowApiKey') || process.env.SILICONFLOW_API_KEY || '',
+  googleApiKey: app.node.tryGetContext('googleApiKey') || process.env.GOOGLE_API_KEY || '',
+  validationModel: app.node.tryGetContext('validationModel') || process.env.VALIDATION_MODEL || ''
 });
 
 app.synth();
