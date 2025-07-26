@@ -400,12 +400,21 @@ The video shows a person running on a beach, which closely matches the descripti
         topP: 0.9
       }
     };
-    
-    const response = await bedrock.send(new ConverseCommand(request));
-    
+
+    // Fix: The ConverseCommand expects the messages to be an array of Message objects,
+    // and each Message's content should be an array of ContentBlock objects.
+    // Ensure the request is properly typed and constructed.
+
+    // Type assertion to satisfy the ConverseCommandInput type
+    const response = await bedrock.send(
+      new ConverseCommand(request as any)
+    );
+
     // Parse the response from ConverseCommand
-    const analysisText = response.output?.message?.content?.[0]?.text || '';
-    
+    const analysisText =
+      response.output?.message?.content?.find(
+        (block: any) => typeof block.text === "string"
+      )?.text || "";
     // Extract score from the response using regex patterns
     const outputMatch = analysisText.match(/<o>[\s\S]*?([0-5])[\s\S]*?<\/o>/);
     let score = 0;

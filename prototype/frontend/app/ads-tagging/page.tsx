@@ -401,6 +401,7 @@ interface TagStatistics {
 
 // Define AI models
 const AVAILABLE_MODELS = [
+  { id: 'gemini-2.5-flash', name: 'Google Gemini 2.5 Flash' },
   { id: 'qwen-vl-2.5', name: 'Qwen-VL 2.5' },
   { id: 'nova', name: 'Amazon Nova' }
 ];
@@ -691,7 +692,7 @@ export default function AdsTaggingPage() {
   const [errorMessage, setErrorMessage] = useState<string>('')
   const [isDropdownOpen, setIsDropdownOpen] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
-  const [selectedModel] = useState<string>('qwen-vl-2.5')
+  const [selectedModel, setSelectedModel] = useState<string>('gemini-2.5-flash')
   const videoRef = useRef<HTMLVideoElement>(null)
   const [isVideoModalOpen, setIsVideoModalOpen] = useState(false)
   const [tags, setTags] = useState<VideoTag[]>([])
@@ -2199,8 +2200,25 @@ export default function AdsTaggingPage() {
                                       <span className="text-purple-800 text-sm font-medium">{videoSegments.length} segments</span>
                                     </div>
                                   </div>
-                                  <div className="text-gray-700 text-sm font-medium">
-                                    Duration: {selectedVideo?.duration || '00:00'}
+                                  <div className="flex items-center space-x-4">
+                                    {/* AI Model Selection */}
+                                    <div className="flex items-center space-x-2">
+                                      <span className="text-gray-700 text-sm font-medium">AI Model:</span>
+                                      <select
+                                        value={selectedModel}
+                                        onChange={(e) => setSelectedModel(e.target.value)}
+                                        className="text-sm border border-gray-300 rounded-md px-3 py-1 bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
+                                      >
+                                        {AVAILABLE_MODELS.map((model) => (
+                                          <option key={model.id} value={model.id}>
+                                            {model.name}
+                                          </option>
+                                        ))}
+                                      </select>
+                                    </div>
+                                    <div className="text-gray-700 text-sm font-medium">
+                                      Duration: {selectedVideo?.duration || '00:00'}
+                                    </div>
                                   </div>
                                 </div>
                                 

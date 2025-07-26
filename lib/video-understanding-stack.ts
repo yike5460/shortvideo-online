@@ -20,6 +20,7 @@ export interface VideoUnderstandingProps {
   indexesTable: dynamodb.Table;
   deploymentEnvironment: string;
   externalVideoUnderstandingEndpoint?: string;
+  googleApiKey?: string;
 }
 
 export class VideoUnderstandingStack extends Construct {
@@ -97,6 +98,8 @@ export class VideoUnderstandingStack extends Construct {
         NOVA_MODEL_ID: 'apac.amazon.nova-pro-v1:0',
         // External video understanding endpoint (Qwen-VL)
         EXTERNAL_VIDEO_UNDERSTANDING_ENDPOINT: props.externalVideoUnderstandingEndpoint || '',
+        // Google API key for Gemini
+        GOOGLE_API_KEY: props.googleApiKey || '',
         // SQS queue URL for async processing
         PROCESSING_QUEUE_URL: processingQueue.queueUrl,
       },

@@ -1762,7 +1762,8 @@ export class VideoSearchStack extends cdk.Stack {
       openSearchEndpoint: `https://${this.openSearchCollection.attrId}.${this.region}.aoss.amazonaws.com`,
       indexesTable: this.indexesTable,
       deploymentEnvironment: deploymentEnv,
-      externalVideoUnderstandingEndpoint: this.externalVideoUnderstandingEndpoint || ''
+      externalVideoUnderstandingEndpoint: this.externalVideoUnderstandingEndpoint || '',
+      googleApiKey: this.googleApiKey || ''
     });
   }
   
