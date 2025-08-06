@@ -45,11 +45,28 @@ restart_docker_service() {
 # Run performance benchmark
 echo "[$(date)] Starting performance benchmark..." | tee -a $LOG_FILE
 
+# Set up Python environment
+# Use the miniconda Python which has all required modules installed
+PYTHON_PATH="/home/ec2-user/miniconda/bin/python"
+
+# Make sure PATH includes necessary directories
+export PATH="/home/ec2-user/miniconda/bin:/opt/pytorch/bin:$PATH"
+
 # Change to script directory
 cd /home/ec2-user/shortvideo-online/src/scripts/
 
+# Check if required modules are installed
+echo "[$(date)] Checking Python environment..." | tee -a $LOG_FILE
+$PYTHON_PATH -c "import sys; print(f'Using Python: {sys.executable}, version: {sys.version}')" | tee -a $LOG_FILE
+
+# Ensure requests module is available
+if ! $PYTHON_PATH -c "import requests" 2>/dev/null; then
+    echo "[$(date)] Installing missing requests module..." | tee -a $LOG_FILE
+    $PYTHON_PATH -m pip install requests boto3 matplotlib numpy pillow psutil 2>&1 | tee -a $LOG_FILE
+fi
+
 # Save output to a temporary log file
-python performance_benchmark.py 2>&1 | tee -a $LOG_FILE
+$PYTHON_PATH performance_benchmark.py --text-only 2>&1 | tee -a $LOG_FILE
 
 # Check exit status of performance script
 if [ $? -eq 0 ]; then
