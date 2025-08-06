@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Performance Check Every 2 Hours
+Requires=performance-check.service
+
+[Timer]
+Unit=performance-check.service
+OnBootSec=5min
+OnUnitActiveSec=2h
+
+[Install]
+WantedBy=timers.target

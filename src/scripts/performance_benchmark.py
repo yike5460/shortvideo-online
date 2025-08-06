@@ -57,14 +57,19 @@ TEXT_LENGTHS = [10, 50, 100]  # For input size testing
 # Test video samples
 TEST_VIDEOS = [
     {
-        "name": "Snail Video",
+        "name": "Nature Video 01",
         "bucket": "video-search-dev-ap-northeast-1",
-        "key": "RawVideos/2025-03-05/ada/01688a94-fc0b-482d-83f6-3b6f7bb81e7c/Snail.mp4"
+        "key": "RawVideos/2025-06-02/nature/3ad1c377-1be5-4ebb-aef2-4c13fa93dbdc/nature-01.mp4"
     },
     {
-        "name": "黑神话-神笔马良",
+        "name": "Beach Video",
         "bucket": "video-search-dev-ap-northeast-1",
-        "key": "RawVideos/2025-03-05/kyiamzn/035ac4bb-bc4e-4d37-b1ab-58ad6c09a00d/黑神话-神笔马良.mp4"
+        "key": "RawVideos/2025-06-03/debugging/bf3288b8-af11-4b61-b8b3-0b23b2e57695/Beach.mp4"
+    },
+    {
+        "name": "EMD Tutorial",
+        "bucket": "video-search-dev-ap-northeast-1",
+        "key": "RawVideos/2025-05-21/broadcast/57f8a3fe-774c-471e-9926-1016e82d5dc7/Easy_Model_Deployer介绍.mp4"
     }
 ]
 

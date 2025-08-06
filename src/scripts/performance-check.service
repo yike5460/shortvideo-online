@@ -1,0 +1,12 @@
+[Unit]
+Description=Video Embedding Service Performance Check
+After=network.target
+
+[Service]
+Type=oneshot
+User=ec2-user
+ExecStart=/home/ec2-user/shortvideo-online/src/scripts/run_performance_check.sh
+WorkingDirectory=/home/ec2-user/shortvideo-online/src/scripts/
+
+[Install]
+WantedBy=multi-user.target
