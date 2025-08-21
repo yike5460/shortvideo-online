@@ -687,6 +687,7 @@ export class VideoSearchStack extends cdk.Stack {
       entry: 'src/lambdas/video-slice/index.ts',
       handler: 'handler',
       memorySize: 4096,
+      ephemeralStorageSize: cdk.Size.gibibytes(10), // Increase ephemeral storage to 10GB
       // Add the FFmpeg layer
       layers: [this.ffmpegLayer],
       depsLockFilePath: 'src/lambdas/video-slice/package-lock.json'
