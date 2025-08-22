@@ -20,8 +20,14 @@ export interface VideoMetadata {
   created_at?: string;              // ISO timestamp
   updated_at?: string;              // ISO timestamp
   error?: string;                   // Error message if processing failed
+  message?: string;                 // Status message for processing updates
   segment_count?: number;           // Number of detected segments
   job_id?: string;                  // Job ID for the video processing
+  
+  // Video conversion fields
+  converted_video_s3_path?: string; // S3 path to H.264 converted video if conversion was needed
+  original_codec?: string;          // Original video codec before conversion
+  conversion_status?: string;       // Status of video conversion process
   
   is_merged?: boolean;              // Flag to identify if this is a merged video
   merged_name?: string;             // Original custom name for merged videos

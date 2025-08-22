@@ -686,7 +686,8 @@ export class VideoSearchStack extends cdk.Stack {
       ...commonLambdaProps,
       entry: 'src/lambdas/video-slice/index.ts',
       handler: 'handler',
-      memorySize: 4096,
+      // CPU intensive due to FFmpeg processing
+      memorySize: 1024*10,
       ephemeralStorageSize: cdk.Size.gibibytes(10), // Increase ephemeral storage to 10GB
       // Add the FFmpeg layer
       layers: [this.ffmpegLayer],

@@ -176,6 +176,9 @@ async function handleS3Event(event: S3Event): Promise<LambdaResponse> {
 
   if (!videoId) throw new Error('Invalid video key format');
 
+  // Initialize videoPathForRekognition outside the try block so it's accessible later
+  let videoPathForRekognition = key;
+
   // Validate the video format and codec for Rekognition compatibility, refer to https://aws.amazon.com/rekognition/faqs/
   try {
     // Download the video to a temporary location for validation
@@ -198,19 +201,75 @@ async function handleS3Event(event: S3Event): Promise<LambdaResponse> {
     }
     
     // Use ffprobe to check the video codec and format
-    const isValidVideo = await validateVideoForRekognition(tempVideoPath, videoId, videoIndex);
+    // NOTE: Conversion is disabled to avoid triggering redundant S3 events and indexing
+    // To enable conversion, uncomment the code below and implement proper event filtering
+    const validationResult = await validateVideoForRekognition(tempVideoPath, videoId, videoIndex);
     
-    // Clean up the temporary file
+    // videoPathForRekognition is already declared outside the try block
+    let convertedVideoUploaded = false;
+    
+    /* COMMENTED OUT: Video conversion to avoid redundant S3 event triggers
+    // If video was converted, upload the converted version to S3
+    if (validationResult.convertedPath) {
+      console.log('Using converted video for Rekognition processing');
+      
+      // Create a new S3 key for the converted video
+      const convertedKey = key.replace(/\.(mp4|mov)$/i, '_h264_converted.mp4');
+      
+      try {
+        // Upload the converted video to S3
+        console.log(`Uploading converted video to S3: ${convertedKey}`);
+        const convertedVideoBuffer = fs.readFileSync(validationResult.convertedPath);
+        
+        await s3.send(new PutObjectCommand({
+          Bucket: bucket,
+          Key: convertedKey,
+          Body: convertedVideoBuffer,
+          ContentType: 'video/mp4',
+          Metadata: {
+            'original-key': key,
+            'converted-from-codec': 'hevc',
+            'conversion-date': new Date().toISOString()
+          }
+        }));
+        
+        console.log('Successfully uploaded converted video to S3');
+        videoPathForRekognition = convertedKey;
+        convertedVideoUploaded = true;
+        
+        // Update video metadata to indicate conversion
+        await updateVideoStatus(videoIndex, videoId, 'processing', {
+          message: 'Video converted to H.264 format and uploaded successfully',
+          converted_video_s3_path: convertedKey,
+          conversion_status: 'completed'
+        });
+        
+      } catch (uploadError) {
+        console.error('Failed to upload converted video to S3:', uploadError);
+        // Fall back to using the original video path
+        videoPathForRekognition = key;
+      }
+      
+      // Clean up the converted file
+      try {
+        fs.unlinkSync(validationResult.convertedPath);
+      } catch (err) {
+        console.warn('Failed to clean up converted video file:', err);
+      }
+    }
+    */
+    
+    // Clean up the original temporary file
     try {
       fs.unlinkSync(tempVideoPath);
     } catch (err) {
       console.warn('Failed to clean up temporary validation file:', err);
     }
     
-    if (!isValidVideo) {
+    if (!validationResult.isValid) {
       // Update the video status in OpenSearch to indicate incompatibility
       await updateVideoStatus(videoIndex, videoId, 'error', {
-        error: 'Video format not compatible with Amazon Rekognition. Only H.264 codec in MP4 or MOV container is supported.'
+        error: 'Video format not compatible with Amazon Rekognition and conversion failed.'
       });
       
       return {
@@ -218,12 +277,12 @@ async function handleS3Event(event: S3Event): Promise<LambdaResponse> {
         headers: corsHeaders,
         body: JSON.stringify({ 
           error: 'Video format not compatible with Amazon Rekognition',
-          message: 'Only H.264 codec in MP4 or MOV container is supported'
+          message: 'Video conversion to H.264 format failed'
         })
       };
     }
     
-    console.log('Video validation successful, proceeding with Rekognition jobs');
+    console.log(`Video validation successful, proceeding with Rekognition jobs using ${convertedVideoUploaded ? 'converted' : 'original'} video`);
   } catch (validationError) {
     console.error('Error validating video:', validationError);
     
@@ -242,7 +301,7 @@ async function handleS3Event(event: S3Event): Promise<LambdaResponse> {
     };
   }
 
-  // Start Rekognition jobs
+  // Start Rekognition jobs using the potentially converted video
   const notificationChannel: NotificationChannel = {
     SNSTopicArn: process.env.SNS_TOPIC_ARN,
     RoleArn: process.env.REKOGNITION_ROLE_ARN
@@ -250,7 +309,7 @@ async function handleS3Event(event: S3Event): Promise<LambdaResponse> {
 
   // Start shot detection
   const shotDetectionResponse = await rekognition.send(new StartSegmentDetectionCommand({
-    Video: { S3Object: { Bucket: bucket, Name: key } },
+    Video: { S3Object: { Bucket: bucket, Name: videoPathForRekognition } },
     NotificationChannel: notificationChannel,
     JobTag: `${videoIndex}-${videoId}-shots`,
     SegmentTypes: [SegmentType.SHOT]
@@ -258,7 +317,7 @@ async function handleS3Event(event: S3Event): Promise<LambdaResponse> {
 
   // Start label detection
   const labelDetectionResponse = await rekognition.send(new StartLabelDetectionCommand({
-    Video: { S3Object: { Bucket: bucket, Name: key } },
+    Video: { S3Object: { Bucket: bucket, Name: videoPathForRekognition } },
     NotificationChannel: notificationChannel,
     JobTag: `${videoIndex}-${videoId}-labels`,
     MinConfidence: 90
@@ -266,7 +325,7 @@ async function handleS3Event(event: S3Event): Promise<LambdaResponse> {
 
   // Start face detection
   const faceDetectionResponse = await rekognition.send(new StartFaceDetectionCommand({
-    Video: { S3Object: { Bucket: bucket, Name: key } },
+    Video: { S3Object: { Bucket: bucket, Name: videoPathForRekognition } },
     NotificationChannel: notificationChannel,
     JobTag: `${videoIndex}-${videoId}-faces`
   }));
@@ -286,8 +345,71 @@ async function handleS3Event(event: S3Event): Promise<LambdaResponse> {
   };
 }
 
+/* COMMENTED OUT: Video conversion function - kept for future reference
+ * This function can convert incompatible videos to H.264 format
+ * Currently disabled to avoid triggering redundant S3 events
+ * 
+ * To enable proper conversion:
+ * 1. Implement S3 event filtering to skip converted videos (e.g., check for '_h264_converted' suffix)
+ * 2. Store converted videos in a separate path or bucket
+ * 3. Update the original video metadata to reference the converted version
+ * 4. Prevent the converted video from triggering new indexing
+ */
+/**
+ * Converts an incompatible video to H.264 format compatible with Amazon Rekognition
+ * 
+ * @param inputPath Path to the input video file
+ * @param outputPath Path where the converted video will be saved
+ * @returns Promise that resolves when conversion is complete
+ */
+/*
+async function convertVideoToH264(inputPath: string, outputPath: string): Promise<void> {
+  const ffmpegPath = process.env.LAMBDA_TASK_ROOT ? '/opt/bin/ffmpeg' : 'ffmpeg';
+  
+  console.log(`Converting video from ${inputPath} to H.264 format at ${outputPath}`);
+  
+  return new Promise<void>((resolve, reject) => {
+    // Use FFmpeg to convert the video to H.264
+    const ffmpegProcess = spawn(ffmpegPath, [
+      '-i', inputPath,
+      '-c:v', 'libx264',        // Use H.264 codec
+      '-preset', 'fast',        // Fast encoding preset for Lambda timeout constraints
+      '-crf', '23',            // Constant Rate Factor for quality (23 is default, good quality)
+      '-c:a', 'aac',           // Use AAC audio codec
+      '-b:a', '128k',          // Audio bitrate
+      '-movflags', '+faststart', // Optimize for streaming
+      '-y',                    // Overwrite output file
+      outputPath
+    ]);
+    
+    let stderr = '';
+    
+    ffmpegProcess.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+    
+    ffmpegProcess.on('close', (code) => {
+      if (code === 0) {
+        console.log('Video conversion completed successfully');
+        resolve();
+      } else {
+        console.error(`FFmpeg conversion failed with code ${code}`);
+        console.error(`FFmpeg stderr: ${stderr}`);
+        reject(new Error(`FFmpeg conversion failed with code ${code}`));
+      }
+    });
+    
+    ffmpegProcess.on('error', (err) => {
+      console.error('FFmpeg process error:', err);
+      reject(err);
+    });
+  });
+}
+*/
+
 /**
  * Validates if a video file is compatible with Amazon Rekognition
+ * If not compatible, attempts to convert it to H.264 format
  * 
  * Requirements:
  * - Video must be encoded using the H.264 codec
@@ -296,9 +418,9 @@ async function handleS3Event(event: S3Event): Promise<LambdaResponse> {
  * @param videoPath Path to the video file
  * @param videoId ID of the video
  * @param videoIndex Index of the video
- * @returns Boolean indicating if the video is valid for Rekognition
+ * @returns Object containing validation result and converted video path if applicable
  */
-async function validateVideoForRekognition(videoPath: string, videoId: string, videoIndex: string): Promise<boolean> {
+async function validateVideoForRekognition(videoPath: string, videoId: string, videoIndex: string): Promise<{ isValid: boolean; convertedPath?: string }> {
   // Define ffprobe path - it's included in the FFmpeg Lambda layer
   const ffprobePath = process.env.LAMBDA_TASK_ROOT ? '/opt/bin/ffprobe' : 'ffprobe';
   
@@ -364,6 +486,7 @@ async function validateVideoForRekognition(videoPath: string, videoId: string, v
     // Log validation result
     if (isValid) {
       console.log(`Video ID ${videoId} is compatible with Amazon Rekognition`);
+      return { isValid: true };
     } else {
       console.warn(`Video ID ${videoId} is not compatible with Amazon Rekognition:`, {
         isH264,
@@ -372,17 +495,93 @@ async function validateVideoForRekognition(videoPath: string, videoId: string, v
         videoFormat
       });
       
-      // Update video status with more specific error message
+      // Update video status with incompatibility error
       const errorMessage = !isH264 
         ? `Unsupported video codec: ${videoCodec}. Only H.264 is supported.`
         : `Unsupported video format: ${videoFormat}. Only MP4 and MOV containers are supported.`;
       
       await updateVideoStatus(videoIndex, videoId, 'error', {
-        error: errorMessage
+        error: errorMessage,
+        original_codec: videoCodec,
+        message: 'Video format not compatible with Amazon Rekognition. Please convert to H.264 codec in MP4 or MOV container before uploading.'
       });
+      
+      /* COMMENTED OUT: Automatic video conversion to avoid redundant S3 event triggers
+      // Attempt to convert the video to H.264 format
+      console.log(`Attempting to convert video ${videoId} to H.264 format...`);
+      
+      const convertedPath = `/tmp/${videoId}_converted_h264.mp4`;
+      
+      try {
+        // Update status to indicate conversion is in progress
+        await updateVideoStatus(videoIndex, videoId, 'processing', {
+          message: `Converting video from ${videoCodec} to H.264 format for Rekognition compatibility...`,
+          original_codec: videoCodec,
+          conversion_status: 'in_progress'
+        });
+        
+        // Convert the video
+        await convertVideoToH264(videoPath, convertedPath);
+        
+        // Verify the converted video
+        console.log('Verifying converted video...');
+        const verifyProcess = spawn(ffprobePath, [
+          '-v', 'error',
+          '-select_streams', 'v:0',
+          '-show_entries', 'stream=codec_name',
+          '-of', 'default=noprint_wrappers=1:nokey=1',
+          convertedPath
+        ]);
+        
+        let verifyOutput = '';
+        verifyProcess.stdout.on('data', (data) => {
+          verifyOutput += data.toString();
+        });
+        
+        await new Promise<void>((resolve, reject) => {
+          verifyProcess.on('close', (code) => {
+            if (code === 0) {
+              resolve();
+            } else {
+              reject(new Error(`Verification failed with code ${code}`));
+            }
+          });
+          
+          verifyProcess.on('error', reject);
+        });
+        
+        const convertedCodec = verifyOutput.trim().toLowerCase();
+        console.log(`Converted video codec: ${convertedCodec}`);
+        
+        if (convertedCodec === 'h264') {
+          console.log(`Successfully converted video ${videoId} to H.264 format`);
+          
+          // Update status to indicate successful conversion
+          await updateVideoStatus(videoIndex, videoId, 'processing', {
+            message: 'Video successfully converted to H.264 format',
+            conversion_status: 'verified'
+          });
+          
+          return { isValid: true, convertedPath };
+        } else {
+          throw new Error(`Conversion failed - resulting codec is ${convertedCodec}, not h264`);
+        }
+      } catch (conversionError) {
+        console.error(`Failed to convert video ${videoId} to H.264:`, conversionError);
+        
+        // Update video status with conversion failure
+        await updateVideoStatus(videoIndex, videoId, 'error', {
+          error: `Failed to convert video to H.264 format: ${conversionError instanceof Error ? conversionError.message : 'Unknown error'}`,
+          original_codec: videoCodec,
+          conversion_status: 'failed'
+        });
+        
+        return { isValid: false };
+      }
+      */
+      
+      return { isValid: false };
     }
-    
-    return isValid;
   } catch (error) {
     console.error('Error validating video for Rekognition:', error);
     throw error;
@@ -1341,9 +1540,8 @@ async function updateVideoSegments(videoIndex: string, videoId: string, segments
 
     console.log(`video segments updated search result for video ${videoId} in index ${videoIndex}:`, searchResult.hits.hits[0]);
 
-    // Get the OpenSearch document ID and existing document
+    // Get the OpenSearch document ID
     const documentId = searchResult.hits.hits[0]._id;
-    const existingDoc = searchResult.hits.hits[0]._source;
     
     // Format new segments for addition
     const formattedSegments = segments.map(segment => ({

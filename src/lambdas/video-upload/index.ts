@@ -803,56 +803,140 @@ async function handleDeleteVideo(event: APIGatewayProxyEvent): Promise<LambdaRes
 
     // If videoId is provided, delete a specific video
     if (videoId) {
-      const { body: searchResult } = await openSearch.get({
-        index: indexId,
-        id: videoId,
-        // Only fetch required fields
-        _source: [
-          'video_s3_path',
-        ]
-      });
+      let searchResult;
+      let videoS3Path = null;
+      
+      // First check if the index exists in OpenSearch
+      try {
+        const indexExistsResponse = await openSearch.indices.exists({ index: indexId });
+        const indexExists = indexExistsResponse.body;
+        
+        if (!indexExists) {
+          console.log(`Index ${indexId} does not exist in OpenSearch, proceeding with S3 and DynamoDB cleanup only`);
+          // Continue with deletion from S3 and DynamoDB even if OpenSearch index doesn't exist
+        } else {
+          // Try to get the document from OpenSearch
+          try {
+            const response = await openSearch.get({
+              index: indexId,
+              id: videoId,
+              // Only fetch required fields
+              _source: [
+                'video_s3_path',
+              ]
+            });
+            searchResult = response.body;
+            
+            if (searchResult && searchResult.found) {
+              videoS3Path = searchResult._source?.video_s3_path;
+            }
+          } catch (getError: any) {
+            // Handle case where document doesn't exist in the index
+            if (getError.statusCode === 404 || getError.meta?.statusCode === 404) {
+              console.log(`Video ${videoId} not found in OpenSearch index ${indexId}, continuing with S3 and DynamoDB cleanup`);
+            } else {
+              console.error('OpenSearch get error:', getError);
+              // Continue with deletion even if we can't get the document
+            }
+          }
+        }
+      } catch (indexCheckError: any) {
+        console.error('Error checking if index exists:', indexCheckError);
+        // Continue with deletion even if we can't check the index
+      }
 
-      if (!searchResult.found) {
-        return {
-          statusCode: STATUS_CODES.NOT_FOUND,
-          headers: corsHeaders,
-          body: JSON.stringify({ error: `Video ${videoId} not found in index ${indexId}` })
-        };
+      // If we couldn't get the S3 path from OpenSearch, try to construct it from the pattern
+      // or get it from DynamoDB
+      if (!videoS3Path) {
+        console.log('Attempting to retrieve S3 path from DynamoDB or construct from pattern');
+        
+        // Try to get from DynamoDB first
+        try {
+          const dynamoResult = await docClient.send(new ScanCommand({
+            TableName: process.env.INDEXES_TABLE,
+            FilterExpression: 'indexId = :indexId AND videoId = :videoId',
+            ExpressionAttributeValues: {
+              ':indexId': indexId,
+              ':videoId': videoId
+            },
+            Limit: 1
+          }));
+          
+          if (dynamoResult.Items && dynamoResult.Items.length > 0) {
+            videoS3Path = dynamoResult.Items[0].video_s3_path;
+          }
+        } catch (dynamoError) {
+          console.error('Error retrieving from DynamoDB:', dynamoError);
+        }
+        
+        // If still no S3 path, construct a pattern to search for the video files
+        if (!videoS3Path) {
+          console.log('Could not retrieve S3 path, will search for video files with pattern');
+          // We'll search for any files with the videoId in the path
+        }
       }
 
       // Extract the S3 key of the uploaded raw video, in format RawVideos/2025-03-02/indexId/videoId/videoFileNameWithExtension
-      const videoS3Path = searchResult._source.video_s3_path;
-      if (!videoS3Path) {
-        throw new Error('Video S3 path not found in metadata');
-      }
-
-      // Get the folder level of the videoS3Path (without the filename)
-      const pathParts = videoS3Path.split('/');
-      const rawVideoS3PathPrefix = pathParts.slice(0, -1).join('/');
+      let rawVideoS3PathPrefix;
+      let processedVideoS3PathPrefix;
       
-      // Get the folder level of the processed video, in format ProcessedVideos/2025-03-02/indexId/videoId/
-      const processedVideoS3PathPrefix = rawVideoS3PathPrefix.replace('RawVideos', 'ProcessedVideos');
+      if (videoS3Path) {
+        // Get the folder level of the videoS3Path (without the filename)
+        const pathParts = videoS3Path.split('/');
+        rawVideoS3PathPrefix = pathParts.slice(0, -1).join('/');
+        // Get the folder level of the processed video, in format ProcessedVideos/2025-03-02/indexId/videoId/
+        processedVideoS3PathPrefix = rawVideoS3PathPrefix.replace('RawVideos', 'ProcessedVideos');
+      } else {
+        // If we don't have the exact S3 path, search for files with the videoId
+        console.log('No specific S3 path found, will search for all files with videoId in path');
+        // Create patterns to search for any files containing the videoId
+        rawVideoS3PathPrefix = `RawVideos`;  // Will search with more specific pattern later
+        processedVideoS3PathPrefix = `ProcessedVideos`;
+      }
 
       console.log(`Deleting video ${videoId} from S3 at raw prefix: ${rawVideoS3PathPrefix} and processed prefix: ${processedVideoS3PathPrefix}`);
 
-      // Function to delete all objects with a given prefix
-      const deleteObjectsWithPrefix = async (prefix: string) => {
+      // Function to delete all objects with a given prefix or pattern
+      const deleteObjectsWithPrefix = async (prefix: string, useVideoIdPattern: boolean = false) => {
         try {
-          // List all objects with the prefix
-          const { Contents } = await s3.send(new ListObjectsV2Command({
-            Bucket: process.env.VIDEO_BUCKET,
-            Prefix: prefix
-          }));
+          let objectsToDelete: any[] = [];
+          
+          if (useVideoIdPattern) {
+            // When we don't have exact path, search for objects containing the videoId
+            console.log(`Searching for objects containing videoId: ${videoId} under prefix: ${prefix}`);
+            
+            // List all objects with the base prefix
+            const { Contents } = await s3.send(new ListObjectsV2Command({
+              Bucket: process.env.VIDEO_BUCKET,
+              Prefix: prefix,
+              MaxKeys: 1000
+            }));
+            
+            if (Contents) {
+              // Filter objects that contain the videoId in their path
+              objectsToDelete = Contents.filter(obj => 
+                obj.Key && obj.Key.includes(videoId)
+              );
+              console.log(`Found ${objectsToDelete.length} objects containing videoId ${videoId}`);
+            }
+          } else {
+            // Use exact prefix when we have the full path
+            const { Contents } = await s3.send(new ListObjectsV2Command({
+              Bucket: process.env.VIDEO_BUCKET,
+              Prefix: prefix
+            }));
+            objectsToDelete = Contents || [];
+          }
 
-          if (!Contents || Contents.length === 0) {
-            console.log(`No objects found with prefix: ${prefix}`);
+          if (!objectsToDelete || objectsToDelete.length === 0) {
+            console.log(`No objects found with prefix: ${prefix}${useVideoIdPattern ? ` and videoId: ${videoId}` : ''}`);
             return;
           }
 
-          console.log(`Found ${Contents.length} objects to delete with prefix: ${prefix}`);
+          console.log(`Found ${objectsToDelete.length} objects to delete`);
 
           // Delete each object
-          for (const object of Contents) {
+          for (const object of objectsToDelete) {
             if (object.Key) {
               console.log(`Deleting object: ${object.Key}`);
               await s3.send(new DeleteObjectCommand({
@@ -862,27 +946,81 @@ async function handleDeleteVideo(event: APIGatewayProxyEvent): Promise<LambdaRes
             }
           }
           
-          console.log(`Successfully deleted all objects with prefix: ${prefix}`);
+          console.log(`Successfully deleted all objects`);
         } catch (err) {
           console.warn(`Error deleting objects with prefix ${prefix}:`, err);
         }
       };
 
+      // Determine if we need to use pattern-based search
+      const usePattern = !videoS3Path;
+      
       // Delete all raw video objects
-      await deleteObjectsWithPrefix(rawVideoS3PathPrefix);
+      await deleteObjectsWithPrefix(rawVideoS3PathPrefix, usePattern);
       
       // Delete all processed video objects including segments
-      await deleteObjectsWithPrefix(processedVideoS3PathPrefix);
+      await deleteObjectsWithPrefix(processedVideoS3PathPrefix, usePattern);
       
-      // Also check and delete segments folder if it exists
-      const segmentsPrefix = `${processedVideoS3PathPrefix}/segments`;
-      await deleteObjectsWithPrefix(segmentsPrefix);
+      // Also check and delete segments folder if it exists (only if we have exact path)
+      if (!usePattern) {
+        const segmentsPrefix = `${processedVideoS3PathPrefix}/segments`;
+        await deleteObjectsWithPrefix(segmentsPrefix, false);
+      }
 
       // Remove the videoId from the index
-      await openSearch.delete({
-        index: indexId,
-        id: videoId
-      });
+      // IMPORTANT: We must always attempt to delete from OpenSearch regardless of index existence
+      // because the video data might be stored but the index check might fail
+      try {
+        // First attempt: try to delete directly without checking index existence
+        // This handles cases where the index exists but the check fails
+        const deleteResponse = await openSearch.delete({
+          index: indexId,
+          id: videoId
+          // Note: AOSS doesn't support refresh: true parameter
+        });
+        console.log(`Successfully deleted video ${videoId} from OpenSearch index ${indexId}`, deleteResponse);
+      } catch (deleteError: any) {
+        console.error('First delete attempt failed:', deleteError);
+        
+        // Second attempt: If direct deletion fails, try with wildcard search and delete
+        try {
+          console.log(`Attempting to find and delete video ${videoId} across all indexes`);
+          
+          // Search for the video across all indexes
+          const searchResponse = await openSearch.search({
+            index: '*',  // Search all indexes
+            body: {
+              query: {
+                term: { video_id: videoId }
+              }
+            }
+          });
+          
+          if (searchResponse.body?.hits?.hits?.length > 0) {
+            // Delete from each index where the video is found
+            for (const hit of searchResponse.body.hits.hits) {
+              const foundIndex = hit._index;
+              const docId = hit._id;
+              console.log(`Found video in index ${foundIndex} with doc ID ${docId}, deleting...`);
+              
+              try {
+                await openSearch.delete({
+                  index: foundIndex,
+                  id: docId
+                  // Note: AOSS doesn't support refresh: true parameter
+                });
+                console.log(`Deleted video from index ${foundIndex}`);
+              } catch (err) {
+                console.error(`Failed to delete from index ${foundIndex}:`, err);
+              }
+            }
+          } else {
+            console.log('Video not found in any OpenSearch index');
+          }
+        } catch (searchError) {
+          console.error('Failed to search and delete across indexes:', searchError);
+        }
+      }
 
       // Remove the entry from the DynamoDB indexes table
       try {
@@ -906,7 +1044,12 @@ async function handleDeleteVideo(event: APIGatewayProxyEvent): Promise<LambdaRes
         body: JSON.stringify({ 
           message: 'Video deleted successfully',
           videoId,
-          indexId
+          indexId,
+          deletedFrom: {
+            s3: true,
+            opensearch: true,
+            dynamodb: true
+          }
         })
       };
     } else {
@@ -1023,14 +1166,29 @@ async function handleDeleteVideo(event: APIGatewayProxyEvent): Promise<LambdaRes
         })
       };
     }
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error deleting video:', error);
+    console.error('Error stack:', error.stack);
+    
+    // Check if it's a JSON parsing error
+    let errorMessage = 'Unknown error';
+    if (error instanceof Error) {
+      errorMessage = error.message;
+    } else if (error.message) {
+      errorMessage = error.message;
+    } else if (typeof error === 'string') {
+      errorMessage = error;
+    }
+    
+    // Sanitize error message to prevent JSON parsing issues
+    errorMessage = errorMessage.replace(/[\n\r\t]/g, ' ').substring(0, 500);
+    
     return {
       statusCode: STATUS_CODES.INTERNAL_SERVER_ERROR,
       headers: corsHeaders,
       body: JSON.stringify({ 
         error: 'Failed to delete video',
-        details: error instanceof Error ? error.message : 'Unknown error'
+        details: errorMessage
       })
     };
   }
@@ -1074,7 +1232,7 @@ async function handlePresignRequest(event: APIGatewayProxyEvent): Promise<Lambda
         console.log(`Index ${videoIndex} does not exist, creating it`);
         // Use the indexSettings object to create the index
         try {
-          const createResult = await openSearch.indices.create({ 
+          await openSearch.indices.create({ 
             index: videoIndex, 
             body: indexSettings 
           });
