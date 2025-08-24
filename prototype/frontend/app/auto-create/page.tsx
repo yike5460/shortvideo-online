@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import Script from 'next/script'
 import { useAuth } from '@/lib/auth/AuthContext'
 import CreationForm from './components/CreationForm'
 import ProgressDisplay from './components/ProgressDisplay'

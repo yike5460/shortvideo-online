@@ -7,6 +7,8 @@ import RegisterForm from '@/components/auth/RegisterForm'
 import { useRouter } from 'next/navigation'
 import { motion, AnimatePresence } from 'framer-motion'
 import Image from 'next/image'
+import Script from 'next/script'
+import FAQStructuredData, { defaultFAQs } from '@/components/seo/FAQStructuredData'
 
 function HeartIcon() {
   return (
@@ -33,8 +35,82 @@ export default function LandingPage() {
     return null
   }
 
+  // Structured data for SEO
+  const structuredData = {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "Know Your Moments",
+    "applicationCategory": "VideoApplication",
+    "operatingSystem": "Web",
+    "description": "AI-powered video search and analysis platform that enables users to find exact moments in videos using natural language queries and advanced visual recognition.",
+    "offers": {
+      "@type": "Offer",
+      "price": "0",
+      "priceCurrency": "USD"
+    },
+    "aggregateRating": {
+      "@type": "AggregateRating",
+      "ratingValue": "4.8",
+      "ratingCount": "1250"
+    },
+    "author": {
+      "@type": "Organization",
+      "name": "Know Your Moments",
+      "url": "https://knowyourmoments.com"
+    },
+    "featureList": [
+      "Multimodal Embedding Engine",
+      "Natural Language Video Search", 
+      "Visual Recognition",
+      "Audio Analysis",
+      "Brand Detection",
+      "Emotion Analysis",
+      "Scene Detection",
+      "Automated Video Tagging"
+    ],
+    "screenshot": "https://knowyourmoments.com/images/screenshots/dashboard.png",
+    "softwareVersion": "1.0",
+    "datePublished": "2024-01-01",
+    "dateModified": new Date().toISOString()
+  }
+
+  const organizationSchema = {
+    "@context": "https://schema.org",
+    "@type": "Organization",
+    "name": "Know Your Moments",
+    "url": "https://knowyourmoments.com",
+    "logo": "https://knowyourmoments.com/logo.png",
+    "description": "Revolutionary AI-powered video search and analysis platform",
+    "address": {
+      "@type": "PostalAddress",
+      "addressLocality": "Beijing",
+      "addressCountry": "CN"
+    },
+    "contactPoint": {
+      "@type": "ContactPoint",
+      "email": "support@knowyourmoments.com",
+      "contactType": "customer support"
+    }
+  }
+
   return (
-    <div className="min-h-screen bg-gradient-to-b from-gray-50 to-gray-100">
+    <>
+      <Script
+        id="structured-data-app"
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{
+          __html: JSON.stringify(structuredData),
+        }}
+      />
+      <Script
+        id="structured-data-org"
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{
+          __html: JSON.stringify(organizationSchema),
+        }}
+      />
+      <FAQStructuredData items={defaultFAQs} />
+      <div className="min-h-screen bg-gradient-to-b from-gray-50 to-gray-100">
       {/* Navigation Bar */}
       <nav className="bg-white bg-opacity-95 backdrop-blur-md fixed w-full z-10 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -206,7 +282,7 @@ export default function LandingPage() {
                   <div className="aspect-video relative">
                     <Image 
                       src="/images/thumbnails/video-thumbnail.png" 
-                      alt="Video search demo" 
+                      alt="AI-powered video search demonstration showing multimodal search capabilities and precise moment detection" 
                       width={800} 
                       height={450}
                       className="object-cover w-full h-full"
@@ -237,7 +313,7 @@ export default function LandingPage() {
                         <div className="relative h-10 w-16 flex-shrink-0 rounded overflow-hidden">
                           <Image 
                             src="/images/thumbnails/video-thumbnail-01.png" 
-                            alt="Result thumbnail" 
+                            alt="Video search result thumbnail showing AI-detected product demo segments with timestamps" 
                             fill
                             className="object-cover"
                           />
@@ -630,5 +706,6 @@ export default function LandingPage() {
         </div>
       </footer>
     </div>
+    </>
   )
 }
