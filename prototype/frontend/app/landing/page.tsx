@@ -110,9 +110,9 @@ export default function LandingPage() {
         }}
       />
       <FAQStructuredData items={defaultFAQs} />
-      <div className="min-h-screen bg-gradient-to-b from-gray-50 to-gray-100">
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-indigo-50 to-purple-50 animate-gradient overflow-hidden">
       {/* Navigation Bar */}
-      <nav className="bg-white bg-opacity-95 backdrop-blur-md fixed w-full z-10 shadow-sm">
+      <nav className="bg-white bg-opacity-80 backdrop-blur-xl fixed w-full z-50 shadow-lg border-b border-indigo-100/20">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between h-16">
             <div className="flex items-center">
@@ -120,7 +120,7 @@ export default function LandingPage() {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 transition={{ duration: 0.5 }}
-                className="text-2xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-purple-600"
+                className="text-2xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 animate-gradient text-glow"
               >
                 Know Your Moments
               </motion.div>
@@ -133,7 +133,7 @@ export default function LandingPage() {
                   setActiveTab('login')
                   setShowAuthModal(true)
                 }}
-                className="px-4 py-2 rounded-md text-indigo-600 hover:bg-indigo-50 transition-colors duration-300"
+                className="px-4 py-2 rounded-md text-indigo-600 hover:bg-gradient-to-r hover:from-indigo-50 hover:to-purple-50 transition-all duration-300 hover:scale-105 hover:shadow-md"
               >
                 Sign In
               </motion.button>
@@ -144,7 +144,7 @@ export default function LandingPage() {
                   setActiveTab('register')
                   setShowAuthModal(true)
                 }}
-                className="ml-4 px-4 py-2 rounded-md bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md hover:shadow-lg transition-all duration-300"
+                className="ml-4 px-4 py-2 rounded-md bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 text-white shadow-lg hover:shadow-2xl transition-all duration-300 hover:scale-105 animate-pulse-glow"
               >
                 Get Started
               </motion.button>
@@ -230,9 +230,15 @@ export default function LandingPage() {
                   animate={{ opacity: 1 }}
                   transition={{ delay: 0.2 }}
                 >
-                  <span className="block text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-purple-600">
+                  <motion.span 
+                    className="block text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 animate-gradient text-glow"
+                    animate={{ 
+                      backgroundPosition: ['0% 50%', '100% 50%', '0% 50%'] 
+                    }}
+                    transition={{ duration: 5, repeat: Infinity }}
+                  >
                     Revolutionize Your
-                  </span>
+                  </motion.span>
                   <span className="block mt-1">Video Search Experience</span>
                 </motion.h1>
                 <motion.p
@@ -256,14 +262,15 @@ export default function LandingPage() {
                       setActiveTab('register')
                       setShowAuthModal(true)
                     }}
-                    className="px-8 py-4 rounded-lg bg-gradient-to-r from-indigo-600 to-purple-600 text-white font-medium shadow-xl hover:shadow-2xl transition-all duration-300"
+                    className="px-8 py-4 rounded-lg bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 text-white font-bold shadow-xl hover:shadow-2xl transition-all duration-300 hover:scale-110 animate-pulse-glow relative overflow-hidden group"
                   >
-                    Get Started For Free
+                    <span className="absolute inset-0 bg-white opacity-0 group-hover:opacity-20 transition-opacity duration-300"></span>
+                    <span className="relative z-10 text-white drop-shadow-lg font-bold">Get Started For Free</span>
                   </motion.button>
                   <motion.button
                     whileHover={{ scale: 1.05 }}
                     whileTap={{ scale: 0.95 }}
-                    className="px-8 py-4 rounded-lg border border-gray-300 text-gray-700 font-medium hover:bg-gray-50 transition-colors duration-300"
+                    className="px-8 py-4 rounded-lg border-2 border-indigo-200 text-indigo-700 font-medium hover:bg-gradient-to-r hover:from-indigo-50 hover:to-purple-50 hover:border-purple-300 transition-all duration-300 hover:scale-105 hover:shadow-lg"
                   >
                     Watch Demo
                   </motion.button>
@@ -272,10 +279,11 @@ export default function LandingPage() {
             </div>
             <div className="mt-12 lg:mt-0 lg:col-span-6">
               <motion.div 
-                className="bg-white rounded-2xl shadow-xl overflow-hidden"
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.5, duration: 0.8 }}
+                className="bg-white rounded-2xl shadow-2xl overflow-hidden relative group"
+                initial={{ opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ delay: 0.5, duration: 0.8, type: "spring" }}
+                whileHover={{ scale: 1.02, boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.25)" }}
               >
                 <div className="relative">
                   {/* Single video thumbnail background */}
@@ -293,8 +301,8 @@ export default function LandingPage() {
                   </div>
                   
                   {/* Overlay with search results demo */}
-                  <div className="absolute inset-0 bg-gradient-to-b from-transparent to-indigo-900 bg-opacity-80 flex flex-col justify-end p-4">
-                    <div className="bg-white bg-opacity-90 rounded-lg p-3 mb-3 shadow-lg transform translate-y-4 opacity-0 animate-fadeInUp">
+                  <div className="absolute inset-0 bg-gradient-to-b from-transparent to-indigo-900 bg-opacity-80 flex flex-col justify-end p-4 pointer-events-none">
+                    <div className="bg-white bg-opacity-95 rounded-lg p-3 mb-3 shadow-lg animate-fadeInUp pointer-events-auto">
                       <div className="flex items-start">
                         <div className="h-8 w-8 rounded-full bg-indigo-100 flex items-center justify-center flex-shrink-0">
                           <svg className="h-4 w-4 text-indigo-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -308,13 +316,14 @@ export default function LandingPage() {
                       </div>
                     </div>
                     
-                    <div className="bg-white bg-opacity-90 rounded-lg p-3 shadow-lg transform translate-y-0 animate-fadeInUp animation-delay-100">
+                    <div className="bg-white bg-opacity-95 rounded-lg p-3 shadow-lg animate-fadeInUp animation-delay-100 pointer-events-auto">
                       <div className="flex items-center">
-                        <div className="relative h-10 w-16 flex-shrink-0 rounded overflow-hidden">
+                        <div className="relative h-10 w-16 flex-shrink-0 rounded overflow-hidden bg-gray-100">
                           <Image 
                             src="/images/thumbnails/video-thumbnail-01.png" 
                             alt="Video search result thumbnail showing AI-detected product demo segments with timestamps" 
                             fill
+                            sizes="64px"
                             className="object-cover"
                           />
                         </div>
@@ -456,11 +465,16 @@ export default function LandingPage() {
                 transition={{ duration: 0.5 }}
               >
                 <div className="flex flex-col items-center md:items-end">
-                  <div className="flex items-center justify-center h-12 w-12 rounded-full bg-indigo-500 text-white mb-4 md:hidden">
+                  <div className="flex items-center justify-center h-12 w-12 rounded-full bg-gradient-to-br from-indigo-500 to-indigo-600 text-white mb-4 md:hidden shadow-lg border-4 border-white">
                     <span className="text-lg font-bold">1</span>
                   </div>
-                  <div className="bg-white p-6 rounded-xl shadow-lg w-full max-w-md">
-                    <h3 className="text-xl font-bold text-gray-900">Upload Videos</h3>
+                  <div className="bg-white border-2 border-dashed border-indigo-300 p-6 rounded-2xl shadow-md hover:shadow-lg transition-all duration-300 w-full max-w-md relative">
+                    <div className="absolute -top-3 -right-3 h-8 w-8 bg-indigo-500 rounded-full flex items-center justify-center">
+                      <svg className="h-4 w-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                      </svg>
+                    </div>
+                    <h3 className="text-xl font-bold text-indigo-900">Upload Videos</h3>
                     <p className="mt-2 text-gray-600">
                       Upload your videos to our secure platform or connect with your existing storage solutions.
                     </p>
@@ -470,14 +484,14 @@ export default function LandingPage() {
 
               {/* Step 1 Number (desktop) */}
               <div className="hidden md:flex md:col-start-2 md:items-center">
-                <div className="h-12 w-12 rounded-full bg-indigo-500 text-white flex items-center justify-center z-10">
+                <div className="h-12 w-12 rounded-full bg-gradient-to-br from-indigo-500 to-indigo-600 text-white flex items-center justify-center z-10 shadow-lg border-4 border-white">
                   <span className="text-lg font-bold">1</span>
                 </div>
               </div>
 
               {/* Step 2 Number (desktop) */}
               <div className="hidden md:flex md:col-start-1 md:items-center md:justify-end">
-                <div className="h-12 w-12 rounded-full bg-indigo-500 text-white flex items-center justify-center z-10">
+                <div className="h-12 w-12 rounded-full bg-gradient-to-br from-purple-500 to-purple-600 text-white flex items-center justify-center z-10 shadow-lg border-4 border-white">
                   <span className="text-lg font-bold">2</span>
                 </div>
               </div>
@@ -491,11 +505,16 @@ export default function LandingPage() {
                 transition={{ duration: 0.5 }}
               >
                 <div className="flex flex-col items-center md:items-start">
-                  <div className="flex items-center justify-center h-12 w-12 rounded-full bg-indigo-500 text-white mb-4 md:hidden">
+                  <div className="flex items-center justify-center h-12 w-12 rounded-full bg-gradient-to-br from-purple-500 to-purple-600 text-white mb-4 md:hidden shadow-lg border-4 border-white">
                     <span className="text-lg font-bold">2</span>
                   </div>
-                  <div className="bg-white p-6 rounded-xl shadow-lg w-full max-w-md">
-                    <h3 className="text-xl font-bold text-gray-900">AI Processing</h3>
+                  <div className="bg-white border-2 border-dashed border-purple-300 p-6 rounded-2xl shadow-md hover:shadow-lg transition-all duration-300 w-full max-w-md relative">
+                    <div className="absolute -top-3 -left-3 h-8 w-8 bg-purple-500 rounded-full flex items-center justify-center">
+                      <svg className="h-4 w-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                      </svg>
+                    </div>
+                    <h3 className="text-xl font-bold text-purple-900">AI Processing</h3>
                     <p className="mt-2 text-gray-600">
                       Our AI automatically analyzes your videos, indexes content, and makes everything searchable.
                     </p>
@@ -512,11 +531,16 @@ export default function LandingPage() {
                 transition={{ duration: 0.5 }}
               >
                 <div className="flex flex-col items-center md:items-end">
-                  <div className="flex items-center justify-center h-12 w-12 rounded-full bg-indigo-500 text-white mb-4 md:hidden">
+                  <div className="flex items-center justify-center h-12 w-12 rounded-full bg-gradient-to-br from-pink-500 to-pink-600 text-white mb-4 md:hidden shadow-lg border-4 border-white">
                     <span className="text-lg font-bold">3</span>
                   </div>
-                  <div className="bg-white p-6 rounded-xl shadow-lg w-full max-w-md">
-                    <h3 className="text-xl font-bold text-gray-900">Search & Discover</h3>
+                  <div className="bg-white border-2 border-dashed border-pink-300 p-6 rounded-2xl shadow-md hover:shadow-lg transition-all duration-300 w-full max-w-md relative">
+                    <div className="absolute -top-3 -right-3 h-8 w-8 bg-pink-500 rounded-full flex items-center justify-center">
+                      <svg className="h-4 w-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                      </svg>
+                    </div>
+                    <h3 className="text-xl font-bold text-pink-900">Search & Discover</h3>
                     <p className="mt-2 text-gray-600">
                       Search with natural language queries and find exactly what you're looking for instantly.
                     </p>
@@ -526,7 +550,7 @@ export default function LandingPage() {
 
               {/* Step 3 Number (desktop) */}
               <div className="hidden md:flex md:col-start-2 md:items-center">
-                <div className="h-12 w-12 rounded-full bg-indigo-500 text-white flex items-center justify-center z-10">
+                <div className="h-12 w-12 rounded-full bg-gradient-to-br from-pink-500 to-pink-600 text-white flex items-center justify-center z-10 shadow-lg border-4 border-white">
                   <span className="text-lg font-bold">3</span>
                 </div>
               </div>
@@ -536,7 +560,7 @@ export default function LandingPage() {
       </div>
 
       {/* Testimonials */}
-      <div className="py-16 bg-white">
+      <div className="py-16 bg-gradient-to-b from-white to-gray-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <motion.div 
             className="text-center mb-16"
@@ -553,11 +577,12 @@ export default function LandingPage() {
           <div className="grid gap-8 lg:grid-cols-3">
             {/* Testimonial 1 */}
             <motion.div 
-              className="bg-gray-50 p-6 rounded-xl shadow-md"
+              className="bg-gradient-to-br from-white to-indigo-50 p-6 rounded-xl shadow-lg hover:shadow-xl transition-all duration-300 border border-indigo-100/50"
               initial={{ opacity: 0, y: 20 }}
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true }}
               transition={{ duration: 0.5 }}
+              whileHover={{ y: -5, scale: 1.02 }}
             >
               <div className="flex items-center mb-4">
                 <div className="h-12 w-12 rounded-full bg-indigo-200 flex items-center justify-center">
@@ -575,11 +600,12 @@ export default function LandingPage() {
 
             {/* Testimonial 2 */}
             <motion.div 
-              className="bg-gray-50 p-6 rounded-xl shadow-md"
+              className="bg-gradient-to-br from-white to-purple-50 p-6 rounded-xl shadow-lg hover:shadow-xl transition-all duration-300 border border-purple-100/50"
               initial={{ opacity: 0, y: 20 }}
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true }}
               transition={{ duration: 0.5, delay: 0.1 }}
+              whileHover={{ y: -5, scale: 1.02 }}
             >
               <div className="flex items-center mb-4">
                 <div className="h-12 w-12 rounded-full bg-indigo-200 flex items-center justify-center">
@@ -597,11 +623,12 @@ export default function LandingPage() {
 
             {/* Testimonial 3 */}
             <motion.div 
-              className="bg-gray-50 p-6 rounded-xl shadow-md"
+              className="bg-gradient-to-br from-white to-pink-50 p-6 rounded-xl shadow-lg hover:shadow-xl transition-all duration-300 border border-pink-100/50"
               initial={{ opacity: 0, y: 20 }}
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true }}
               transition={{ duration: 0.5, delay: 0.2 }}
+              whileHover={{ y: -5, scale: 1.02 }}
             >
               <div className="flex items-center mb-4">
                 <div className="h-12 w-12 rounded-full bg-indigo-200 flex items-center justify-center">
@@ -621,8 +648,15 @@ export default function LandingPage() {
       </div>
 
       {/* CTA Section */}
-      <div className="py-16 bg-gradient-to-r from-indigo-600 to-purple-600">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+      <div className="py-16 bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 animate-gradient relative overflow-hidden">
+        {/* Animated background pattern */}
+        <div className="absolute inset-0 opacity-10">
+          <div className="absolute inset-0" style={{
+            backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='0.4'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")`,
+            backgroundSize: '60px 60px'
+          }}></div>
+        </div>
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center relative z-10">
           <motion.h2 
             className="text-3xl font-extrabold text-white sm:text-4xl"
             initial={{ opacity: 0, y: 20 }}
@@ -654,17 +688,22 @@ export default function LandingPage() {
                 setActiveTab('register')
                 setShowAuthModal(true)
               }}
-              className="px-8 py-4 rounded-full bg-white text-indigo-600 font-medium shadow-xl hover:shadow-2xl transition-all duration-300"
+              className="px-8 py-4 rounded-full bg-white font-bold shadow-xl hover:shadow-2xl transition-all duration-300 hover:scale-110 border-2 border-white/90 relative overflow-hidden group"
             >
-              Get Started For Free
+              <span className="absolute inset-0 bg-gradient-to-r from-indigo-50 via-purple-50 to-pink-50 opacity-0 group-hover:opacity-100 transition-opacity duration-300"></span>
+              <span className="relative z-10 text-indigo-600 font-bold">Get Started For Free</span>
             </motion.button>
           </motion.div>
         </div>
       </div>
 
       {/* Footer */}
-      <footer className="bg-gray-900 text-white py-12">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <footer className="bg-gradient-to-b from-gray-900 to-black text-white py-12 relative overflow-hidden">
+        {/* Animated gradient overlay */}
+        <div className="absolute inset-0 opacity-50">
+          <div className="absolute inset-0 bg-gradient-to-r from-indigo-900/20 via-purple-900/20 to-pink-900/20 animate-gradient"></div>
+        </div>
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
             <div>
               <h3 className="text-xl font-bold mb-4">Know Your Moments</h3>
