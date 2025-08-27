@@ -12,7 +12,7 @@ import {
   GetLabelDetectionCommand,
   GetFaceDetectionCommand,
 } from '@aws-sdk/client-rekognition';
-import { SQSClient, SendMessageCommand, GetQueueAttributesCommand } from '@aws-sdk/client-sqs';
+import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { Client } from '@opensearch-project/opensearch';
 import { defaultProvider } from '@aws-sdk/credential-provider-node';
@@ -29,10 +29,6 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 
 const rekognition = new RekognitionClient({});
 const sqs = new SQSClient({});
-const getQueueAttributesCommand = new GetQueueAttributesCommand({
-  QueueUrl: process.env.VIDEO_SLICING_QUEUE_URL,
-  AttributeNames: ['ApproximateNumberOfMessages', 'ApproximateNumberOfMessagesNotVisible']
-});
 const s3 = new S3Client({});
 const openSearch = new Client({
   ...AwsSigv4Signer({
@@ -588,6 +584,99 @@ async function validateVideoForRekognition(videoPath: string, videoId: string, v
   }
 }
 
+/**
+ * Subdivides long segments (>20s) into smaller chunks
+ * @param segments Array of segment detections from Rekognition
+ * @param maxDurationMs Maximum duration for each segment in milliseconds (default 20000ms = 20s)
+ * @returns Array of subdivided segments
+ */
+function subdivideSegments(segments: SegmentDetection[], maxDurationMs: number = 20000): SegmentDetection[] {
+  const subdividedSegments: SegmentDetection[] = [];
+  
+  segments.forEach((segment, originalIndex) => {
+    const duration = segment.DurationMillis || 0;
+    const startTime = segment.StartTimestampMillis || 0;
+    const endTime = segment.EndTimestampMillis || 0;
+    
+    // If segment is shorter than max duration, keep it as is
+    if (duration <= maxDurationMs) {
+      subdividedSegments.push(segment);
+    } else {
+      // Calculate number of subdivisions needed
+      const numSubdivisions = Math.ceil(duration / maxDurationMs);
+      const subSegmentDuration = duration / numSubdivisions;
+      
+      console.log(`Subdividing segment ${originalIndex + 1} with duration ${duration}ms into ${numSubdivisions} sub-segments of ~${Math.round(subSegmentDuration)}ms each`);
+      
+      // Create subdivided segments
+      for (let i = 0; i < numSubdivisions; i++) {
+        const subStartTime = startTime + (i * subSegmentDuration);
+        const subEndTime = i === numSubdivisions - 1 ? endTime : startTime + ((i + 1) * subSegmentDuration);
+        const subDuration = subEndTime - subStartTime;
+        
+        // Create new segment with subdivided time ranges
+        const subSegment: SegmentDetection = {
+          ...segment,
+          StartTimestampMillis: Math.round(subStartTime),
+          EndTimestampMillis: Math.round(subEndTime),
+          DurationMillis: Math.round(subDuration),
+          StartFrameNumber: segment.StartFrameNumber ? 
+            Math.round(segment.StartFrameNumber + (i * (segment.EndFrameNumber! - segment.StartFrameNumber) / numSubdivisions)) : 
+            undefined,
+          EndFrameNumber: segment.EndFrameNumber ? 
+            (i === numSubdivisions - 1 ? segment.EndFrameNumber : 
+            Math.round(segment.StartFrameNumber! + ((i + 1) * (segment.EndFrameNumber - segment.StartFrameNumber!) / numSubdivisions))) : 
+            undefined,
+          // Add subdivision metadata to maintain traceability
+          ...(segment.ShotSegment ? {
+            ShotSegment: {
+              ...segment.ShotSegment,
+              Index: segment.ShotSegment.Index,
+              // Add subdivision info to maintain original segment reference
+              Confidence: segment.ShotSegment.Confidence
+            }
+          } : {}),
+          ...(segment.TechnicalCueSegment ? {
+            TechnicalCueSegment: {
+              ...segment.TechnicalCueSegment,
+              Confidence: segment.TechnicalCueSegment.Confidence
+            }
+          } : {})
+        };
+        
+        // Update SMPTE timecodes if present
+        if (segment.StartTimecodeSMPTE && segment.EndTimecodeSMPTE) {
+          const fps = 30; // Assuming 30fps, adjust if needed
+          const startFrame = Math.round(subStartTime * fps / 1000);
+          const endFrame = Math.round(subEndTime * fps / 1000);
+          subSegment.StartTimecodeSMPTE = framesToSMPTE(startFrame, fps);
+          subSegment.EndTimecodeSMPTE = framesToSMPTE(endFrame, fps);
+          subSegment.DurationSMPTE = framesToSMPTE(endFrame - startFrame, fps);
+        }
+        
+        subdividedSegments.push(subSegment);
+      }
+    }
+  });
+  
+  return subdividedSegments;
+}
+
+/**
+ * Converts frame count to SMPTE timecode format
+ * @param frames Total number of frames
+ * @param fps Frames per second
+ * @returns SMPTE timecode string (HH:MM:SS:FF)
+ */
+function framesToSMPTE(frames: number, fps: number): string {
+  const hours = Math.floor(frames / (fps * 3600));
+  const minutes = Math.floor((frames % (fps * 3600)) / (fps * 60));
+  const seconds = Math.floor((frames % (fps * 60)) / fps);
+  const frameCount = frames % fps;
+  
+  return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}:${frameCount.toString().padStart(2, '0')}`;
+}
+
 async function handleSNSEvent(event: SNSEvent): Promise<LambdaResponse> {
   const message = JSON.parse(event.Records[0].Sns.Message);
   const jobId = message.JobId;
@@ -603,9 +692,15 @@ async function handleSNSEvent(event: SNSEvent): Promise<LambdaResponse> {
       // Get job results based on job type
       if (message.API === 'StartSegmentDetection') {
         const segments = await getSegmentDetectionResults(jobId);
-        // Store the raw segment detection results in DynamoDB for preview purposes
-        await storeSegmentDetectionResults(videoIndex, videoId, segments);
-        await sendSegmentSlicingRequest(videoIndex, videoId, segments);
+        
+        // Subdivide long segments (>20s) into smaller chunks for better search granularity
+        const subdividedSegments = subdivideSegments(segments, 20000);
+        
+        console.log(`Original segments: ${segments.length}, Subdivided segments: ${subdividedSegments.length}`);
+        
+        // Store the subdivided segment detection results in DynamoDB for preview purposes
+        await storeSegmentDetectionResults(videoIndex, videoId, subdividedSegments);
+        await sendSegmentSlicingRequest(videoIndex, videoId, subdividedSegments);
       } else if (message.API === 'StartLabelDetection') {
         const labels = await getLabelDetectionResults(jobId);
         await updateVideoLabels(videoIndex, videoId, labels);
