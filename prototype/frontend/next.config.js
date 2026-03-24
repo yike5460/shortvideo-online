@@ -1,5 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  output: 'export',
   images: {
     unoptimized: true,
     formats: ['image/avif', 'image/webp'],
@@ -11,36 +12,7 @@ const nextConfig = {
   experimental: {
     appDir: true,
   },
-  // Add security headers for better SEO and security
-  async headers() {
-    return [
-      {
-        source: '/:path*',
-        headers: [
-          {
-            key: 'X-DNS-Prefetch-Control',
-            value: 'on'
-          },
-          {
-            key: 'X-Content-Type-Options',
-            value: 'nosniff'
-          },
-          {
-            key: 'X-Frame-Options',
-            value: 'SAMEORIGIN'
-          },
-          {
-            key: 'X-XSS-Protection',
-            value: '1; mode=block'
-          },
-          {
-            key: 'Referrer-Policy',
-            value: 'origin-when-cross-origin'
-          },
-        ],
-      },
-    ]
-  },
+  // Security headers configured in Cloudflare Pages _headers file
   // Compress assets for better performance
   compress: true,
   // Enable React strict mode for better error handling

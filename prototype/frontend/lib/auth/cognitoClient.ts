@@ -10,12 +10,18 @@ import {
 } from 'amazon-cognito-identity-js';
 
 // Configuration would come from environment variables set after deployment
-const poolData: ICognitoUserPoolData = {
-  UserPoolId: process.env.NEXT_PUBLIC_COGNITO_USER_POOL_ID || '',
-  ClientId: process.env.NEXT_PUBLIC_COGNITO_CLIENT_ID || ''
-};
+let _userPool: CognitoUserPool | null = null;
 
-const userPool = new CognitoUserPool(poolData);
+function getUserPool(): CognitoUserPool {
+  if (!_userPool) {
+    const poolData: ICognitoUserPoolData = {
+      UserPoolId: process.env.NEXT_PUBLIC_COGNITO_USER_POOL_ID || 'placeholder',
+      ClientId: process.env.NEXT_PUBLIC_COGNITO_CLIENT_ID || 'placeholder'
+    };
+    _userPool = new CognitoUserPool(poolData);
+  }
+  return _userPool;
+}
 
 export interface CognitoSessionData {
   session: {
@@ -42,7 +48,7 @@ export const cognitoClient = {
         })
       ];
 
-      userPool.signUp(email, password, attributeList, [], (err: Error | undefined, result: ISignUpResult | undefined) => {
+      getUserPool().signUp(email, password, attributeList, [], (err: Error | undefined, result: ISignUpResult | undefined) => {
         if (err) {
           reject(err);
           return;
@@ -60,7 +66,7 @@ export const cognitoClient = {
     return new Promise((resolve, reject) => {
       const userData = {
         Username: email,
-        Pool: userPool
+        Pool: getUserPool()
       };
       
       const cognitoUser = new CognitoUser(userData);
@@ -80,7 +86,7 @@ export const cognitoClient = {
     return new Promise((resolve, reject) => {
       const userData = {
         Username: email,
-        Pool: userPool
+        Pool: getUserPool()
       };
       
       const cognitoUser = new CognitoUser(userData);
@@ -107,7 +113,7 @@ export const cognitoClient = {
       
       const userData = {
         Username: email,
-        Pool: userPool
+        Pool: getUserPool()
       };
       
       const cognitoUser = new CognitoUser(userData);
@@ -148,7 +154,7 @@ export const cognitoClient = {
   
   // Sign out
   signOut: (): void => {
-    const cognitoUser = userPool.getCurrentUser();
+    const cognitoUser = getUserPool().getCurrentUser();
     if (cognitoUser) {
       cognitoUser.signOut();
     }
@@ -157,7 +163,7 @@ export const cognitoClient = {
   // Get current session
   getCurrentSession: (): Promise<CognitoSessionData | null> => {
     return new Promise((resolve, reject) => {
-      const cognitoUser = userPool.getCurrentUser();
+      const cognitoUser = getUserPool().getCurrentUser();
       
       if (!cognitoUser) {
         resolve(null);
@@ -201,7 +207,7 @@ export const cognitoClient = {
     return new Promise((resolve, reject) => {
       const userData = {
         Username: email,
-        Pool: userPool
+        Pool: getUserPool()
       };
       
       const cognitoUser = new CognitoUser(userData);
@@ -222,7 +228,7 @@ export const cognitoClient = {
     return new Promise((resolve, reject) => {
       const userData = {
         Username: email,
-        Pool: userPool
+        Pool: getUserPool()
       };
       
       const cognitoUser = new CognitoUser(userData);
