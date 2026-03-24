@@ -8,9 +8,9 @@ import HashtagsAndTopics, { isHashtagsResponse } from '@/components/HashtagsAndT
 import ReactMarkdown from 'react-markdown'
 import { Chart } from 'chart.js/auto'
 import 'chart.js/auto'
-
-// API configuration
-const API_ENDPOINT = process.env.NEXT_PUBLIC_API_URL
+import { indexesApi, videosApi, understandingApi, adsTaggingApi } from '@/lib/api'
+import { ApiError } from '@/lib/api'
+import type { SegmentTag } from '@/lib/api/ads-tagging'
 
 // Extend VideoResult to include video_objects and segments for TypeScript
 interface ExtendedVideoResult extends VideoResult {
@@ -402,7 +402,6 @@ interface TagStatistics {
 // Define AI models
 const AVAILABLE_MODELS = [
   { id: 'gemini-2.5-flash', name: 'Google Gemini 2.5 Flash' },
-  { id: 'qwen-vl-2.5', name: 'Qwen-VL 2.5' },
   { id: 'nova', name: 'Amazon Nova' }
 ];
 
@@ -728,6 +727,11 @@ export default function AdsTaggingPage() {
   const [isSegmentPlayerOpen, setIsSegmentPlayerOpen] = useState(false)
   const [playingSegment, setPlayingSegment] = useState<any>(null)
   
+  // Full AI analysis state (new backend endpoint)
+  const [isRunningFullAnalysis, setIsRunningFullAnalysis] = useState(false)
+  const [fullAnalysisTags, setFullAnalysisTags] = useState<SegmentTag[]>([])
+  const [fullAnalysisError, setFullAnalysisError] = useState<string | null>(null)
+
   // Polling management
   const pollingTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   
@@ -788,60 +792,29 @@ export default function AdsTaggingPage() {
     
     
     // Fetch available indexes
-    const fetchIndexes = async () => {
+    const loadIndexes = async () => {
       try {
-        setIsLoading(true); // Ensure we're in loading state
-        const response = await fetch(`${API_ENDPOINT}/indexes`, {
-          headers: {
-            'Content-Type': 'application/json',
-            ...(state.session ? { 'Authorization': `Bearer ${state.session.token}` } : {})
-          }
-        });
-        
-        if (!response.ok) {
-          throw new Error(`Failed to fetch indexes: ${response.statusText}`);
-        }
-        
-        const data = await response.json();
-        
-        // Create a map to deduplicate indexes and preserve video counts
-        const indexMap = new Map();
-        
-        // First pass: collect all unique indexIds
-        data.forEach((item: any) => {
-          if (!indexMap.has(item.indexId)) {
-            // Add enhanced index information
-            indexMap.set(item.indexId, {
-              id: item.indexId,
-              name: item.indexId.split('-')[0] || item.indexId,
-              videoCount: item.videoCount || 0
-            });
-          } else if (item.videoCount) {
-            // If this entry has a videoCount and we've already seen this indexId,
-            // update the videoCount in our map
-            const existing = indexMap.get(item.indexId);
-            existing.videoCount = item.videoCount;
-            indexMap.set(item.indexId, existing);
-          }
-        });
-        
-        // Convert the map back to an array
-        const formattedIndexes = Array.from(indexMap.values());
-        
-        // Sort indexes alphabetically by name
-        formattedIndexes.sort((a, b) => a.name.localeCompare(b.name));
-        
+        setIsLoading(true);
+        const data = await indexesApi.fetchIndexes();
+
+        const formattedIndexes = data.map((item: any) => ({
+          id: item.id,
+          name: item.name?.split('-')[0] || item.id,
+          videoCount: item.videoCount || 0
+        }));
+        formattedIndexes.sort((a: any, b: any) => a.name.localeCompare(b.name));
+
         setIndexes(formattedIndexes);
-        setIsLoading(false); // Set loading to false after indexes are fetched
+        setIsLoading(false);
       } catch (error) {
         console.error('Error fetching indexes:', error);
         setError(error instanceof Error ? error.message : 'Failed to load indexes');
-        setIsLoading(false); // Set loading to false even if there's an error
+        setIsLoading(false);
       }
     };
-    
-    fetchIndexes();
-  }, [searchParams, state.session, API_ENDPOINT]);
+
+    loadIndexes();
+  }, [searchParams, state.session]);
   
 
   // Fetch videos when selectedIndexId changes
@@ -860,23 +833,16 @@ export default function AdsTaggingPage() {
           queryParams = `?index=${selectedIndexId}`;
         }
         
-        const response = await fetch(`${API_ENDPOINT}/videos${queryParams}`, {
-          headers: {
-            'Content-Type': 'application/json',
-            ...(state.session ? { 'Authorization': `Bearer ${state.session.token}` } : {})
-          }
-        });
-        
-        if (!response.ok) {
-          if (response.status === 404) {
-            // 404 could mean "no videos found" in some API designs - treat as empty array
+        let data: any;
+        try {
+          data = await videosApi.fetchVideos(queryParams);
+        } catch (err) {
+          if (err instanceof ApiError && err.status === 404) {
             setVideos([]);
             return;
           }
-          throw new Error(`Failed to fetch videos: ${response.statusText}`);
+          throw err;
         }
-        
-        const data = await response.json();
         // Transform the videos to the format we need
         const videoThumbnails: VideoThumbnail[] = (data.videos || []).map((video: VideoResult) => ({
           id: video.id,
@@ -911,7 +877,7 @@ export default function AdsTaggingPage() {
     };
 
     fetchVideos();
-  }, [selectedIndexId, state.session, API_ENDPOINT]);
+  }, [selectedIndexId, state.session]);
 
   // Update tag statistics
   const updateTagStatistics = (videoCollection: VideoThumbnail[]) => {
@@ -1043,43 +1009,17 @@ export default function AdsTaggingPage() {
       const estimatedDuration = estimateProcessingTime(selectedVideo.duration);
       
       // Submit the video analysis job
-      const initResponse = await fetch(`${API_ENDPOINT}/videos/ask/init`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(state.session ? { 'Authorization': `Bearer ${state.session.token}` } : {})
-        },
-        body: JSON.stringify({
-          videoId: selectedVideo.id,
-          indexId: selectedVideo.indexId,
-          question: "Please provide a comprehensive video summary in markdown format. Include: ## Executive Summary (2-3 sentences overview), ## Key Content (main topics and themes), ## Visual Elements (notable scenes, composition, style), ## Audience & Context (target audience and use cases), ## Technical Details (duration, pacing, production quality), and ## Recommendations (suggested applications or improvements). Use clear headings and bullet points for easy reading.",
-          model: selectedModel,
-          bypassPromptEnhancement: true  // Bypass enhancement for direct analysis
-        })
+      const { sessionId } = await understandingApi.initAskSession({
+        videoId: selectedVideo.id,
+        indexId: selectedVideo.indexId,
+        question: "Please provide a comprehensive video summary in markdown format. Include: ## Executive Summary (2-3 sentences overview), ## Key Content (main topics and themes), ## Visual Elements (notable scenes, composition, style), ## Audience & Context (target audience and use cases), ## Technical Details (duration, pacing, production quality), and ## Recommendations (suggested applications or improvements). Use clear headings and bullet points for easy reading.",
+        model: selectedModel,
       });
-      
-      if (!initResponse.ok) {
-        throw new Error(`Failed to initialize video summary generation: ${initResponse.statusText}`);
-      }
-      
-      const { sessionId } = await initResponse.json();
       
       // Start polling for results
       const pollForResults = async () => {
         try {
-          const statusResponse = await fetch(`${API_ENDPOINT}/videos/ask/status/${sessionId}`, {
-            method: 'GET',
-            headers: {
-              'Content-Type': 'application/json',
-              ...(state.session ? { 'Authorization': `Bearer ${state.session.token}` } : {})
-            }
-          });
-          
-          if (!statusResponse.ok) {
-            throw new Error(`Failed to check status: ${statusResponse.statusText}`);
-          }
-          
-          const statusData = await statusResponse.json();
+          const statusData = await understandingApi.getAskStatus(sessionId);
           
           if (statusData.status === 'completed') {
             // Processing completed
@@ -1148,19 +1088,7 @@ export default function AdsTaggingPage() {
       
       // Call the video segmentation preview endpoint
       // The backend now always generates fresh pre-signed URLs to prevent expiration
-      const response = await fetch(`${API_ENDPOINT}/videos/segmentation/${selectedVideo.id}/${selectedVideo.indexId}`, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(state.session ? { 'Authorization': `Bearer ${state.session.token}` } : {})
-        }
-      });
-      
-      if (!response.ok) {
-        throw new Error(`Failed to load video segmentation: ${response.statusText}`);
-      }
-      
-      const segmentationData = await response.json();
+      const segmentationData = await videosApi.getVideoSegmentation(selectedVideo.id, selectedVideo.indexId);
       setVideoSegments(segmentationData.segments || []);
       
     } catch (error) {
@@ -1241,7 +1169,63 @@ export default function AdsTaggingPage() {
       }, 2000);
     }
   };
-  
+
+  // Run full AI analysis using the dedicated ads-tagging backend endpoint
+  const runFullAIAnalysis = async () => {
+    if (!selectedVideo || !selectedIndexId) return;
+
+    setIsRunningFullAnalysis(true);
+    setFullAnalysisError(null);
+    setFullAnalysisTags([]);
+
+    try {
+      const result = await adsTaggingApi.startAnalysis(selectedVideo.id, selectedIndexId);
+      setFullAnalysisTags(result.tags);
+    } catch (err) {
+      console.error('Error in full AI analysis:', err);
+      setFullAnalysisError(err instanceof Error ? err.message : 'Failed to run full analysis');
+    } finally {
+      setIsRunningFullAnalysis(false);
+    }
+  };
+
+  // Export full analysis tags as CSV
+  const exportFullAnalysisCSV = () => {
+    if (fullAnalysisTags.length === 0) return;
+
+    const headers = [
+      'Segment ID', 'Start Time', 'End Time', 'Duration (ms)',
+      'Environment', 'Location', 'Lighting', 'Color Grading',
+      'Shot Type', 'Camera Movement',
+      'Mood', 'Engagement', 'Emotional Intensity',
+      'Audio Type', 'Category', 'Summary',
+      'Keywords', 'Emotion Keywords', 'Visual Style Keywords',
+      'Utility Tags', 'Technical Tags'
+    ];
+
+    const rows = fullAnalysisTags.map(tag => [
+      tag.segmentId, tag.startTime, tag.endTime, tag.duration,
+      tag.scene?.environment, tag.scene?.location, tag.scene?.lighting, tag.scene?.colorGrading,
+      tag.camera?.shotType, tag.camera?.movement,
+      tag.emotion?.overallMood, tag.emotion?.engagementLevel, tag.emotionalIntensity,
+      tag.audio?.type, tag.category, `"${(tag.summary || '').replace(/"/g, '""')}"`,
+      `"${(tag.keywords || []).join('; ')}"`,
+      `"${(tag.emotionKeywords || []).join('; ')}"`,
+      `"${(tag.visualStyleKeywords || []).join('; ')}"`,
+      `"${(tag.utilityTags || []).join('; ')}"`,
+      `"${(tag.technicalTags || []).join('; ')}"`
+    ]);
+
+    const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `ads_tags_${selectedVideo?.id || 'unknown'}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   // Toggle segment selection
   const toggleSegmentSelection = (segmentId: string) => {
     setSelectedSegments(prev => {
@@ -1465,45 +1449,17 @@ export default function AdsTaggingPage() {
       }
       
       // Submit analysis job
-      const initResponse = await fetch(`${API_ENDPOINT}/videos/ask/init`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(state.session ? { 'Authorization': `Bearer ${state.session.token}` } : {})
-        },
-        body: JSON.stringify({
-          videoId: selectedVideo.id,
-          indexId: selectedVideo.indexId,
-          question: prompt,
-          model: selectedModel,
-          bypassPromptEnhancement: true,
-          segmentId: segmentId,
-          analysisType: analysisType
-        })
+      const { sessionId } = await understandingApi.initAskSession({
+        videoId: selectedVideo.id,
+        indexId: selectedVideo.indexId,
+        question: prompt,
+        model: selectedModel,
       });
-      
-      if (!initResponse.ok) {
-        throw new Error(`Failed to initialize segment analysis: ${initResponse.statusText}`);
-      }
-      
-      const { sessionId } = await initResponse.json();
       
       // Poll for results
       const pollSegmentResults = async () => {
         try {
-          const statusResponse = await fetch(`${API_ENDPOINT}/videos/ask/status/${sessionId}`, {
-            method: 'GET',
-            headers: {
-              'Content-Type': 'application/json',
-              ...(state.session ? { 'Authorization': `Bearer ${state.session.token}` } : {})
-            }
-          });
-          
-          if (!statusResponse.ok) {
-            throw new Error(`Failed to check segment analysis status: ${statusResponse.statusText}`);
-          }
-          
-          const statusData = await statusResponse.json();
+          const statusData = await understandingApi.getAskStatus(sessionId);
           
           if (statusData.status === 'completed') {
             const result = statusData.result || '';
@@ -2340,9 +2296,73 @@ export default function AdsTaggingPage() {
                                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                                       </svg>
                                     </button>
+
+                                    <button
+                                      onClick={runFullAIAnalysis}
+                                      disabled={isRunningFullAnalysis || !selectedVideo}
+                                      className={`px-4 py-2 rounded-lg text-xs font-semibold transition-all duration-200 shadow-sm ${
+                                        isRunningFullAnalysis || !selectedVideo
+                                          ? 'bg-gray-400 text-gray-600 cursor-not-allowed'
+                                          : 'bg-green-600 hover:bg-green-700 text-white shadow-green-200/50'
+                                      }`}
+                                      title="Run full AI analysis on all segments using Nova"
+                                    >
+                                      {isRunningFullAnalysis ? (
+                                        <span className="flex items-center">
+                                          <svg className="animate-spin -ml-1 mr-2 h-3 w-3 text-current" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 714 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                          </svg>
+                                          Running...
+                                        </span>
+                                      ) : (
+                                        'Full AI Analysis'
+                                      )}
+                                    </button>
+
+                                    {fullAnalysisTags.length > 0 && (
+                                      <button
+                                        onClick={exportFullAnalysisCSV}
+                                        className="px-3 py-2 rounded-lg text-xs font-semibold transition-all duration-200 shadow-sm border-2 bg-white text-green-600 border-green-600 hover:bg-green-50"
+                                        title="Export full analysis as CSV"
+                                      >
+                                        CSV
+                                      </button>
+                                    )}
                                   </div>
                                 </div>
                               </div>
+
+                              {/* Full AI Analysis Results */}
+                              {fullAnalysisError && (
+                                <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg text-sm text-red-700 dark:text-red-400">
+                                  {fullAnalysisError}
+                                </div>
+                              )}
+
+                              {fullAnalysisTags.length > 0 && (
+                                <div className="mb-4 p-4 bg-green-50 dark:bg-green-900/10 border border-green-200 dark:border-green-800 rounded-lg">
+                                  <h4 className="text-sm font-semibold text-green-800 dark:text-green-300 mb-2">
+                                    Full Analysis Complete - {fullAnalysisTags.length} segments analyzed
+                                  </h4>
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-60 overflow-y-auto">
+                                    {fullAnalysisTags.map(tag => (
+                                      <div key={tag.tagId} className="p-2 bg-white dark:bg-gray-800 rounded border border-green-100 dark:border-green-900 text-xs">
+                                        <div className="font-medium">{tag.segmentId}</div>
+                                        <div className="text-gray-500">{tag.category} | {tag.scene?.environment} | {tag.camera?.shotType}</div>
+                                        <div className="text-gray-600 dark:text-gray-400 mt-1">{tag.summary}</div>
+                                        <div className="flex flex-wrap gap-1 mt-1">
+                                          {tag.keywords?.slice(0, 4).map((kw, i) => (
+                                            <span key={i} className="px-1.5 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded">
+                                              {kw}
+                                            </span>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
 
                               {/* Time Axis with Professional Markers */}
                               <div className="relative mb-4 mt-6">

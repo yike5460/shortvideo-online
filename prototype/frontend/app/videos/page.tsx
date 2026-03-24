@@ -14,9 +14,8 @@ import { useSearchParams } from 'next/navigation'
 import { useAuth } from '@/lib/auth/AuthContext'
 import { EllipsisVerticalIcon } from '@heroicons/react/24/outline'
 import IndexHeader from '@/components/IndexHeader'
-
-// Add API configuration
-const API_ENDPOINT = process.env.NEXT_PUBLIC_API_URL
+import { videosApi, indexesApi } from '@/lib/api'
+import { ApiError } from '@/lib/api'
 
 interface VideoResponse {
   videos: VideoResult[];
@@ -458,13 +457,7 @@ export default function VideosPage() {
         const video = videos.find(v => v.id === id);
         if (!video) return Promise.resolve();
         
-        return fetch(`${API_ENDPOINT}/videos?index=${video.indexId}&videoId=${video.id}`, {
-          method: 'DELETE',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(state.session ? { 'Authorization': `Bearer ${state.session.token}` } : {})
-          }
-        });
+        return videosApi.deleteVideo(video.indexId, video.id);
       });
       
       await Promise.all(deletePromises);
@@ -522,19 +515,16 @@ export default function VideosPage() {
             queryParams += `${selectedIndexId ? '&' : ''}includeMerged=true`;
           }
         }
-        const response = await fetch(`${API_ENDPOINT}/videos${queryParams}`);
-        
-        // Only throw for actual HTTP errors, not for empty results
-        if (!response.ok) {
-          if (response.status === 404) {
-            // 404 could mean "no videos found" in some API designs - treat as empty array
+        let data: VideoResponse;
+        try {
+          data = await videosApi.fetchVideos(queryParams);
+        } catch (err) {
+          if (err instanceof ApiError && err.status === 404) {
             setVideos([]);
             return;
           }
-          throw new Error(`Failed to fetch videos: ${response.statusText}`);
+          throw err;
         }
-        
-        const data: VideoResponse = await response.json();
         // Even if we get a successful response, videos might be null or undefined
         const videosData = data.videos || [];
         setVideos(videosData); 
@@ -565,34 +555,20 @@ export default function VideosPage() {
       
       setIsLoadingIndexes(true);
       try {
-        const response = await fetch(`${API_ENDPOINT}/indexes`, {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${state.session.token}`
-          }
-        });
-        
-        if (!response.ok) {
-          throw new Error(`Failed to fetch indexes: ${response.statusText}`);
-        }
-        
-        const data = await response.json();
+        const data = await indexesApi.fetchIndexes();
 
         // Create a map to deduplicate indexes and preserve video counts
         const indexMap = new Map();
-        
-        // First pass: collect all unique indexIds
+
         data.forEach((item: any) => {
-          if (!indexMap.has(item.indexId)) {
-            // Add enhanced index information
-            indexMap.set(item.indexId, {
-              id: item.indexId,
-              name: item.indexId.split('-')[0] || item.indexId,
-              status: item.video_status === 'error' ? 'error' : 'ready',
+          if (!indexMap.has(item.id)) {
+            indexMap.set(item.id, {
+              id: item.id,
+              name: item.name?.split('-')[0] || item.id,
+              status: 'ready',
               videoCount: item.videoCount || 0,
-              isDefault: item.isDefault || true, // Default to true for now
-              expiresIn: Math.floor(Math.random() * 10) + 1, // Mock expiration days
+              isDefault: true,
+              expiresIn: Math.floor(Math.random() * 10) + 1,
               models: [
                 {
                   name: 'OmniSpectra',
@@ -602,17 +578,13 @@ export default function VideosPage() {
               ]
             });
           } else if (item.videoCount) {
-            // If this entry has a videoCount and we've already seen this indexId,
-            // update the videoCount in our map
-            const existing = indexMap.get(item.indexId);
+            const existing = indexMap.get(item.id);
             existing.videoCount = item.videoCount;
-            indexMap.set(item.indexId, existing);
+            indexMap.set(item.id, existing);
           }
         });
-        
-        // Convert the map back to an array
-        const formattedIndexes = Array.from(indexMap.values());
 
+        const formattedIndexes = Array.from(indexMap.values());
         setIndexes(formattedIndexes);
       } catch (error) {
         console.error('Error fetching indexes:', error);
@@ -738,18 +710,7 @@ export default function VideosPage() {
       setIsLoading(true);
       
       const { id, indexId } = videoToDelete;
-      // Update to use query parameters instead of path parameters
-      const response = await fetch(`${API_ENDPOINT}/videos?index=${indexId}&videoId=${id}`, {
-        method: 'DELETE',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(state.session ? { 'Authorization': `Bearer ${state.session.token}` } : {})
-        }
-      });
-      
-      if (!response.ok) {
-        throw new Error(`Failed to delete video: ${response.statusText}`);
-      }
+      await videosApi.deleteVideo(indexId, id);
       
       // Remove the deleted video from the list
       setVideos(prevVideos => prevVideos.filter(v => v.id !== id));
@@ -785,20 +746,8 @@ export default function VideosPage() {
         setIsLoading(true);
         
         // Make API call to delete the index
-        const response = await fetch(`${API_ENDPOINT}/indexes/${selectedIndexId}`, {
-          method: 'DELETE',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(state.session ? { 'Authorization': `Bearer ${state.session.token}` } : {})
-          }
-        });
-        
-        if (!response.ok) {
-          throw new Error(`Failed to delete index: ${response.statusText}`);
-        }
-        
-        const result = await response.json();
-        console.log(`Successfully deleted index: ${selectedIndexId}`, result);
+        await indexesApi.deleteIndex(selectedIndexId);
+        console.log(`Successfully deleted index: ${selectedIndexId}`);
         
         // Remove the index from the list
         setIndexes(prevIndexes => prevIndexes.filter(index => index.id !== selectedIndexId));

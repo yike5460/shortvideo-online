@@ -21,10 +21,6 @@ export default function RegisterForm() {
   const validateForm = () => {
     const newErrors: typeof errors = {}
     
-    if (!credentials.email.endsWith('@amazon.com')) {
-      newErrors.email = 'Only invitation email addresses are allowed for pre-release'
-    }
-
     if (credentials.password.length < 8) {
       newErrors.password = 'Password must be at least 8 characters'
     }

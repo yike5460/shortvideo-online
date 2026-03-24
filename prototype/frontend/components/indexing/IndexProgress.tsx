@@ -2,9 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { CheckCircleIcon, XCircleIcon } from '@heroicons/react/24/outline'
-
-// Import API endpoint from environment
-const API_ENDPOINT = process.env.NEXT_PUBLIC_API_URL
+import { videosApi } from '@/lib/api'
 
 interface IndexProgressProps {
   indexId: string
@@ -110,21 +108,9 @@ export default function IndexProgress({ indexId, videoIds, onComplete }: IndexPr
     // Poll for status of the index
     const checkProgress = async () => {
       try {
-        // Construct the API URL based on whether specific videoIds are provided
-        let apiUrl = `${API_ENDPOINT}/videos/status?index=${indexId}`;
-        
-        // Add videoIds to the query if they exist
-        if (videoIds && videoIds.length > 0) {
-          apiUrl += `&videoIds=${videoIds.join(',')}`;
-        }
-        
         // Get the index status
-        const response = await fetch(apiUrl);
-        if (!response.ok) {
-          throw new Error(`Failed to get index status: ${response.statusText}`);
-        }
-        
-        const indexStatus: IndexStatus = await response.json();
+        const videoIdsParam = videoIds && videoIds.length > 0 ? videoIds.join(',') : undefined;
+        const indexStatus: IndexStatus = await videosApi.getVideoStatus(indexId, videoIdsParam);
         
         // Update component state based on index status
         setProgress(indexStatus.progress);

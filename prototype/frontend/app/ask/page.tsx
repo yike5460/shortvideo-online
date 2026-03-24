@@ -10,9 +10,8 @@ import HashtagsAndTopics, { isHashtagsResponse } from '@/components/HashtagsAndT
 import JsonDisplay, { isJsonResponse } from '@/components/JsonDisplay'
 import TimelineDisplay, { isTimelineResponse } from '@/components/TimelineDisplay'
 import ReactMarkdown from 'react-markdown'
-
-// API configuration
-const API_ENDPOINT = process.env.NEXT_PUBLIC_API_URL
+import { indexesApi, videosApi, understandingApi } from '@/lib/api'
+import { ApiError } from '@/lib/api'
 
 // Define interfaces for the Ask feature
 interface VideoThumbnail {
@@ -64,7 +63,7 @@ const SAMPLE_QUESTIONS = [
 
 // Available AI models for video understanding
 const AVAILABLE_MODELS: AIModel[] = [
-  { id: 'qwen-vl-2.5', name: 'Qwen-VL 2.5' },
+  { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash' },
   { id: 'nova', name: 'Amazon Nova' }
 ];
 
@@ -91,7 +90,7 @@ export default function AskPage() {
   const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
   const modelDropdownRef = useRef<HTMLDivElement>(null)
-  const [selectedModel, setSelectedModel] = useState<string>('qwen-vl-2.5')
+  const [selectedModel, setSelectedModel] = useState<string>('gemini-2.5-flash')
   const videoRef = useRef<HTMLVideoElement>(null)
   const [isVideoModalOpen, setIsVideoModalOpen] = useState(false)
 
@@ -109,60 +108,30 @@ export default function AskPage() {
     }
     
     // Fetch available indexes
-    const fetchIndexes = async () => {
+    const loadIndexes = async () => {
       try {
-        setIsLoading(true); // Ensure we're in loading state
-        const response = await fetch(`${API_ENDPOINT}/indexes`, {
-          headers: {
-            'Content-Type': 'application/json',
-            ...(state.session ? { 'Authorization': `Bearer ${state.session.token}` } : {})
-          }
-        });
-        
-        if (!response.ok) {
-          throw new Error(`Failed to fetch indexes: ${response.statusText}`);
-        }
-        
-        const data = await response.json();
-        
-        // Create a map to deduplicate indexes and preserve video counts
-        const indexMap = new Map();
-        
-        // First pass: collect all unique indexIds
-        data.forEach((item: any) => {
-          if (!indexMap.has(item.indexId)) {
-            // Add enhanced index information
-            indexMap.set(item.indexId, {
-              id: item.indexId,
-              name: item.indexId.split('-')[0] || item.indexId,
-              videoCount: item.videoCount || 0
-            });
-          } else if (item.videoCount) {
-            // If this entry has a videoCount and we've already seen this indexId,
-            // update the videoCount in our map
-            const existing = indexMap.get(item.indexId);
-            existing.videoCount = item.videoCount;
-            indexMap.set(item.indexId, existing);
-          }
-        });
-        
-        // Convert the map back to an array
-        const formattedIndexes = Array.from(indexMap.values());
-        
+        setIsLoading(true);
+        const data = await indexesApi.fetchIndexes();
+
         // Sort indexes alphabetically by name
-        formattedIndexes.sort((a, b) => a.name.localeCompare(b.name));
-        
+        const formattedIndexes = data.map((item: any) => ({
+          id: item.id,
+          name: item.name?.split('-')[0] || item.id,
+          videoCount: item.videoCount || 0
+        }));
+        formattedIndexes.sort((a: any, b: any) => a.name.localeCompare(b.name));
+
         setIndexes(formattedIndexes);
-        setIsLoading(false); // Set loading to false after indexes are fetched
+        setIsLoading(false);
       } catch (error) {
         console.error('Error fetching indexes:', error);
         setError(error instanceof Error ? error.message : 'Failed to load indexes');
-        setIsLoading(false); // Set loading to false even if there's an error
+        setIsLoading(false);
       }
     };
-    
-    fetchIndexes();
-  }, [searchParams, state.session, API_ENDPOINT]);
+
+    loadIndexes();
+  }, [searchParams, state.session]);
   
   // Save selected model to localStorage when it changes
   useEffect(() => {
@@ -185,23 +154,16 @@ export default function AskPage() {
           queryParams = `?index=${selectedIndexId}`;
         }
         
-        const response = await fetch(`${API_ENDPOINT}/videos${queryParams}`, {
-          headers: {
-            'Content-Type': 'application/json',
-            ...(state.session ? { 'Authorization': `Bearer ${state.session.token}` } : {})
-          }
-        });
-        
-        if (!response.ok) {
-          if (response.status === 404) {
-            // 404 could mean "no videos found" in some API designs - treat as empty array
+        let data: any;
+        try {
+          data = await videosApi.fetchVideos(queryParams);
+        } catch (err) {
+          if (err instanceof ApiError && err.status === 404) {
             setVideos([]);
             return;
           }
-          throw new Error(`Failed to fetch videos: ${response.statusText}`);
+          throw err;
         }
-        
-        const data = await response.json();
         // Transform the videos to the format we need
         const videoThumbnails: VideoThumbnail[] = (data.videos || []).map((video: VideoResult) => ({
           id: video.id,
@@ -222,7 +184,7 @@ export default function AskPage() {
     };
 
     fetchVideos();
-  }, [selectedIndexId, state.session, API_ENDPOINT]);
+  }, [selectedIndexId, state.session]);
 
   // Handle video selection
   const handleVideoSelect = (video: VideoThumbnail) => {
@@ -296,31 +258,18 @@ export default function AskPage() {
       setChatMessages(prev => [...prev, assistantMessage]);
       
       // Initialize the streaming session
-      const initResponse = await fetch(`${API_ENDPOINT}/videos/ask/init`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(state.session ? { 'Authorization': `Bearer ${state.session.token}` } : {})
-        },
-        body: JSON.stringify({
-          videoId: selectedVideo.id,
-          indexId: selectedVideo.indexId,
-          question: question,
-          model: selectedModel
-        })
+      const { sessionId } = await understandingApi.initAskSession({
+        videoId: selectedVideo.id,
+        indexId: selectedVideo.indexId,
+        question: question,
+        model: selectedModel
       });
-      
-      if (!initResponse.ok) {
-        throw new Error(`Failed to initialize streaming: ${initResponse.statusText}`);
-      }
-      
-      const { sessionId }: AskResponse = await initResponse.json();
-      
+
       // Clear question after submitting
       setQuestion('');
-      
+
       // Connect to the streaming endpoint
-      const eventSource = new EventSource(`${API_ENDPOINT}/videos/ask/stream/${sessionId}`);
+      const eventSource = new EventSource(understandingApi.getStreamUrl(sessionId));
       eventSourceRef.current = eventSource;
       
       // Handle incoming message events

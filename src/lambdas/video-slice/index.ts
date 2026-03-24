@@ -1,6 +1,6 @@
 import { LambdaContext, LambdaResponse } from '../../types/aws-lambda';
 import { VideoMetadata, VideoStatus, VideoSegment, VideoProcessingJob } from '../../types/common';
-import { 
+import {
   RekognitionClient,
   StartSegmentDetectionCommand,
   GetSegmentDetectionCommand,
@@ -14,6 +14,7 @@ import {
 } from '@aws-sdk/client-rekognition';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
+import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
 import { Client } from '@opensearch-project/opensearch';
 import { defaultProvider } from '@aws-sdk/credential-provider-node';
 import { AwsSigv4Signer } from '@opensearch-project/opensearch/aws';
@@ -30,6 +31,7 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 const rekognition = new RekognitionClient({});
 const sqs = new SQSClient({});
 const s3 = new S3Client({});
+const bedrockRuntime = new BedrockRuntimeClient({});
 const openSearch = new Client({
   ...AwsSigv4Signer({
     region: process.env.AWS_REGION || 'us-east-1',
@@ -57,10 +59,9 @@ const STATUS_CODES = {
   NOT_FOUND: 404,
   INTERNAL_SERVER_ERROR: 500
 };
-const EMBEDDING_SERVICE_URL = process.env.EMBEDDING_SERVICE_URL;
 
-// Add a constant for the external embedding endpoint
-const EXTERNAL_EMBEDDING_ENDPOINT = process.env.EXTERNAL_EMBEDDING_ENDPOINT || '';
+const BEDROCK_MULTIMODAL_MODEL_ID = process.env.BEDROCK_EMBEDDING_MODEL_ID || 'amazon.titan-embed-image-v1';
+const BEDROCK_TEXT_MODEL_ID = process.env.BEDROCK_TEXT_EMBEDDING_MODEL_ID || 'amazon.titan-embed-text-v2:0';
 
 export const handler = async (event: S3Event | SNSEvent | SQSEvent, _context: LambdaContext): Promise<LambdaResponse> => {
   try {
@@ -1211,16 +1212,6 @@ async function processSegmentDetection(
 
       console.log(`Successfully uploaded segment ${segmentNumber} and keyframe to S3`);
 
-      // Clean up local files
-      try {
-        fs.unlinkSync(localInputPath);
-        fs.unlinkSync(localOutputPath);
-        fs.unlinkSync(localKeyframePath);
-        console.log(`Cleaned up temporary files`);
-      } catch (cleanupError) {
-        console.warn(`Warning: Failed to clean up some temporary files:`, cleanupError);
-      }
-
       // Add the segment to our results
       slicedSegment.segment_video_s3_path = segmentVideoS3Path[0];
       slicedSegment.segment_video_thumbnail_s3_path = segmentVideoS3Path[1];
@@ -1230,13 +1221,12 @@ async function processSegmentDetection(
         segment_visual_description: segment.ShotSegment ? 'Shot boundary detected' : 'Technical cue detected',
       };
 
-      // Check if the embedding service is running
+      // Generate embeddings using Bedrock Titan (before cleaning up local files)
       try {
-        await ensureEmbeddingServiceRunning();
-        console.log('Embedding service is running, and generating embeddings for the segment ', segmentVideoS3Path[0], ' in bucket ', bucketName);
-        
-        // Generate embeddings for the segment
-        const embeddings = await generateEmbedding(bucketName, segmentVideoS3Path[0]);
+        console.log('Generating embeddings via Bedrock Titan for segment', segmentVideoS3Path[0]);
+
+        const segmentDescription = slicedSegment.segment_visual?.segment_visual_description || '';
+        const embeddings = await generateEmbedding(localKeyframePath, segmentDescription);
 
         if (embeddings.vision_embedding) {
           console.log(`Successfully generated vision embedding for segment ${segmentNumber}, length: ${embeddings.vision_embedding.length}`);
@@ -1244,29 +1234,27 @@ async function processSegmentDetection(
         } else {
           console.warn(`No vision embedding generated for segment ${segmentNumber}`);
         }
-        
-        // Add audio embedding if available
+
         if (embeddings.audio_embedding) {
           console.log(`Successfully generated audio embedding for segment ${segmentNumber}, length: ${embeddings.audio_embedding.length}`);
-          // Add segment_audio property to the segment
           slicedSegment.segment_audio = {
             segment_audio_embedding: embeddings.audio_embedding
           };
         } else {
           console.warn(`No audio embedding generated for segment ${segmentNumber}`);
         }
-        
-        // Add detailed logging about embeddings
-        console.log(`Vision embedding length: ${embeddings.vision_embedding?.length || 0}, Audio embedding length: ${embeddings.audio_embedding?.length || 0}`);
-        if (embeddings.vision_embedding && embeddings.vision_embedding.length > 0) {
-          console.log(`Successfully generated vision embedding for segment ${segmentNumber}, length: ${embeddings.vision_embedding.length}`);
-        }
-        
-        if (!embeddings.audio_embedding || embeddings.audio_embedding.length === 0) {
-          console.warn(`No audio embedding generated for segment ${segmentNumber}`);
-        }
       } catch (error) {
         console.error('Error generating embeddings:', error);
+      }
+
+      // Clean up local files after embedding generation
+      try {
+        fs.unlinkSync(localInputPath);
+        fs.unlinkSync(localOutputPath);
+        fs.unlinkSync(localKeyframePath);
+        console.log(`Cleaned up temporary files`);
+      } catch (cleanupError) {
+        console.warn(`Warning: Failed to clean up some temporary files:`, cleanupError);
       }
 
       return slicedSegment;
@@ -1281,153 +1269,111 @@ async function processSegmentDetection(
   }
 }
 
-// Function to check if the embedding service is running and start it if not
-async function ensureEmbeddingServiceRunning(): Promise<void> {
+/**
+ * Generate a visual embedding for a keyframe image using Amazon Bedrock Titan Multimodal Embeddings.
+ * Reads the keyframe from the local filesystem and sends the base64-encoded image to Bedrock.
+ *
+ * @param keyframePath Local path to the keyframe JPEG file
+ * @returns 1024-dimensional embedding vector, or null on failure
+ */
+async function generateVisualEmbedding(keyframePath: string): Promise<number[] | null> {
   try {
-    // Try to ping the embedding service
-    const response = await fetch(`${EXTERNAL_EMBEDDING_ENDPOINT}/health`, {
-      method: 'GET',
-    });
-    
-    // The response is a json object with the status field:
-    // ```json
-    // {
-    //   "status": "healthy"
-    // }
-    // ```
-    const data = await response.json() as { status: string };
-    if (data.status === 'healthy') {
-      console.log('Embedding service is already running');
-      return;
+    const imageBuffer = fs.readFileSync(keyframePath);
+    const base64Image = imageBuffer.toString('base64');
+
+    const response = await bedrockRuntime.send(new InvokeModelCommand({
+      modelId: BEDROCK_MULTIMODAL_MODEL_ID,
+      contentType: 'application/json',
+      accept: 'application/json',
+      body: JSON.stringify({
+        inputImage: base64Image,
+        embeddingConfig: { outputEmbeddingLength: 1024 }
+      })
+    }));
+
+    const result = JSON.parse(new TextDecoder().decode(response.body));
+    if (result.embedding && Array.isArray(result.embedding)) {
+      console.log(`Generated visual embedding via Bedrock Titan, length: ${result.embedding.length}`);
+      return result.embedding as number[];
     }
-    console.error('Embedding service is not running, please start it');
+    console.warn('Unexpected response format from Bedrock Titan Multimodal');
+    return null;
   } catch (error) {
-    console.error('Error checking embedding service status:', error);
+    console.error('Error generating visual embedding via Bedrock:', error);
+    return null;
   }
 }
 
 /**
- * Function to generate embeddings using the embedding service
- * 
- * Returns both vision and audio embeddings for a video
- * 
- * @param bucket S3 bucket containing the video
- * @param key S3 key of the video
+ * Generate an audio/text embedding using Amazon Bedrock Titan Text Embeddings.
+ * Extracts audio from the video segment, transcribes it using Amazon Transcribe
+ * (placeholder: currently uses a description-based fallback), then embeds the text.
+ *
+ * For now, we generate a text embedding from the segment description as a placeholder.
+ * A full Transcribe integration can be added later for richer audio embeddings.
+ *
+ * @param segmentDescription Text description of the segment (used as transcript placeholder)
+ * @returns 1024-dimensional embedding vector, or null on failure
+ */
+async function generateTextEmbedding(text: string): Promise<number[] | null> {
+  if (!text || text.trim().length === 0) return null;
+
+  try {
+    const response = await bedrockRuntime.send(new InvokeModelCommand({
+      modelId: BEDROCK_TEXT_MODEL_ID,
+      contentType: 'application/json',
+      accept: 'application/json',
+      body: JSON.stringify({
+        inputText: text,
+        dimensions: 1024,
+        normalize: true
+      })
+    }));
+
+    const result = JSON.parse(new TextDecoder().decode(response.body));
+    if (result.embedding && Array.isArray(result.embedding)) {
+      console.log(`Generated text embedding via Bedrock Titan Text, length: ${result.embedding.length}`);
+      return result.embedding as number[];
+    }
+    console.warn('Unexpected response format from Bedrock Titan Text');
+    return null;
+  } catch (error) {
+    console.error('Error generating text embedding via Bedrock:', error);
+    return null;
+  }
+}
+
+/**
+ * Generate embeddings for a video segment using Amazon Bedrock Titan.
+ * - Visual embedding: from the keyframe image via Titan Multimodal Embeddings
+ * - Audio embedding: from segment description text via Titan Text Embeddings (placeholder for Transcribe)
+ *
+ * @param keyframePath Local path to the keyframe JPEG
+ * @param segmentDescription Description text for audio/text embedding
  * @returns Object containing vision and audio embeddings
  */
-async function generateEmbedding(bucket: string, key: string): Promise<{
+async function generateEmbedding(keyframePath: string, segmentDescription: string): Promise<{
   vision_embedding: number[] | null;
   audio_embedding: number[] | null;
 }> {
-  console.log('Generating embedding for video in bucket ', bucket, ' and key ', key);
+  console.log('Generating embeddings via Bedrock Titan for keyframe:', keyframePath);
   const defaultResponse = { vision_embedding: null, audio_embedding: null };
 
-  // First try the external embedding endpoint if available
-  if (EXTERNAL_EMBEDDING_ENDPOINT) {
-    try {
-      console.log(`Using external embedding endpoint: ${EXTERNAL_EMBEDDING_ENDPOINT}`);
-      const response = await fetch(`${EXTERNAL_EMBEDDING_ENDPOINT}/embed-video`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ bucket, key }),
-      });
-
-      // The new response format includes both vision_embedding and audio_embedding
-      const rawData = await response.json();      
-      // Type check and validate the response data
-      if (rawData && typeof rawData === 'object') {
-        // Compatible with the legacy emebdding format
-        if ('embedding' in rawData && Array.isArray(rawData.embedding)) {
-          const embedding = rawData.embedding as number[];
-          console.log(`Successfully generated legacy embedding using external service for ${key}`);
-          console.log(`Legacy embedding length: ${embedding.length || 0}`);
-          
-          return {
-            vision_embedding: embedding,
-            audio_embedding: null
-          };
-        }
-
-        const visionEmbedding = 'vision_embedding' in rawData && 
-          Array.isArray(rawData.vision_embedding) ? 
-          rawData.vision_embedding as number[] : null;
-          
-        const audioEmbedding = 'audio_embedding' in rawData && 
-          Array.isArray(rawData.audio_embedding) ? 
-          rawData.audio_embedding as number[] : null;
-
-        console.log(`Successfully generated embeddings using external service for ${key}`);
-        console.log(`Vision embedding length: ${visionEmbedding?.length || 0}, Audio embedding length: ${audioEmbedding?.length || 0}`);
-
-        return {
-          vision_embedding: visionEmbedding,
-          audio_embedding: audioEmbedding
-        };
-      }
-      
-      console.warn(`Unexpected response format from external service for ${key}`);
-      return defaultResponse;
-    } catch (error) {
-      console.error('Error calling external embedding service:', error);
-      // Fall back to internal service
-      return defaultResponse;
-    }
-  }
-  
-  console.log('No external embedding service available or it failed, falling back to internal embedding service');
-  // Fall back to internal embedding service
   try {
-    const response = await fetch(`${EMBEDDING_SERVICE_URL}/embed-video`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ bucket, key }),
-    });
+    // Generate visual and text embeddings in parallel
+    const [visionEmbedding, audioEmbedding] = await Promise.all([
+      generateVisualEmbedding(keyframePath),
+      generateTextEmbedding(segmentDescription)
+    ]);
 
-    // Check if the new embedding format is supported by the internal service
-    const rawData = await response.json();
-    if (!rawData || typeof rawData !== 'object') {
-      console.error('Invalid response from internal embedding service');
-      return defaultResponse;
-    }
-    
-    // Handle new dual embedding format
-    if ('vision_embedding' in rawData || 'audio_embedding' in rawData) {
-      const visionEmbedding = 'vision_embedding' in rawData && 
-        Array.isArray(rawData.vision_embedding) ? 
-        rawData.vision_embedding as number[] : null;
-        
-      const audioEmbedding = 'audio_embedding' in rawData && 
-        Array.isArray(rawData.audio_embedding) ? 
-        rawData.audio_embedding as number[] : null;
-      
-      console.log(`Successfully generated embeddings using internal service for ${key}`);
-      console.log(`Vision embedding length: ${visionEmbedding?.length || 0}, Audio embedding length: ${audioEmbedding?.length || 0}`);
-      
-      return {
-        vision_embedding: visionEmbedding,
-        audio_embedding: audioEmbedding
-      };
-    } 
-    // Handle legacy format with single embedding (backward compatibility)
-    else if ('embedding' in rawData && Array.isArray(rawData.embedding)) {
-      const embedding = rawData.embedding as number[];
-      console.log(`Successfully generated legacy embedding using internal service for ${key}`);
-      console.log(`Legacy embedding length: ${embedding.length || 0}`);
-      
-      return {
-        vision_embedding: embedding,
-        audio_embedding: null
-      };
-    }
-    
-    console.error('Unexpected response format from embedding service');
-    return defaultResponse;
+    console.log(`Vision embedding length: ${visionEmbedding?.length || 0}, Audio embedding length: ${audioEmbedding?.length || 0}`);
+
+    return {
+      vision_embedding: visionEmbedding,
+      audio_embedding: audioEmbedding
+    };
   } catch (error) {
-    console.error('Error calling internal embedding service:', error);
+    console.error('Error generating embeddings via Bedrock:', error);
     return defaultResponse;
   }
 }

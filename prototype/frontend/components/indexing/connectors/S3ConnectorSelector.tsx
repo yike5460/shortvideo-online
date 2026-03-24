@@ -2,8 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { PlusIcon } from '@heroicons/react/24/outline'
-
-const API_ENDPOINT = process.env.NEXT_PUBLIC_API_URL
+import { connectorsApi } from '@/lib/api'
 
 interface S3Connector {
   id: string
@@ -32,17 +31,7 @@ export default function S3ConnectorSelector({
       setIsLoading(true)
       setError(null)
       try {
-        const response = await fetch(`${API_ENDPOINT}/connectors/s3`, {
-          headers: {
-            'Content-Type': 'application/json'
-          }
-        })
-        
-        if (!response.ok) {
-          throw new Error(`Failed to fetch connectors: ${response.statusText}`)
-        }
-        
-        const data = await response.json()
+        const data = await connectorsApi.fetchConnectors()
         setConnectors(data)
         
         // If we have connectors and none is selected, select the first one

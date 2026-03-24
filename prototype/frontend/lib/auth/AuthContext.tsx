@@ -4,6 +4,7 @@ import { createContext, useContext, useReducer, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { AuthState, LoginCredentials, RegisterCredentials, User, Session } from '@/types/auth'
 import { cognitoClient, CognitoSessionData } from './cognitoClient'
+import { setSessionTokenGetter } from '@/lib/api/client'
 
 // Session storage key
 const SESSION_STORAGE_KEY = 'video_search_session'
@@ -89,6 +90,11 @@ export const AuthContext = createContext<{
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(authReducer, initialState)
   const router = useRouter()
+
+  // Wire up the API client's session token getter
+  useEffect(() => {
+    setSessionTokenGetter(() => state.session?.token ?? null);
+  }, [state.session]);
 
   // Load session from Cognito on mount
   useEffect(() => {

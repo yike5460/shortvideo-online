@@ -4,9 +4,6 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
 
-// Import API endpoint from environment
-const API_ENDPOINT = process.env.NEXT_PUBLIC_API_URL
-
 const IndexCreationStep = dynamic(() => import('@/components/indexing/IndexCreationStep'), {
   ssr: false,
 })

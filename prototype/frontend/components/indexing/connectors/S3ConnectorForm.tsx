@@ -3,8 +3,6 @@
 import { useState } from 'react'
 import { XMarkIcon, ClipboardDocumentIcon } from '@heroicons/react/24/outline'
 
-const API_ENDPOINT = process.env.NEXT_PUBLIC_API_URL
-
 interface S3ConnectorFormProps {
   onSubmit: (connectorData: { name: string; roleArn: string; externalId: string }) => Promise<void>
   onCancel: () => void

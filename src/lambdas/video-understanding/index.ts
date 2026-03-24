@@ -32,8 +32,6 @@ const SESSIONS_TABLE = process.env.SESSIONS_TABLE || 'VideoUnderstandingSessions
 const SESSION_TTL = 60 * 60; // 1 hour in seconds
 // Make sure the region is aligned with the inference profile
 const NOVA_MODEL_ID = process.env.NOVA_MODEL_ID || 'apac.amazon.nova-pro-v1:0';
-// External video understanding endpoint (Qwen-VL)
-const EXTERNAL_VIDEO_UNDERSTANDING_ENDPOINT = process.env.EXTERNAL_VIDEO_UNDERSTANDING_ENDPOINT || '';
 // Google API key for Gemini
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY || '';
 // SQS queue for async processing
@@ -317,22 +315,16 @@ function getModelProcessor(model?: string): ModelProcessor {
       return {
         processVideo: processVideoWithNova
       };
-    case 'qwen-vl-2.5':
-      return {
-        processVideo: processVideoWithQwenVL
-      };
     case 'gemini-2.5-flash':
       return {
         processVideo: processVideoWithGemini
       };
     default:
-      // Default behavior: use Google Gemini if API key exists, otherwise Qwen-VL if external endpoint exists, otherwise Nova
+      // Default behavior: use Google Gemini if API key exists, otherwise Nova
       return {
         processVideo: async (s3Path: string, question: string, videoMetadata?: any, bypassPromptEnhancement?: boolean) => {
           if (GOOGLE_API_KEY) {
             return processVideoWithGemini(s3Path, question, videoMetadata, bypassPromptEnhancement);
-          } else if (EXTERNAL_VIDEO_UNDERSTANDING_ENDPOINT) {
-            return processVideoWithQwenVL(s3Path, question, videoMetadata, bypassPromptEnhancement);
           } else {
             return processVideoWithNova(s3Path, question, videoMetadata, bypassPromptEnhancement);
           }
@@ -521,69 +513,6 @@ async function processVideoWithNova(s3Path: string, question: string, videoMetad
     return textContent?.text || '';
   } catch (error) {
     console.error('Error processing video with Nova:', error);
-    throw error;
-  }
-}
-
-// Helper function to process video with Qwen-VL
-async function processVideoWithQwenVL(s3Path: string, question: string, videoMetadata?: any, bypassPromptEnhancement?: boolean): Promise<string> {
-  // Get video metadata if not provided
-  videoMetadata = videoMetadata || {
-    duration: 0,
-    fps: 1,
-    startTime: '00:00:00'
-  };
-  
-  // Enhance the prompt based on question type, unless bypassing enhancement
-  const shouldBypass = bypassPromptEnhancement === true;
-  const enhancedPrompt = shouldBypass ? question : enhancePrompt(question, videoMetadata);
-  
-  // Log the bypass status for debugging
-  console.log(`QwenVL processing - bypassPromptEnhancement: ${bypassPromptEnhancement} (${typeof bypassPromptEnhancement})`);
-  console.log(`shouldBypass: ${shouldBypass}`);
-  console.log(`Original question: ${question}`);
-  console.log(`Enhanced prompt: ${enhancedPrompt.substring(0, 200)}...`);
-  try {
-    // Parse S3 path
-    let bucket = VIDEO_BUCKET;
-    let key = s3Path;
-    
-    // If s3Path is a full s3:// URL, parse it
-    if (s3Path.startsWith('s3://')) {
-      s3Path = s3Path.replace('s3://', '');
-      const parts = s3Path.split('/', 2);
-      bucket = parts[0];
-      key = parts.length > 1 ? parts.slice(1).join('/') : '';
-    }
-    
-    if (!bucket) {
-      throw new Error('No S3 bucket specified');
-    }
-
-    // Create the S3 URI
-    const s3Uri = `s3://${bucket}/${key}`;
-    
-    // Create URL with query parameters
-    const url = new URL(`${EXTERNAL_VIDEO_UNDERSTANDING_ENDPOINT}/predict`);
-    url.searchParams.append('url', s3Uri);
-    url.searchParams.append('prompt', enhancedPrompt);
-    url.searchParams.append('input_type', 'video');
-    
-    console.log(`Making request to Qwen-VL endpoint: ${url.toString()}`);
-    
-    // Make a request to the Qwen-VL endpoint
-    const response = await fetch(url.toString());
-    
-    if (!response.ok) {
-      throw new Error(`Error from Qwen-VL endpoint: ${response.status} ${response.statusText}`);
-    }
-    
-    const responseData = await response.json() as any;
-    
-    // Extract the response text
-    return responseData.response || '';
-  } catch (error) {
-    console.error('Error processing video with Qwen-VL:', error);
     throw error;
   }
 }

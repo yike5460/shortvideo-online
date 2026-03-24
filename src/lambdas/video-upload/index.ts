@@ -10,6 +10,7 @@ import { v4 as uuidv4 } from 'uuid';
 import * as path from 'path';
 import { DynamoDBDocumentClient, PutCommand, DeleteCommand, ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import { RedisClientType, createClient } from 'redis';
 import * as fs from 'fs';
 import { Readable } from 'stream';
 import { spawn } from 'child_process';
@@ -29,6 +30,33 @@ const openSearch = new Client({
 });
 const dynamoClient = new DynamoDBClient({endpoint: process.env.INDEXES_TABLE_DYNAMODB_DNS_NAME});
 const docClient = DynamoDBDocumentClient.from(dynamoClient);
+let redisClient: RedisClientType | null = null;
+
+/**
+ * Invalidate all search cache entries in Redis.
+ * Called when videos are uploaded or deleted to ensure search results stay fresh.
+ */
+async function invalidateSearchCache(): Promise<void> {
+  try {
+    if (!process.env.REDIS_ENDPOINT) return;
+
+    if (!redisClient) {
+      redisClient = createClient({
+        url: `redis://${process.env.REDIS_ENDPOINT}:6379`
+      });
+      await redisClient.connect();
+    }
+
+    // Delete all keys matching the search cache pattern
+    const keys = await redisClient.keys('search:*');
+    if (keys.length > 0) {
+      await redisClient.del(keys);
+      console.log(`Invalidated ${keys.length} search cache entries`);
+    }
+  } catch (error) {
+    console.warn('Redis cache invalidation error:', error);
+  }
+}
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -91,9 +119,9 @@ const indexSettings = {
             type: 'object',
             properties: {
               segment_visual_description: { type: 'text' },
-              segment_visual_embedding: { 
+              segment_visual_embedding: {
                 type: 'knn_vector',
-                dimension: 2048,
+                dimension: 1024,
                 method: {
                   name: "hnsw",
                   space_type: "cosinesimil",
@@ -109,9 +137,9 @@ const indexSettings = {
             type: 'object',
             properties: {
               segment_audio_description: { type: 'text' },
-              segment_audio_embedding: { 
+              segment_audio_embedding: {
                 type: 'knn_vector',
-                dimension: 768,
+                dimension: 1024,
                 method: {
                   name: "hnsw",
                   space_type: "cosinesimil",
@@ -1038,10 +1066,13 @@ async function handleDeleteVideo(event: APIGatewayProxyEvent): Promise<LambdaRes
         // Continue with the process even if DynamoDB deletion fails
       }
 
+      // Invalidate search cache after video deletion
+      await invalidateSearchCache();
+
       return {
         statusCode: STATUS_CODES.OK,
         headers: corsHeaders,
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           message: 'Video deleted successfully',
           videoId,
           indexId,
@@ -1455,6 +1486,9 @@ async function handleCompleteUpload(event: APIGatewayProxyEvent): Promise<Lambda
       3,
       `Update OpenSearch with additional metadata for video ${videoId} in index ${indexId}`
     );
+
+    // Invalidate search cache since new video content is available
+    await invalidateSearchCache();
 
     return {
       statusCode: STATUS_CODES.OK,

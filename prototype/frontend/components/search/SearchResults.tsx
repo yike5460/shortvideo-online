@@ -16,8 +16,8 @@ import { useAuth } from '@/lib/auth/AuthContext'
 import { mergeUtility } from '@/lib/merge/MergeUtility'
 import Link from 'next/link'
 
-// Add API configuration
-const API_ENDPOINT = process.env.NEXT_PUBLIC_API_URL
+import { getApiBaseUrl } from '@/lib/api/client'
+const API_ENDPOINT = getApiBaseUrl()
 
 interface SearchResultsProps {
   results: VideoResult[]

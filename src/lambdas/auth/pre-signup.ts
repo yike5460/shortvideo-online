@@ -1,8 +1,8 @@
 /**
  * Cognito Pre-Signup Lambda Trigger
- * 
+ *
  * This function is triggered before a user is signed up to the Cognito User Pool.
- * It checks if the user's email domain matches the allowed domain (amazon.com).
+ * It auto-confirms the user and verifies their email.
  */
 
 interface CognitoPreSignupEvent {
@@ -30,18 +30,12 @@ interface CognitoPreSignupEvent {
 }
 
 export const handler = async (event: CognitoPreSignupEvent): Promise<CognitoPreSignupEvent> => {
-  console.log('Pre-signup trigger event', JSON.stringify(event, null, 2));
-  
   const { email } = event.request.userAttributes;
-  const allowedDomain = process.env.ALLOWED_DOMAIN || 'amazon.com';
-  
-  if (!email.endsWith(`@${allowedDomain}`)) {
-    console.error(`Registration attempt with non-${allowedDomain} email: ${email}`);
-    throw new Error(`Only ${allowedDomain} email addresses are allowed to register`);
-  }
-  
-  console.log(`Email ${email} passed domain validation`);
-  
-  // Return the event object to allow the signup to proceed
+  console.log(`Pre-signup trigger for email: ${email}`);
+
+  // Auto-confirm user and verify email
+  event.response.autoConfirmUser = true;
+  event.response.autoVerifyEmail = true;
+
   return event;
 };

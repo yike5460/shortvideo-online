@@ -4,7 +4,7 @@ import { VideoResult, VideoSegment, VideoStatus, SearchOptions, TimestampedLabel
 import { Client } from '@opensearch-project/opensearch';
 import { defaultProvider } from '@aws-sdk/credential-provider-node';
 import { RedisClientType, createClient } from 'redis';
-import { BedrockRuntimeClient, ConverseCommand, ConversationRole } from '@aws-sdk/client-bedrock-runtime';
+import { BedrockRuntimeClient, ConverseCommand, ConversationRole, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
 import { AwsSigv4Signer } from '@opensearch-project/opensearch/aws';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand } from '@aws-sdk/lib-dynamodb';
@@ -101,10 +101,10 @@ let redisClient: RedisClientType | null = null;
 const dynamoClient = new DynamoDBClient({endpoint: process.env.INDEXES_TABLE_DYNAMODB_DNS_NAME});
 const docClient = DynamoDBDocumentClient.from(dynamoClient);
 
-// Add constants for the external embedding endpoint and Google GenAI API
-const EXTERNAL_EMBEDDING_ENDPOINT = process.env.EXTERNAL_EMBEDDING_ENDPOINT || '';
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY || '';
 const VALIDATION_MODEL = process.env.VALIDATION_MODEL || 'gemini'; // 'gemini' or 'nova'
+const BEDROCK_MULTIMODAL_MODEL_ID = process.env.BEDROCK_EMBEDDING_MODEL_ID || 'amazon.titan-embed-image-v1';
+const BEDROCK_TEXT_MODEL_ID = process.env.BEDROCK_TEXT_EMBEDDING_MODEL_ID || 'amazon.titan-embed-text-v2:0';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -121,95 +121,65 @@ const STATUS_CODES = {
   INTERNAL_SERVER_ERROR: 500
 };
 
-// Add a function to generate embeddings using the external endpoint
+/**
+ * Generate embeddings for a search query using Amazon Bedrock Titan.
+ * For text search queries, we generate both:
+ * - A multimodal embedding (via Titan Multimodal) for visual similarity search
+ * - A text embedding (via Titan Text) for audio/transcript similarity search
+ * Both use the same text input, producing 1024-dimensional vectors.
+ */
 async function generateEmbedding(text: string): Promise<{
   vision_embedding: number[] | undefined;
   audio_embedding: number[] | undefined;
 }> {
   const defaultResponse = { vision_embedding: undefined, audio_embedding: undefined };
-  
-  if (!EXTERNAL_EMBEDDING_ENDPOINT) {
-    console.warn('External embedding endpoint not configured');
+
+  if (!text || text.trim().length === 0) {
+    console.warn('Empty text provided for embedding generation');
     return defaultResponse;
   }
 
   try {
-    console.log(`Calling external embedding service at ${EXTERNAL_EMBEDDING_ENDPOINT}/embed-text, with query: ${text}`);
-    // **Request Body**
-    // ```json
-    // {
-    //     "texts": "single text string"
-    // }
-    // ```
-    // or
-    // ```json
-    // {
-    //     "texts": ["text1", "text2", "text3"]
-    // }
-    // ```
+    console.log(`Generating embeddings via Bedrock Titan for query: ${text}`);
 
-    // **Response (Updated format)**
-    // ```json
-    // {
-    //     "vision_embedding": [...],  // For vision modality
-    //     "audio_embedding": [...]    // For audio modality
-    // }
-    // ```
-    // or legacy format:
-    // ```json
-    // {
-    //     "embedding": [...]  // For single text input (treated as vision embedding)
-    // }
-    // ```
-    const response = await fetch(`${EXTERNAL_EMBEDDING_ENDPOINT}/embed-text`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ texts: text }),
-    });
+    // Generate both embeddings in parallel
+    const [multimodalResult, textResult] = await Promise.all([
+      // Titan Multimodal Embeddings - text input for cross-modal visual search
+      bedrock.send(new InvokeModelCommand({
+        modelId: BEDROCK_MULTIMODAL_MODEL_ID,
+        contentType: 'application/json',
+        accept: 'application/json',
+        body: JSON.stringify({
+          inputText: text,
+          embeddingConfig: { outputEmbeddingLength: 1024 }
+        })
+      })),
+      // Titan Text Embeddings - for audio/transcript search
+      bedrock.send(new InvokeModelCommand({
+        modelId: BEDROCK_TEXT_MODEL_ID,
+        contentType: 'application/json',
+        accept: 'application/json',
+        body: JSON.stringify({
+          inputText: text,
+          dimensions: 1024,
+          normalize: true
+        })
+      }))
+    ]);
 
-    if (!response.ok) {
-      throw new Error(`Error from embedding service: ${response.statusText}`);
-    }
-    
-    const rawData = await response.json();
-    
-    // Handle both the new dual-embedding format and legacy single embedding format
-    if (rawData && typeof rawData === 'object') {
-      // New format with separate vision and audio embeddings
-      if ('vision_embedding' in rawData || 'audio_embedding' in rawData) {
-        const visionEmbedding = 'vision_embedding' in rawData && 
-          Array.isArray(rawData.vision_embedding) ? 
-          rawData.vision_embedding as number[] : undefined;
-          
-        const audioEmbedding = 'audio_embedding' in rawData && 
-          Array.isArray(rawData.audio_embedding) ? 
-          rawData.audio_embedding as number[] : undefined;
-        
-        console.log(`Successfully generated embeddings: Vision embedding length: ${visionEmbedding?.length || 0}, Audio embedding length: ${audioEmbedding?.length || 0}`);
-        
-        return {
-          vision_embedding: visionEmbedding,
-          audio_embedding: audioEmbedding
-        };
-      } 
-      // Legacy format with single embedding (treat as vision embedding)
-      else if ('embedding' in rawData && Array.isArray(rawData.embedding)) {
-        const embedding = rawData.embedding as number[];
-        console.log(`Successfully generated legacy embedding, length: ${embedding.length || 0}`);
-        
-        return {
-          vision_embedding: embedding,
-          audio_embedding: undefined
-        };
-      }
-    }
-    
-    console.warn('Unexpected response format from embedding service');
-    return defaultResponse;
+    const multimodalParsed = JSON.parse(new TextDecoder().decode(multimodalResult.body));
+    const textParsed = JSON.parse(new TextDecoder().decode(textResult.body));
+
+    const visionEmbedding = multimodalParsed.embedding && Array.isArray(multimodalParsed.embedding)
+      ? multimodalParsed.embedding as number[] : undefined;
+    const audioEmbedding = textParsed.embedding && Array.isArray(textParsed.embedding)
+      ? textParsed.embedding as number[] : undefined;
+
+    console.log(`Successfully generated embeddings: Vision embedding length: ${visionEmbedding?.length || 0}, Audio embedding length: ${audioEmbedding?.length || 0}`);
+
+    return { vision_embedding: visionEmbedding, audio_embedding: audioEmbedding };
   } catch (error) {
-    console.error('Error calling external embedding service:', error);
+    console.error('Error generating embeddings via Bedrock Titan:', error);
     return defaultResponse;
   }
 }
@@ -801,27 +771,44 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
 
     const searchQuery: SearchQuery = JSON.parse(event.body);
     console.log('Parsed search query:', JSON.stringify(searchQuery, null, 2));
-    // const cacheKey = `search:${JSON.stringify(searchQuery)}`;
-    // // Try to get cached results
-    // if (!redisClient) {
-    //   redisClient = createClient({
-    //     url: `redis://${process.env.REDIS_ENDPOINT}:6379`
-    //   });
-    //   await redisClient.connect();
-    // }
 
-    // const cachedResults = await redisClient.get(cacheKey);
-    // if (cachedResults) {
-    //   return {
-    //     statusCode: 200,
-    //     headers: corsHeaders,
-    //     body: cachedResults
-    //   };
-    // }
+    // Redis caching for search results
+    const cacheKey = `search:${JSON.stringify({
+      query: searchQuery.searchQuery,
+      index: searchQuery.selectedIndex,
+      topK: searchQuery.topK,
+      advancedSearch: searchQuery.advancedSearch,
+      visualSearch: searchQuery.visualSearch,
+      audioSearch: searchQuery.audioSearch,
+      minConfidence: searchQuery.minConfidence
+    })}`;
 
-    // Check if we should use advanced search with embeddings
-    if (searchQuery.advancedSearch && EXTERNAL_EMBEDDING_ENDPOINT) {
-      console.log('Using advanced search with external embedding endpoint:', EXTERNAL_EMBEDDING_ENDPOINT);
+    try {
+      if (!redisClient && process.env.REDIS_ENDPOINT) {
+        redisClient = createClient({
+          url: `redis://${process.env.REDIS_ENDPOINT}:6379`
+        });
+        await redisClient.connect();
+      }
+
+      if (redisClient) {
+        const cachedResults = await redisClient.get(cacheKey);
+        if (cachedResults) {
+          console.log('Returning cached search results');
+          return {
+            statusCode: STATUS_CODES.OK,
+            headers: corsHeaders,
+            body: cachedResults
+          };
+        }
+      }
+    } catch (cacheError) {
+      console.warn('Redis cache read error, proceeding without cache:', cacheError);
+    }
+
+    // Check if we should use advanced search with embeddings (always available via Bedrock Titan)
+    if (searchQuery.advancedSearch) {
+      console.log('Using advanced search with Bedrock Titan embeddings');
 
       // Generate embeddings for the search query
       const embeddings = await generateEmbedding(searchQuery.searchQuery);
@@ -1103,19 +1090,38 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
                 });
               }
               
+              const resultBody = JSON.stringify(finalResults);
+              // Cache results with 5 minute TTL
+              try {
+                if (redisClient) {
+                  await redisClient.setEx(cacheKey, 300, resultBody);
+                  console.log('Cached search results');
+                }
+              } catch (cacheWriteError) {
+                console.warn('Redis cache write error:', cacheWriteError);
+              }
               return {
                 statusCode: STATUS_CODES.OK,
                 headers: corsHeaders,
-                body: JSON.stringify(finalResults)
+                body: resultBody
               };
             }
           }
-          
+
           // Return unvalidated results if validation was skipped or no videos to validate
+          const unvalidatedBody = JSON.stringify(filteredResults);
+          try {
+            if (redisClient) {
+              await redisClient.setEx(cacheKey, 300, unvalidatedBody);
+              console.log('Cached unvalidated search results');
+            }
+          } catch (cacheWriteError) {
+            console.warn('Redis cache write error:', cacheWriteError);
+          }
           return {
             statusCode: STATUS_CODES.OK,
             headers: corsHeaders,
-            body: JSON.stringify(filteredResults)
+            body: unvalidatedBody
           };
         } catch (searchError) {
           console.error("k-NN search error:", searchError);
@@ -1156,8 +1162,6 @@ export const handler = async (event: APIGatewayProxyEvent, _context: LambdaConte
       })
     };
   } finally {
-    // if (redisClient) {
-    //   await redisClient.disconnect();
-    // }
+    // Don't disconnect Redis client - keep it alive for connection reuse across Lambda invocations
   }
 };

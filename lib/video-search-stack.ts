@@ -24,12 +24,11 @@ import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import { S3ConnectorStack } from './s3-connector-stack';
 import { VideoUnderstandingStack } from './video-understanding-stack';
 import { StrandsAgentConstruct } from './strands-agent-stack';
+import { AdsAssetTagsTable } from './ads-asset-tags-table';
 
 interface VideoSearchStackProps extends cdk.StackProps {
   maxAzs: number;
   deploymentEnvironment?: string;
-  externalVideoEmbeddingEndpoint?: string;
-  externalVideoUnderstandingEndpoint?: string;
   siliconflowApiKey?: string;
   appDomain?: string;
   googleApiKey?: string;
@@ -49,9 +48,6 @@ export class VideoSearchStack extends cdk.Stack {
   private readonly openSearchCollection: opensearchserverless.CfnCollection;
   private readonly indexesTable: dynamodb.Table;
   private readonly dynamodbEndpoint: ec2.InterfaceVpcEndpoint;
-  private readonly videoEmbeddingService: ecs.FargateService;
-  private readonly externalVideoEmbeddingEndpoint: string;
-  private readonly externalVideoUnderstandingEndpoint: string;
   private readonly siliconflowApiKey?: string;
   private readonly googleApiKey?: string;
   private readonly validationModel?: string;
@@ -62,11 +58,10 @@ export class VideoSearchStack extends cdk.Stack {
   private readonly s3ConnectorStack?: S3ConnectorStack;
   private readonly videoUnderstandingStack?: VideoUnderstandingStack;
   private readonly strandsAgentConstruct?: StrandsAgentConstruct;
+  private readonly adsAssetTagsTable: AdsAssetTagsTable;
   constructor(scope: Construct, id: string, props: VideoSearchStackProps) {
     super(scope, id, props);
 
-    this.externalVideoEmbeddingEndpoint = props.externalVideoEmbeddingEndpoint || '';
-    this.externalVideoUnderstandingEndpoint = props.externalVideoUnderstandingEndpoint || '';
     this.siliconflowApiKey = props.siliconflowApiKey || '';
     this.googleApiKey = props.googleApiKey || '';
     this.validationModel = props.validationModel || '';
@@ -104,8 +99,8 @@ export class VideoSearchStack extends cdk.Stack {
     // Create OpenSearch collection
     this.openSearchCollection = this.createSearchInfrastructure(deploymentEnv);
 
-    // Create video embedding service, commented out for now as we are using external video embedding service
-    // this.videoEmbeddingService = this.createVideoEmbeddingService();
+    // Create Ads Asset Tags table
+    this.adsAssetTagsTable = new AdsAssetTagsTable(this, 'AdsAssetTags');
 
     // Create Lambda functions after OpenSearch collection
     const lambdaFunctions = {
@@ -113,17 +108,19 @@ export class VideoSearchStack extends cdk.Stack {
       videoSliceFunction: this.createVideoSliceFunction(),
       videoSearchFunction: this.createVideoSearchFunction(),
       indexCrudFunction: this.crudIndexFunction(),
-      videoMergeFunction: this.createVideoMergeFunction()
+      videoMergeFunction: this.createVideoMergeFunction(),
+      adsTaggingFunction: this.createAdsTaggingFunction(),
+      autoClipsFunction: this.createAutoClipsFunction(),
     };
 
-    // Add dependencies for the lambda functions on the video embedding service and open search collection
-    // lambdaFunctions.videoUploadFunction.videoUploadHandler.node.addDependency(this.videoEmbeddingService);
+    // Add dependencies for the lambda functions on the OpenSearch collection
     lambdaFunctions.videoUploadFunction.videoUploadHandler.node.addDependency(this.openSearchCollection);
-    // lambdaFunctions.videoSliceFunction.node.addDependency(this.videoEmbeddingService);
     lambdaFunctions.videoSliceFunction.node.addDependency(this.openSearchCollection);
     lambdaFunctions.videoSearchFunction.node.addDependency(this.openSearchCollection);
     lambdaFunctions.indexCrudFunction.node.addDependency(this.openSearchCollection);
     lambdaFunctions.videoMergeFunction.node.addDependency(this.openSearchCollection);
+    lambdaFunctions.adsTaggingFunction.node.addDependency(this.openSearchCollection);
+    lambdaFunctions.autoClipsFunction.node.addDependency(this.openSearchCollection);
 
     // Update OpenSearch access policies with Lambda roles
     this.updateOpenSearchPolicies(deploymentEnv, lambdaFunctions);
@@ -146,7 +143,6 @@ export class VideoSearchStack extends cdk.Stack {
     }
 
     // Set up permissions
-    // this.setupPermissions(lambdaFunctions, this.videoEmbeddingService, this.rekognitionTopic, this.indexesTable);
     this.setupPermissions(lambdaFunctions, this.rekognitionTopic, this.indexesTable);
     
     // Set up permissions for Strands Agent
@@ -552,7 +548,6 @@ export class VideoSearchStack extends cdk.Stack {
         INDEXES_TABLE: this.indexesTable.tableName,
         // Explicitly specify the DynamoDB endpoint since Private DNS can't be enabled because the service com.amazonaws.<region>.dynamodb does not provide a privateDNS name. Use Fn.select to properly extract the first DNS entry from the list
         INDEXES_TABLE_DYNAMODB_DNS_NAME: dynamoDbEndpointDnsHttp,
-        EXTERNAL_EMBEDDING_ENDPOINT: this.externalVideoEmbeddingEndpoint || '',
         GOOGLE_API_KEY: this.googleApiKey || '',
         VALIDATION_MODEL: this.validationModel || ''
       },
@@ -667,8 +662,8 @@ export class VideoSearchStack extends cdk.Stack {
         REDIS_ENDPOINT: this.redisCluster.attrRedisEndpointAddress,
         INDEXES_TABLE: this.indexesTable.tableName,
         INDEXES_TABLE_DYNAMODB_DNS_NAME: dynamoDbEndpointDnsHttp,
-        // EMBEDDING_SERVICE_URL: this.videoEmbeddingService.serviceName,
-        EXTERNAL_EMBEDDING_ENDPOINT: this.externalVideoEmbeddingEndpoint || '',
+        BEDROCK_EMBEDDING_MODEL_ID: 'amazon.titan-embed-image-v1',
+        BEDROCK_TEXT_EMBEDDING_MODEL_ID: 'amazon.titan-embed-text-v2:0',
       },
       bundling: {
         minify: true,
@@ -795,6 +790,73 @@ export class VideoSearchStack extends cdk.Stack {
     return videoMergeHandler;
   }
 
+  private createAdsTaggingFunction(): lambda.Function {
+    const lambdaSG = new ec2.SecurityGroup(this, 'LambdaSecurityGroupAdsTagging', {
+      vpc: this.vpc,
+      description: 'Security group for Ads Tagging Lambda accessing OpenSearch',
+      allowAllOutbound: true,
+    });
+    lambdaSG.addEgressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(443), 'Allow HTTPS outbound');
+    lambdaSG.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(443), 'Allow HTTPS inbound');
+
+    return new nodejslambda.NodejsFunction(this, 'AdsTaggingFunction', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      vpc: this.vpc,
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+      securityGroups: [lambdaSG],
+      entry: 'src/lambdas/ads-tagging/index.ts',
+      handler: 'handler',
+      memorySize: 1024,
+      timeout: cdk.Duration.minutes(15),
+      environment: {
+        VIDEO_BUCKET: this.videoBucket.bucketName,
+        OPENSEARCH_ENDPOINT: `https://${this.openSearchCollection.attrId}.${this.region}.aoss.amazonaws.com`,
+        ADS_TAGS_TABLE: this.adsAssetTagsTable.table.tableName,
+        NOVA_MODEL_ID: 'apac.amazon.nova-pro-v1:0',
+      },
+      bundling: {
+        minify: true,
+        sourceMap: true,
+        target: 'node20',
+        format: nodejslambda.OutputFormat.CJS,
+      },
+      depsLockFilePath: 'src/lambdas/ads-tagging/package.json'
+    });
+  }
+
+  private createAutoClipsFunction(): lambda.Function {
+    const lambdaSG = new ec2.SecurityGroup(this, 'LambdaSecurityGroupAutoClips', {
+      vpc: this.vpc,
+      description: 'Security group for Auto Clips Lambda accessing OpenSearch',
+      allowAllOutbound: true,
+    });
+    lambdaSG.addEgressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(443), 'Allow HTTPS outbound');
+    lambdaSG.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(443), 'Allow HTTPS inbound');
+
+    return new nodejslambda.NodejsFunction(this, 'AutoClipsFunction', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      vpc: this.vpc,
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+      securityGroups: [lambdaSG],
+      entry: 'src/lambdas/auto-clips/index.ts',
+      handler: 'handler',
+      memorySize: 1024,
+      timeout: cdk.Duration.minutes(5),
+      environment: {
+        VIDEO_BUCKET: this.videoBucket.bucketName,
+        OPENSEARCH_ENDPOINT: `https://${this.openSearchCollection.attrId}.${this.region}.aoss.amazonaws.com`,
+        NOVA_MODEL_ID: 'apac.amazon.nova-pro-v1:0',
+      },
+      bundling: {
+        minify: true,
+        sourceMap: true,
+        target: 'node20',
+        format: nodejslambda.OutputFormat.CJS,
+      },
+      depsLockFilePath: 'src/lambdas/auto-clips/package.json'
+    });
+  }
+
   private createVideoSearchFunction(): lambda.Function {
     // Create the Lambda security group with proper egress and ingress rules
     const lambdaSG = new ec2.SecurityGroup(this, 'LambdaSecurityGroupVideoSearch', {
@@ -837,7 +899,8 @@ export class VideoSearchStack extends cdk.Stack {
         INDEXES_TABLE: this.indexesTable.tableName,
         // Explicitly specify the DynamoDB endpoint since Private DNS can't be enabled because the service com.amazonaws.<region>.dynamodb does not provide a privateDNS name. Use Fn.select to properly extract the first DNS entry from the list
         INDEXES_TABLE_DYNAMODB_DNS_NAME: dynamoDbEndpointDnsHttp,
-        EXTERNAL_EMBEDDING_ENDPOINT: this.externalVideoEmbeddingEndpoint || '',
+        BEDROCK_EMBEDDING_MODEL_ID: 'amazon.titan-embed-image-v1',
+        BEDROCK_TEXT_EMBEDDING_MODEL_ID: 'amazon.titan-embed-text-v2:0',
         SILICONFLOW_API_KEY: this.siliconflowApiKey || '',
         GOOGLE_API_KEY: this.googleApiKey || '',
         VALIDATION_MODEL: this.validationModel || ''
@@ -1153,6 +1216,8 @@ export class VideoSearchStack extends cdk.Stack {
     videoSearchFunction: lambda.Function;
     indexCrudFunction: lambda.Function;
     videoMergeFunction: lambda.Function;
+    adsTaggingFunction: lambda.Function;
+    autoClipsFunction: lambda.Function;
   }): apigateway.RestApi {
     // Create API Gateway
     const api = new apigateway.RestApi(this, 'VideoSearchApi', {
@@ -1314,6 +1379,74 @@ export class VideoSearchStack extends cdk.Stack {
     addMethodWithCors(index, 'DELETE', lambdaFunctions.indexCrudFunction);
     addMethodWithCors(index, 'POST', lambdaFunctions.indexCrudFunction);
 
+
+    // Ads-tagging endpoints: POST /videos/analyze/{videoId}, GET /videos/analyze/{videoId}/tags
+    const analyze = videos.addResource('analyze');
+    const analyzeVideo = analyze.addResource('{videoId}');
+    addMethodWithCors(analyzeVideo, 'POST', lambdaFunctions.adsTaggingFunction);
+    const analyzeTags = analyzeVideo.addResource('tags');
+    addMethodWithCors(analyzeTags, 'GET', lambdaFunctions.adsTaggingFunction);
+
+    // Auto-clips endpoint: POST /videos/auto-clips/{videoId}
+    const autoClips = videos.addResource('auto-clips');
+    const autoClipsVideo = autoClips.addResource('{videoId}');
+    addMethodWithCors(autoClipsVideo, 'POST', lambdaFunctions.autoClipsFunction);
+
+    // API rate limiting with usage plans
+    const freeApiKey = api.addApiKey('FreeApiKey', {
+      apiKeyName: 'free-tier-key',
+      description: 'API key for free tier usage',
+    });
+
+    const proApiKey = api.addApiKey('ProApiKey', {
+      apiKeyName: 'pro-tier-key',
+      description: 'API key for pro tier usage',
+    });
+
+    const freePlan = api.addUsagePlan('FreePlan', {
+      name: 'Free',
+      description: 'Free tier: 100 requests/day, 10 req/s burst',
+      throttle: {
+        rateLimit: 10,
+        burstLimit: 10,
+      },
+      quota: {
+        limit: 100,
+        period: apigateway.Period.DAY,
+      },
+    });
+
+    const proPlan = api.addUsagePlan('ProPlan', {
+      name: 'Pro',
+      description: 'Pro tier: 10000 requests/day, 50 req/s burst',
+      throttle: {
+        rateLimit: 50,
+        burstLimit: 50,
+      },
+      quota: {
+        limit: 10000,
+        period: apigateway.Period.DAY,
+      },
+    });
+
+    freePlan.addApiKey(freeApiKey);
+    proPlan.addApiKey(proApiKey);
+
+    // Associate usage plans with the prod stage
+    freePlan.addApiStage({ stage: api.deploymentStage });
+    proPlan.addApiStage({ stage: api.deploymentStage });
+
+    // Output API keys
+    new cdk.CfnOutput(this, 'FreeApiKeyId', {
+      value: freeApiKey.keyId,
+      description: 'Free tier API key ID',
+    });
+
+    new cdk.CfnOutput(this, 'ProApiKeyId', {
+      value: proApiKey.keyId,
+      description: 'Pro tier API key ID',
+    });
+
     return api;
   }
 
@@ -1324,10 +1457,9 @@ export class VideoSearchStack extends cdk.Stack {
       videoSearchFunction: lambda.Function;
       indexCrudFunction: lambda.Function;
       videoMergeFunction: lambda.Function;
+      adsTaggingFunction: lambda.Function;
+      autoClipsFunction: lambda.Function;
     },
-    // textEmbeddingService: ecs.FargateService,
-    // videoEmbeddingService: ecs.FargateService,
-    // queue: sqs.Queue
     snsTopic: sns.Topic,
     indexesTable: dynamodb.Table
   ) {
@@ -1338,15 +1470,10 @@ export class VideoSearchStack extends cdk.Stack {
     this.videoBucket.grantReadWrite(lambdaFunctions.videoSliceFunction);
     this.videoBucket.grantReadWrite(lambdaFunctions.indexCrudFunction);
     this.videoBucket.grantReadWrite(lambdaFunctions.videoMergeFunction);
+    this.videoBucket.grantRead(lambdaFunctions.adsTaggingFunction);
+    this.videoBucket.grantRead(lambdaFunctions.autoClipsFunction);
 
-    // Grant permissions to embedding services to access S3
-    // this.videoBucket.grantRead(videoEmbeddingService.taskDefinition.taskRole);
- 
-    // SQS permissions
-    // queue.grantSendMessages(lambdaFunctions.videoUploadFunction.videoUploadHandler);
-    // queue.grantConsumeMessages(lambdaFunctions.videoSliceFunction);
-    
-    // Grant SQS send message permissions to videoSliceFunction
+    // SQS permissions - grant send message permissions to videoSliceFunction
     this.videoProcessingQueue.grantSendMessages(lambdaFunctions.videoSliceFunction);
     
     // Grant SQS permissions for videoMergeQueue
@@ -1355,6 +1482,18 @@ export class VideoSearchStack extends cdk.Stack {
     
     // Grant DynamoDB permissions for mergeJobsTable
     this.mergeJobsTable.grantReadWriteData(lambdaFunctions.videoMergeFunction);
+
+    // Grant DynamoDB permissions for ads-tagging table
+    this.adsAssetTagsTable.table.grantReadWriteData(lambdaFunctions.adsTaggingFunction);
+
+    // Grant Bedrock permissions for ads-tagging and auto-clips
+    const adsBedrockPolicy = new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['bedrock:InvokeModel'],
+      resources: ['*'],
+    });
+    lambdaFunctions.adsTaggingFunction.addToRolePolicy(adsBedrockPolicy);
+    lambdaFunctions.autoClipsFunction.addToRolePolicy(adsBedrockPolicy);
 
     // SNS permissions for Rekognition notifications subscription
     snsTopic.grantSubscribe(lambdaFunctions.videoSliceFunction);
@@ -1411,10 +1550,8 @@ export class VideoSearchStack extends cdk.Stack {
     lambdaFunctions.videoSearchFunction.addToRolePolicy(openSearchPolicy);
     lambdaFunctions.indexCrudFunction.addToRolePolicy(openSearchPolicy);
     lambdaFunctions.videoMergeFunction.addToRolePolicy(openSearchPolicy);
-
-    // Grant permissions to embedding services to access OpenSearch
-    // textEmbeddingService.taskDefinition.addToTaskRolePolicy(openSearchPolicy);
-    // videoEmbeddingService.taskDefinition.addToTaskRolePolicy(openSearchPolicy);
+    lambdaFunctions.adsTaggingFunction.addToRolePolicy(openSearchReadOnlyPolicy);
+    lambdaFunctions.autoClipsFunction.addToRolePolicy(openSearchReadOnlyPolicy);
 
     // Grant Rekognition permissions to video slice function
     const rekognitionPolicy = new iam.PolicyStatement({
@@ -1467,6 +1604,7 @@ export class VideoSearchStack extends cdk.Stack {
     });
 
     lambdaFunctions.videoSearchFunction.addToRolePolicy(bedrockPolicy);
+    lambdaFunctions.videoSliceFunction.addToRolePolicy(bedrockPolicy);
   }
 
   private createMonitoringInfrastructure(
@@ -1680,6 +1818,8 @@ export class VideoSearchStack extends cdk.Stack {
     videoSliceFunction: lambda.Function;
     videoSearchFunction: lambda.Function;
     videoMergeFunction: lambda.Function;
+    adsTaggingFunction: lambda.Function;
+    autoClipsFunction: lambda.Function;
   }) {
     // Update data access policy to include Lambda roles
     const lambdaAccessPolicy = new opensearchserverless.CfnAccessPolicy(this, 'VideoSearchLambdaAccessPolicy', {
@@ -1704,7 +1844,9 @@ export class VideoSearchStack extends cdk.Stack {
           lambdaFunctions.videoUploadFunction.videoUploadHandler.role?.roleArn || '',
           lambdaFunctions.videoSliceFunction.role?.roleArn || '',
           lambdaFunctions.videoSearchFunction.role?.roleArn || '',
-          lambdaFunctions.videoMergeFunction.role?.roleArn || ''
+          lambdaFunctions.videoMergeFunction.role?.roleArn || '',
+          lambdaFunctions.adsTaggingFunction.role?.roleArn || '',
+          lambdaFunctions.autoClipsFunction.role?.roleArn || ''
         ].filter(Boolean)
       }])
     });
@@ -1764,7 +1906,6 @@ export class VideoSearchStack extends cdk.Stack {
       openSearchEndpoint: `https://${this.openSearchCollection.attrId}.${this.region}.aoss.amazonaws.com`,
       indexesTable: this.indexesTable,
       deploymentEnvironment: deploymentEnv,
-      externalVideoUnderstandingEndpoint: this.externalVideoUnderstandingEndpoint || '',
       googleApiKey: this.googleApiKey || ''
     });
   }

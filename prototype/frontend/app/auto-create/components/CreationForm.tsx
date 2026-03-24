@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { CreationOptions } from '@/lib/auto-create/types'
+import { indexesApi } from '@/lib/api'
 
 // Add Index interface
 interface Index {
@@ -34,43 +35,20 @@ export default function CreationForm({ onSubmit, isProcessing }: CreationFormPro
     const fetchIndexes = async () => {
       setIsLoadingIndexes(true)
       try {
-        const API_ENDPOINT = process.env.NEXT_PUBLIC_API_URL
-        const response = await fetch(`${API_ENDPOINT}/indexes`, {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json'
-          }
-        })
-        
-        if (response.ok) {
-          const data = await response.json()
-          
-          // Transform data to Index format (similar to main page.tsx)
-          const indexMap = new Map()
-          data.forEach((item: any, i: number) => {
-            if (!indexMap.has(item.indexId)) {
-              indexMap.set(item.indexId, {
-                id: item.indexId || `index-${i}`,
-                name: `Index: ${item.indexId || 'Unknown'}`,
-                status: item.video_status === 'error' ? 'error' : 'ready',
-                videoCount: item.videoCount || 0
-              })
-            } else if (item.videoCount) {
-              const existing = indexMap.get(item.indexId)
-              existing.videoCount = item.videoCount
-              indexMap.set(item.indexId, existing)
-            }
-          })
-          
-          const transformedIndexes = Array.from(indexMap.values())
-          setIndexes(transformedIndexes)
-          
-          // Set default selected index if available
-          if (transformedIndexes.length > 0) {
-            const defaultIndex = transformedIndexes.find(idx => idx.id === 'videos') || transformedIndexes[0]
-            setSelectedIndex(defaultIndex.id)
-            setOptions(prev => ({ ...prev, preferredIndexes: [defaultIndex.id] }))
-          }
+        const data = await indexesApi.fetchIndexes()
+
+        const transformedIndexes = data.map((item: any, i: number) => ({
+          id: item.id || `index-${i}`,
+          name: `Index: ${item.name || item.id || 'Unknown'}`,
+          status: 'ready' as const,
+          videoCount: item.videoCount || 0
+        }))
+        setIndexes(transformedIndexes)
+
+        if (transformedIndexes.length > 0) {
+          const defaultIndex = transformedIndexes.find((idx: Index) => idx.id === 'videos') || transformedIndexes[0]
+          setSelectedIndex(defaultIndex.id)
+          setOptions(prev => ({ ...prev, preferredIndexes: [defaultIndex.id] }))
         }
       } catch (error) {
         console.error('Error fetching indexes:', error)

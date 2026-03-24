@@ -10,21 +10,34 @@ const config: Config = {
     extend: {
       colors: {
         primary: {
-          50: '#fdf2f8',   // Lightest pink
-          100: '#fce7f3',  // Light pink
-          200: '#fbcfe8',  // Pink
-          300: '#e879f9',  // Bright purple
-          400: '#d946ef',  // Strong purple
-          500: '#c026d3',  // Medium purple
-          600: '#a21caf',  // Deep purple
-          700: '#86198f',  // Dark purple
-          800: '#be123c',  // Deep red
-          900: '#9f1239',  // Dark red
-          950: '#7f1d1d',  // Darkest red
+          50: '#eef2ff',
+          100: '#e0e7ff',
+          200: '#c7d2fe',
+          300: '#a5b4fc',
+          400: '#818cf8',
+          500: '#6366f1',
+          600: '#4f46e5',
+          700: '#4338ca',
+          800: '#3730a3',
+          900: '#312e81',
+          950: '#1e1b4b',
+        },
+        sidebar: {
+          DEFAULT: '#0f172a',
+          hover: '#1e293b',
+          active: '#1e3a5f',
+          border: '#1e293b',
+          text: '#94a3b8',
+          'text-active': '#f8fafc',
+        },
+        surface: {
+          DEFAULT: '#ffffff',
+          secondary: '#f8fafc',
+          tertiary: '#f1f5f9',
         },
         background: 'hsl(var(--background))',
         foreground: 'hsl(var(--foreground))',
-        border: '#e5e7eb',
+        border: '#e2e8f0',
       },
       keyframes: {
         'fade-in': {
@@ -35,16 +48,18 @@ const config: Config = {
           '0%': { opacity: '1' },
           '100%': { opacity: '0' },
         },
+        'slide-in-right': {
+          '0%': { transform: 'translateX(100%)' },
+          '100%': { transform: 'translateX(0)' },
+        },
       },
       animation: {
         'fade-in': 'fade-in 0.3s ease-out',
         'fade-out': 'fade-out 0.3s ease-out forwards',
+        'slide-in-right': 'slide-in-right 0.2s ease-out',
       },
-      transitionDuration: {
-        '300': '300ms',
-      },
-      transitionProperty: {
-        'all': 'all',
+      fontSize: {
+        'xxs': '0.625rem',
       },
     },
   },

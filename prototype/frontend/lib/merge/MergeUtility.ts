@@ -1,6 +1,7 @@
 'use client';
 
 import { VideoSegment } from '@/types';
+import { mergeApi } from '@/lib/api';
 
 export interface MergeOptions {
   resolution: '720p' | '1080p';
@@ -17,7 +18,7 @@ export interface MergeParams {
   indexId: string;
   videoId: string;
   segmentIds: string[];
-  segmentsData?: VideoSegment[];  // Add support for complete segment data
+  segmentsData?: VideoSegment[];
   mergedName?: string;
   userId?: string;
   mergeOptions?: MergeOptions;
@@ -31,49 +32,26 @@ export interface MergeCallbacks {
 
 export class MergeUtility {
   private pollingInterval: NodeJS.Timeout | null = null;
-  private API_ENDPOINT = process.env.NEXT_PUBLIC_API_URL;
-  
+
   // Initiate a merge job
   async initiateVideoMerge(params: MergeParams): Promise<string> {
-    const response = await fetch(`${this.API_ENDPOINT}/videos/merge`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(params),
-    });
-    
-    if (!response.ok) {
-      throw new Error(`Failed to merge segments: ${response.statusText}`);
-    }
-    
-    const result = await response.json();
-    return result.jobId;
+    return mergeApi.initiateVideoMerge(params);
   }
-  
+
   // Poll for job status
   pollMergeJobStatus(jobId: string, userId: string, callbacks: MergeCallbacks): void {
-    const checkInterval = 5000; // Check every 5 seconds
-    const maxAttempts = 60;     // Maximum 5 minutes (60 * 5 seconds)
+    const checkInterval = 5000;
+    const maxAttempts = 60;
     let attempts = 0;
-    
-    // Clear any existing intervals
+
     this.cancelPolling();
-    
-    // Start polling
+
     this.pollingInterval = setInterval(async () => {
       attempts++;
       console.log(`Checking merge job status (attempt ${attempts}/${maxAttempts})...`);
-      
+
       try {
-        // Call the API to get job status
-        const response = await fetch(`${this.API_ENDPOINT}/videos/merge/${jobId}?userId=${encodeURIComponent(userId)}`);
-        
-        if (!response.ok) {
-          throw new Error(`Failed to get job status: ${response.statusText}`);
-        }
-        
-        const jobStatus = await response.json();
+        const jobStatus = await mergeApi.getMergeJobStatus(jobId, userId);
         console.log('Job status:', jobStatus);
         
         // Update UI based on job status

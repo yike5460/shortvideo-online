@@ -16,6 +16,7 @@
     "@sparticuz/chromium": "133.0.0",
     "puppeteer-core": "24.6.1",
     "lambda-multipart-parser": "^1.0.1",
+    "redis": "^4.0.0",
     "uuid": "^9.0.0"
   },
   "devDependencies": {

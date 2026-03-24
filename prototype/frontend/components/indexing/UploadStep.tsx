@@ -12,9 +12,10 @@ import SourceSelector, { SourceType } from './sources/SourceSelector'
 import S3ConnectorSelector from './connectors/S3ConnectorSelector'
 import S3ConnectorForm from './connectors/S3ConnectorForm'
 import S3FileBrowser from './sources/S3FileBrowser'
+import { connectorsApi } from '@/lib/api'
+import { getApiBaseUrl } from '@/lib/api/client'
 
-// Update API configuration
-const API_ENDPOINT = process.env.NEXT_PUBLIC_API_URL
+const API_ENDPOINT = getApiBaseUrl()
 
 interface UploadStepProps {
   onNext: (files: File[], uploadIds: string[]) => void
@@ -320,19 +321,7 @@ export default function UploadStep({
   // Handle S3 connector creation
   const handleCreateConnector = async (connectorData: { name: string; roleArn: string }) => {
     try {
-      const response = await fetch(`${API_ENDPOINT}/connectors/s3`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(connectorData)
-      })
-      
-      if (!response.ok) {
-        throw new Error(`Failed to create connector: ${response.statusText}`)
-      }
-      
-      const data = await response.json()
+      const data = await connectorsApi.createConnector(connectorData)
       setSelectedConnectorId(data.id)
       setShowConnectorForm(false)
     } catch (err) {
@@ -372,23 +361,11 @@ export default function UploadStep({
       }))
       
       // Call the import API
-      const response = await fetch(`${API_ENDPOINT}/videos/import/s3`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          connectorId: selectedConnectorId,
-          files: [{ bucket: file.bucket, key: file.key }],
-          indexId: indexId
-        })
+      const data = await connectorsApi.importS3Files({
+        connectorId: selectedConnectorId!,
+        files: [{ bucket: file.bucket, key: file.key }],
+        indexId: indexId
       })
-      
-      if (!response.ok) {
-        throw new Error(`Failed to import file: ${response.statusText}`)
-      }
-      
-      const data = await response.json()
       
       // Update progress to completed
       setS3UploadProgress(prev => ({

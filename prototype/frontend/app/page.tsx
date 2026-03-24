@@ -9,96 +9,11 @@ import SearchResults from '@/components/search/SearchResults'
 import FeedbackBar from '@/components/search/FeedbackBar'
 import { VideoResult, SearchOptions } from '@/types'
 import { cn } from '@/lib/utils'
-
-// Extended mock data with indexId
-const ALL_MOCK_RESULTS: VideoResult[] = [
-  {
-    id: '1',
-    indexId: 'videos',
-    title: 'Introduction to Machine Learning',
-    description: 'A comprehensive guide to machine learning fundamentals.',
-    videoThumbnailUrl: 'https://i.ytimg.com/vi/ABC123/maxresdefault.jpg',
-    videoThumbnailS3Path: 'RawVideos/2025-03-02/videos/ABC123/thumbnail.jpg',
-    videoPreviewUrl: 'https://example.com/previews/ABC123.mp4',
-    videoS3Path: 'RawVideos/2025-03-02/videos/ABC123/video.mp4',
-    videoDuration: '01:00:00',
-    source: 'youtube',
-    uploadDate: '2024-01-15',
-    format: 'MP4',
-    status: 'ready',
-    size: 1.2 * 1024 * 1024 * 1024,
-    segments: [
-      {
-        segment_id: 'seg1',
-        video_id: '1',
-        start_time: 120000,
-        end_time: 180000,
-        duration: 60000,
-        segment_visual: {
-          segment_visual_description: 'Explanation of supervised learning algorithms'
-        }
-      },
-      {
-        segment_id: 'seg2',
-        video_id: '1',
-        start_time: 360000,
-        end_time: 420000,
-        duration: 60000,
-        segment_visual: {
-          segment_visual_description: 'Deep dive into neural networks architecture'
-        }
-      }
-    ]
-  },
-  {
-    id: '2',
-    indexId: 'videos',
-    title: 'Advanced Deep Learning Techniques',
-    description: 'Exploring advanced concepts in deep learning.',
-    videoThumbnailUrl: 'https://i.ytimg.com/vi/DEF456/maxresdefault.jpg',
-    videoThumbnailS3Path: 'RawVideos/2025-03-02/videos/DEF456/thumbnail.jpg',
-    videoPreviewUrl: 'https://example.com/previews/DEF456.mp4',
-    videoS3Path: 'RawVideos/2025-03-02/videos/DEF456/video.mp4',
-    videoDuration: '00:45:00',
-    source: 'youtube',
-    uploadDate: '2024-01-20',
-    format: 'MP4',
-    status: 'ready',
-    size: 1.0 * 1024 * 1024 * 1024,
-    segments: [
-      {
-        segment_id: 'seg3',
-        video_id: '2',
-        start_time: 180000,
-        end_time: 240000,
-        duration: 60000,
-        segment_visual: {
-          segment_visual_description: 'Advanced neural network architectures'
-        }
-      },
-      {
-        segment_id: 'seg4',
-        video_id: '2',
-        start_time: 420000,
-        end_time: 480000,
-        duration: 60000,
-        segment_visual: {
-          segment_visual_description: 'Training optimization techniques'
-        }
-      }
-    ]
-  }
-]
+import { indexesApi } from '@/lib/api'
+import { searchApi } from '@/lib/api'
+import { ApiError } from '@/lib/api'
 
 const initialSearchOptions: SearchOptions = {
-  // searchType: 'text' | 'visual' | 'audio';
-  // visualSearch: boolean;
-  // audioSearch: boolean;
-  // minConfidence: number;
-  // showConfidenceScores: boolean;
-  // selectedIndex: string | null;
-  // confidencePreset: ConfidencePreset;
-  // confidenceAdjustment: ConfidenceAdjustment;
   searchType: 'text',
   visualSearch: true,
   audioSearch: true,
@@ -117,9 +32,6 @@ const initialSearchOptions: SearchOptions = {
   confidenceAdjustment: 'default',
   skipValidation: true  // false means Exact Search is enabled
 }
-
-// Add API configuration
-const API_ENDPOINT = process.env.NEXT_PUBLIC_API_URL
 
 // Add Index type definition
 interface Index {
@@ -152,49 +64,31 @@ export default function HomePage() {
 
   // Fetch indexes from backend
   useEffect(() => {
-    const fetchIndexes = async () => {
+    const loadIndexes = async () => {
       if (!state.session) return;
-      
+
       setIsLoadingIndexes(true);
       try {
-        const response = await fetch(`${API_ENDPOINT}/indexes`, {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${state.session.token}`
-          }
-        });
-        
-        if (!response.ok) {
-          throw new Error(`Failed to fetch indexes: ${response.statusText}`);
-        }
-        
-        const data = await response.json();
-        
-        // Create a map to deduplicate indexes by indexId
+        const data = await indexesApi.fetchIndexes();
+
+        // Create a map to deduplicate indexes by id
         const indexMap = new Map();
-        
-        // First pass: collect all unique indexIds with their data
         data.forEach((item: any, i: number) => {
-          if (!indexMap.has(item.indexId)) {
-            indexMap.set(item.indexId, {
-              id: item.indexId || `index-${i}`,
-              name: `Index: ${item.indexId || 'Unknown'}`,
-              status: item.video_status === 'error' ? 'error' : 'ready',
+          if (!indexMap.has(item.id)) {
+            indexMap.set(item.id, {
+              id: item.id || `index-${i}`,
+              name: `Index: ${item.name || item.id || 'Unknown'}`,
+              status: 'ready',
               videoCount: item.videoCount || 0
             });
           } else if (item.videoCount) {
-            // If this entry has a videoCount and the indexId is already in our map,
-            // update the videoCount
-            const existing = indexMap.get(item.indexId);
+            const existing = indexMap.get(item.id);
             existing.videoCount = item.videoCount;
-            indexMap.set(item.indexId, existing);
+            indexMap.set(item.id, existing);
           }
         });
-        
-        // Convert the map back to an array of unique indexes
+
         const transformedIndexes = Array.from(indexMap.values());
-        
         setIndexes(transformedIndexes);
       } catch (err) {
         console.error('Error fetching indexes:', err);
@@ -203,9 +97,9 @@ export default function HomePage() {
         setIsLoadingIndexes(false);
       }
     };
-    
-    fetchIndexes();
-  }, [state.session, API_ENDPOINT]);
+
+    loadIndexes();
+  }, [state.session]);
 
   // Error display effect
   useEffect(() => {
@@ -225,37 +119,6 @@ export default function HomePage() {
       clearTimeout(clearTimer)
     }
   }, [error])
-
-  // Search results effect
-  useEffect(() => {
-    if (!searchQuery) {
-      setSearchResults([])
-      return
-    }
-
-    const filterResults = () => {
-      // Use the mock data for now
-      return ALL_MOCK_RESULTS.filter(result => {
-        const query = searchQuery.toLowerCase();
-        return (
-          result.title.toLowerCase().includes(query) ||
-          result.description.toLowerCase().includes(query) ||
-          (result.segments?.some(segment => 
-            segment.segment_visual?.segment_visual_description?.toLowerCase().includes(query) ||
-            segment.segment_audio?.segment_audio_transcript?.toLowerCase().includes(query)
-          ) ?? false)
-        );
-      });
-    };
-
-    setIsLoading(true)
-    const searchTimer = setTimeout(() => {
-      setSearchResults(filterResults())
-      setIsLoading(false)
-    }, 500)
-
-    return () => clearTimeout(searchTimer)
-  }, [searchQuery])
 
   const handleSearch = useCallback(async (
     query: string, 
@@ -280,7 +143,7 @@ export default function HomePage() {
     try {
       setIsLoading(true)
       
-      let searchResponse
+      let results
       // Handle different types of media search
       if (imageFile || audioFile || videoFile) {
         // Create form data for any file uploads
@@ -314,33 +177,19 @@ export default function HomePage() {
         
         // Use appropriate endpoint based on file type
         const endpoint = imageFile ? 'image' : audioFile ? 'audio' : 'video'
-        searchResponse = await fetch(`${API_ENDPOINT}/search/${endpoint}`, {
-          method: 'POST',
-          body: formData
-        })
+        results = await searchApi.searchMedia(endpoint, formData)
       } else {
         // Handle text search
-        searchResponse = await fetch(`${API_ENDPOINT}/search`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            ...searchOptions,
-            searchType: 'text',
-            searchQuery: query,
-            selectedIndex: searchOptions.selectedIndex,
-            advancedSearch, // Add the advanced search flag
-            skipValidation: searchOptions.skipValidation // skipValidation=true means Exact Search is disabled
-          })
+        results = await searchApi.searchText({
+          ...searchOptions,
+          searchType: 'text',
+          searchQuery: query,
+          selectedIndex: searchOptions.selectedIndex,
+          advancedSearch,
+          skipValidation: searchOptions.skipValidation
         })
       }
 
-      if (!searchResponse.ok) {
-        throw new Error(`Search failed: ${searchResponse.statusText}`)
-      }
-
-      const results = await searchResponse.json()
       setSearchResults(results)
     } catch (err) {
       console.error('Search error:', err)
@@ -349,7 +198,7 @@ export default function HomePage() {
     } finally {
       setIsLoading(false)
     }
-  }, [searchOptions, API_ENDPOINT, advancedSearch]) // Add advancedSearch to dependencies
+  }, [searchOptions, advancedSearch])
 
   const handleFeedback = useCallback(async (isHelpful: boolean) => {
     try {
@@ -375,38 +224,47 @@ export default function HomePage() {
 
   // Loading or not authenticated
   if (state.isLoading || !state.session) {
-    return <div className="flex items-center justify-center h-screen">
-      <div className="text-gray-600">Loading...</div>
-    </div>
+    return (
+      <div className="flex items-center justify-center h-screen">
+        <div className="animate-pulse flex flex-col items-center gap-3">
+          <div className="h-8 w-8 rounded-full border-2 border-primary-500 border-t-transparent animate-spin" />
+          <span className="text-sm text-gray-500">Loading...</span>
+        </div>
+      </div>
+    )
   }
 
   return (
-    <div className="flex min-h-screen bg-gray-50">
+    <div className="flex min-h-screen">
       <div className="flex-1 flex flex-col">
-        <div className="p-8">
-          <SearchBar 
-            onSearch={handleSearch} 
+        {/* Page header */}
+        <div className="border-b border-gray-100 bg-white px-6 py-4">
+          <h1 className="text-lg font-semibold text-gray-900">Search</h1>
+          <p className="text-sm text-gray-500 mt-0.5">Find moments across your video library</p>
+        </div>
+
+        <div className="p-6">
+          <SearchBar
+            onSearch={handleSearch}
             onClear={handleClear}
             advancedSearch={advancedSearch}
             onToggleAdvancedSearch={handleToggleAdvancedSearch}
           />
         </div>
 
-        <div className={cn(
-          "px-8 mb-4 transition-all duration-300",
-          isErrorVisible ? "opacity-100" : "opacity-0 pointer-events-none"
-        )}>
-          {error && (
-            <div className="p-4 bg-red-50 text-red-700 rounded-lg border border-red-100">
-              {error}
-            </div>
-          )}
-        </div>
+        {error && isErrorVisible && (
+          <div className="mx-6 mb-4 p-3 bg-red-50 text-red-700 text-sm rounded-lg border border-red-100">
+            {error}
+          </div>
+        )}
 
-        <div className="flex-1 px-8 pb-8">
+        <div className="flex-1 px-6 pb-6">
           {isLoading ? (
-            <div className="flex items-center justify-center h-full">
-              <div className="text-gray-600">Loading results...</div>
+            <div className="flex items-center justify-center py-20">
+              <div className="flex flex-col items-center gap-3">
+                <div className="h-8 w-8 rounded-full border-2 border-primary-500 border-t-transparent animate-spin" />
+                <span className="text-sm text-gray-500">Searching...</span>
+              </div>
             </div>
           ) : searchResults.length > 0 ? (
             <SearchResults
@@ -415,13 +273,20 @@ export default function HomePage() {
               searchOptions={searchOptions}
             />
           ) : (
-            <div className="flex items-center justify-center h-full">
-              <div className="text-gray-600">
-                {searchOptions.selectedIndex 
-                  ? (advancedSearch 
-                     ? 'Enter a search query or upload media (image, audio, or video) to start an advanced search'
-                     : 'Enter a search query or upload an image to start searching')
-                  : 'Please select an index from the sidebar to start searching'}
+            <div className="flex items-center justify-center py-20">
+              <div className="text-center max-w-md">
+                <div className="mx-auto h-12 w-12 rounded-full bg-gray-100 flex items-center justify-center mb-4">
+                  <svg className="h-6 w-6 text-gray-400" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+                  </svg>
+                </div>
+                <p className="text-sm text-gray-500">
+                  {searchOptions.selectedIndex
+                    ? (advancedSearch
+                       ? 'Enter a search query or upload media to find relevant moments'
+                       : 'Enter a search query or upload an image to start searching')
+                    : 'Select an index from the sidebar to start searching'}
+                </p>
               </div>
             </div>
           )}
@@ -436,7 +301,6 @@ export default function HomePage() {
         options={searchOptions}
         onOptionsChange={handleOptionsChange}
         indexes={indexes}
-        // isLoadingIndexes={isLoadingIndexes}
       />
     </div>
   )

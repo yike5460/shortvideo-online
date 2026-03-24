@@ -3,8 +3,7 @@
 import { useState, useEffect } from 'react'
 import { MagnifyingGlassIcon, ChevronDownIcon } from '@heroicons/react/24/outline'
 import { cn } from '@/lib/utils'
-
-const API_ENDPOINT = process.env.NEXT_PUBLIC_API_URL
+import { connectorsApi } from '@/lib/api'
 
 interface S3File {
   name: string
@@ -48,17 +47,7 @@ export default function S3FileBrowser({
       setIsLoadingBuckets(true)
       setError(null)
       try {
-        const response = await fetch(`${API_ENDPOINT}/connectors/s3/${connectorId}/buckets`, {
-          headers: {
-            'Content-Type': 'application/json'
-          }
-        })
-        
-        if (!response.ok) {
-          throw new Error(`Failed to fetch buckets: ${response.statusText}`)
-        }
-        
-        const data = await response.json()
+        const data = await connectorsApi.fetchBuckets(connectorId)
         setBuckets(data)
         
         // If we have buckets and none is selected, select the first one
@@ -87,29 +76,15 @@ export default function S3FileBrowser({
       setIsLoadingFiles(true)
       setError(null)
       try {
-        let url = `${API_ENDPOINT}/connectors/s3/${connectorId}/buckets/${selectedBucket}?`
-        
-        // Add search query if provided
+        let params = ''
         if (searchQuery) {
-          url += `prefix=${encodeURIComponent(searchQuery)}&`
+          params += `prefix=${encodeURIComponent(searchQuery)}&`
         }
-        
-        // Add continuation token if provided
         if (token) {
-          url += `continuationToken=${encodeURIComponent(token)}`
+          params += `continuationToken=${encodeURIComponent(token)}`
         }
-        
-        const response = await fetch(url, {
-          headers: {
-            'Content-Type': 'application/json'
-          }
-        })
-        
-        if (!response.ok) {
-          throw new Error(`Failed to fetch files: ${response.statusText}`)
-        }
-        
-        const data = await response.json()
+
+        const data = await connectorsApi.fetchFiles(connectorId, selectedBucket, params)
         
         if (token) {
           // Append to existing files if using continuation token
@@ -152,27 +127,13 @@ export default function S3FileBrowser({
         setIsLoadingFiles(true)
         setError(null)
         try {
-          let url = `${API_ENDPOINT}/connectors/s3/${connectorId}/buckets/${selectedBucket}?`
-          
-          // Add search query if provided
+          let params = ''
           if (searchQuery) {
-            url += `prefix=${encodeURIComponent(searchQuery)}&`
+            params += `prefix=${encodeURIComponent(searchQuery)}&`
           }
-          
-          // Add continuation token
-          url += `continuationToken=${encodeURIComponent(continuationToken)}`
-          
-          const response = await fetch(url, {
-            headers: {
-              'Content-Type': 'application/json'
-            }
-          })
-          
-          if (!response.ok) {
-            throw new Error(`Failed to fetch more files: ${response.statusText}`)
-          }
-          
-          const data = await response.json()
+          params += `continuationToken=${encodeURIComponent(continuationToken)}`
+
+          const data = await connectorsApi.fetchFiles(connectorId, selectedBucket!, params)
           
           // Append to existing files
           setFiles(prev => [...prev, ...data.files])
