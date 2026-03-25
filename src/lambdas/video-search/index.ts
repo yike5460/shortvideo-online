@@ -627,8 +627,8 @@ const transformSearchResults = async (hits: any[], selectedIndex?: string): Prom
     // Process inner_hits if available to extract segment confidence scores and matched segments
     if (hit.inner_hits?.matched_segments?.hits?.hits) {
       const innerHits = hit.inner_hits.matched_segments.hits.hits;
-      // Find max score for normalization
-      const maxInnerScore = Math.max(...innerHits.map((segHit: any) => segHit._score || 0));
+      // Find max score for normalization (apply same /2 scaling as individual scores)
+      const maxInnerScore = Math.max(...innerHits.map((segHit: any) => (segHit._score || 0) / 2));
       
       console.log(`Max inner score: ${maxInnerScore}`);
       
