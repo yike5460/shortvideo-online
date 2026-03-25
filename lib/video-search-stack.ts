@@ -14,12 +14,12 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as sns from 'aws-cdk-lib/aws-sns';
-import * as sns_subs from 'aws-cdk-lib/aws-sns-subscriptions';
+// sns_subs removed - Rekognition SNS subscription no longer needed
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import { Construct } from 'constructs';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import * as nodejslambda from 'aws-cdk-lib/aws-lambda-nodejs';
-import { S3EventSource, SnsEventSource, SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
+import { S3EventSource, SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import { S3ConnectorStack } from './s3-connector-stack';
 import { VideoUnderstandingStack } from './video-understanding-stack';
@@ -41,8 +41,6 @@ export class VideoSearchStack extends cdk.Stack {
   private readonly videoProcessingQueue: sqs.Queue;
   private readonly videoMergeQueue: sqs.Queue;
   private readonly mergeJobsTable: dynamodb.Table;
-  private readonly rekognitionTopic: sns.Topic;
-  private readonly rekognitionRole: iam.Role;
   private readonly redisCluster: elasticache.CfnCacheCluster;
   private readonly cluster: ecs.Cluster;
   private readonly openSearchCollection: opensearchserverless.CfnCollection;
@@ -90,9 +88,6 @@ export class VideoSearchStack extends cdk.Stack {
     this.videoMergeQueue = this.createVideoMergeQueue();
     this.mergeJobsTable = this.createMergeJobsTable();
     
-    const { topic, rekognitionRole } = this.createRekognitionTopic();
-    this.rekognitionTopic = topic;
-    this.rekognitionRole = rekognitionRole;
     this.redisCluster = this.createCacheInfrastructure();
     this.cluster = this.createContainerInfrastructure();
     
@@ -143,7 +138,7 @@ export class VideoSearchStack extends cdk.Stack {
     }
 
     // Set up permissions
-    this.setupPermissions(lambdaFunctions, this.rekognitionTopic, this.indexesTable);
+    this.setupPermissions(lambdaFunctions, this.indexesTable);
     
     // Set up permissions for Strands Agent
     if (this.strandsAgentConstruct) {
@@ -190,7 +185,6 @@ export class VideoSearchStack extends cdk.Stack {
       { name: 'ECREndpoint', service: ec2.InterfaceVpcEndpointAwsService.ECR },
       { name: 'CloudWatchLogsEndpoint', service: ec2.InterfaceVpcEndpointAwsService.CLOUDWATCH_LOGS },
       { name: 'ElastiCacheEndpoint', service: ec2.InterfaceVpcEndpointAwsService.ELASTICACHE },
-      { name: 'RekognitionEndpoint', service: ec2.InterfaceVpcEndpointAwsService.REKOGNITION },
     ];
 
     // Create all interface endpoints with consistent configuration
@@ -595,21 +589,14 @@ export class VideoSearchStack extends cdk.Stack {
         // Make sure Chrome can find the required shared libraries
         LD_LIBRARY_PATH: '/opt/lib:/opt/lib64:/var/task/lib:/var/task/lib64:/var/runtime/lib:/var/runtime/lib64'
       },
-      // Add a layer with the required shared libraries
+      // yt-dlp layer includes chromium and puppeteer - no additional chrome layer needed
       layers: [
         ytDlpLayer,
-        // Use public ARN for chrome-aws-lambda layer (make sure to use the correct region and version)
-        lambda.LayerVersion.fromLayerVersionArn(this, 'ChromeAwsLambdaLayer', 
-          `arn:aws:lambda:${this.region}:764866452798:layer:chrome-aws-lambda:50`) // Check for latest version
       ],
       depsLockFilePath: 'src/lambdas/video-upload/package-lock.json',
       bundling: {
         ...commonLambdaProps.bundling,
         externalModules: [
-          // External modules to exclude from bundling
-          // '@aws-sdk/*', // Default AWS SDK modules 
-          // 'chrome-aws-lambda',
-          // 'puppeteer-core',
           '@sparticuz/chromium',
           'puppeteer-core'
         ]
@@ -656,14 +643,13 @@ export class VideoSearchStack extends cdk.Stack {
       environment: {
         VIDEO_BUCKET: this.videoBucket.bucketName,
         VIDEO_SLICING_QUEUE_URL: this.videoProcessingQueue.queueUrl,
-        SNS_TOPIC_ARN: this.rekognitionTopic.topicArn,
-        REKOGNITION_ROLE_ARN: this.rekognitionRole.roleArn,
         OPENSEARCH_ENDPOINT: `https://${this.openSearchCollection.attrId}.${this.region}.aoss.amazonaws.com`,
         REDIS_ENDPOINT: this.redisCluster.attrRedisEndpointAddress,
         INDEXES_TABLE: this.indexesTable.tableName,
         INDEXES_TABLE_DYNAMODB_DNS_NAME: dynamoDbEndpointDnsHttp,
-        BEDROCK_EMBEDDING_MODEL_ID: 'amazon.titan-embed-image-v1',
-        BEDROCK_TEXT_EMBEDDING_MODEL_ID: 'amazon.titan-embed-text-v2:0',
+        BEDROCK_EMBEDDING_MODEL_ID: 'us.twelvelabs.marengo-embed-3-0-v1:0',
+        TWELVELABS_MODEL_ID: 'global.twelvelabs.pegasus-1-2-v1:0',
+        TWELVELABS_REGION: 'us-east-1',
       },
       bundling: {
         minify: true,
@@ -697,9 +683,6 @@ export class VideoSearchStack extends cdk.Stack {
       // Report batch item failures, refer to https://docs.aws.amazon.com/lambda/latest/dg/services-sqs-errorhandling.html#services-sqs-batchfailurereporting
       reportBatchItemFailures: true
     }));
-
-    // Add event source from sns topic
-    videoSliceFunctionHandler.addEventSource(new SnsEventSource(this.rekognitionTopic));
 
     // Add event source from s3 bucket
     videoSliceFunctionHandler.addEventSource(new S3EventSource(this.videoBucket, {
@@ -899,8 +882,8 @@ export class VideoSearchStack extends cdk.Stack {
         INDEXES_TABLE: this.indexesTable.tableName,
         // Explicitly specify the DynamoDB endpoint since Private DNS can't be enabled because the service com.amazonaws.<region>.dynamodb does not provide a privateDNS name. Use Fn.select to properly extract the first DNS entry from the list
         INDEXES_TABLE_DYNAMODB_DNS_NAME: dynamoDbEndpointDnsHttp,
-        BEDROCK_EMBEDDING_MODEL_ID: 'amazon.titan-embed-image-v1',
-        BEDROCK_TEXT_EMBEDDING_MODEL_ID: 'amazon.titan-embed-text-v2:0',
+        BEDROCK_EMBEDDING_MODEL_ID: 'us.twelvelabs.marengo-embed-3-0-v1:0',
+        TWELVELABS_REGION: 'us-east-1',
         SILICONFLOW_API_KEY: this.siliconflowApiKey || '',
         GOOGLE_API_KEY: this.googleApiKey || '',
         VALIDATION_MODEL: this.validationModel || ''
@@ -1460,7 +1443,6 @@ export class VideoSearchStack extends cdk.Stack {
       adsTaggingFunction: lambda.Function;
       autoClipsFunction: lambda.Function;
     },
-    snsTopic: sns.Topic,
     indexesTable: dynamodb.Table
   ) {
     // S3 permissions
@@ -1494,9 +1476,6 @@ export class VideoSearchStack extends cdk.Stack {
     });
     lambdaFunctions.adsTaggingFunction.addToRolePolicy(adsBedrockPolicy);
     lambdaFunctions.autoClipsFunction.addToRolePolicy(adsBedrockPolicy);
-
-    // SNS permissions for Rekognition notifications subscription
-    snsTopic.grantSubscribe(lambdaFunctions.videoSliceFunction);
 
     // OpenSearch Serverless permissions
     const openSearchPolicy = new iam.PolicyStatement({
@@ -1552,35 +1531,6 @@ export class VideoSearchStack extends cdk.Stack {
     lambdaFunctions.videoMergeFunction.addToRolePolicy(openSearchPolicy);
     lambdaFunctions.adsTaggingFunction.addToRolePolicy(openSearchReadOnlyPolicy);
     lambdaFunctions.autoClipsFunction.addToRolePolicy(openSearchReadOnlyPolicy);
-
-    // Grant Rekognition permissions to video slice function
-    const rekognitionPolicy = new iam.PolicyStatement({
-      effect: iam.Effect.ALLOW,
-      actions: [
-        'rekognition:StartSegmentDetection',
-        'rekognition:GetSegmentDetection',
-        'rekognition:StartLabelDetection',
-        'rekognition:GetLabelDetection',
-        'rekognition:StartFaceDetection',
-        'rekognition:GetFaceDetection'
-      ],
-      resources: ['*']
-    });
-
-    // Add PassRole permission for Rekognition
-    const passRolePolicy = new iam.PolicyStatement({
-      effect: iam.Effect.ALLOW,
-      actions: ['iam:PassRole'],
-      resources: [this.rekognitionRole.roleArn],
-      conditions: {
-        StringLike: {
-          'iam:PassedToService': 'rekognition.amazonaws.com'
-        }
-      }
-    });
-
-    lambdaFunctions.videoSliceFunction.addToRolePolicy(rekognitionPolicy);
-    lambdaFunctions.videoSliceFunction.addToRolePolicy(passRolePolicy);
 
     // Grant DynamoDB permissions
     indexesTable.grantReadWriteData(lambdaFunctions.videoUploadFunction.videoUploadHandler);
@@ -1852,39 +1802,6 @@ export class VideoSearchStack extends cdk.Stack {
     });
 
     lambdaAccessPolicy.addDependency(this.openSearchCollection);
-  }
-
-  private createRekognitionTopic(): { topic: sns.Topic; rekognitionRole: iam.Role } {
-    // Create SNS topic for Rekognition notifications
-    const topic = new sns.Topic(this, 'RekognitionTopic', {
-      displayName: 'Video Processing Notifications',
-    });
-
-    // Create SQS queue for processing Rekognition notifications
-    const dlq = new sqs.Queue(this, 'RekognitionDLQ', {
-      queueName: `${this.stackName}-rekognition-dlq`,
-    });
-
-    const queue = new sqs.Queue(this, 'RekognitionQueue', {
-      queueName: `${this.stackName}-rekognition-notifications`,
-      deadLetterQueue: {
-        queue: dlq,
-        maxReceiveCount: 3,
-      },
-    });
-
-    // IAM role that gives Amazon Rekognition publishing permissions to the Amazon SNS topic
-    const rekognitionRole = new iam.Role(this, 'RekognitionRole', {
-      assumedBy: new iam.ServicePrincipal('rekognition.amazonaws.com'),
-    });
-
-    // Subscribe the queue to the SNS topic
-    topic.addSubscription(new sns_subs.SqsSubscription(queue));
-
-    // Grant Rekognition permission to publish to the topic
-    topic.grantPublish(rekognitionRole);
-
-    return { topic, rekognitionRole };
   }
 
   private createS3ConnectorStack(api: apigateway.RestApi, deploymentEnv: string): S3ConnectorStack {

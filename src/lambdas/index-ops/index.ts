@@ -442,7 +442,7 @@ async function handleCreateIndex(event: APIGatewayProxyEvent): Promise<APIGatewa
                 segment_visual_description: { type: 'text' },
                 segment_visual_embedding: { 
                   type: 'knn_vector',
-                  dimension: 2048,
+                  dimension: 512,
                   method: {
                     name: "hnsw",
                     space_type: "cosinesimil"
@@ -456,7 +456,7 @@ async function handleCreateIndex(event: APIGatewayProxyEvent): Promise<APIGatewa
                 segment_audio_description: { type: 'text' },
                 segment_audio_embedding: { 
                   type: 'knn_vector',
-                  dimension: 768,
+                  dimension: 512,
                   method: {
                     name: "hnsw",
                     space_type: "cosinesimil"

@@ -1,24 +1,12 @@
 import { LambdaContext, LambdaResponse } from '../../types/aws-lambda';
 import { VideoMetadata, VideoStatus, VideoSegment, VideoProcessingJob } from '../../types/common';
-import {
-  RekognitionClient,
-  StartSegmentDetectionCommand,
-  GetSegmentDetectionCommand,
-  StartLabelDetectionCommand,
-  StartFaceDetectionCommand,
-  NotificationChannel,
-  SegmentType,
-  SegmentDetection,
-  GetLabelDetectionCommand,
-  GetFaceDetectionCommand,
-} from '@aws-sdk/client-rekognition';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
 import { Client } from '@opensearch-project/opensearch';
 import { defaultProvider } from '@aws-sdk/credential-provider-node';
 import { AwsSigv4Signer } from '@opensearch-project/opensearch/aws';
-import { S3Event, SNSEvent, SQSEvent } from 'aws-lambda';
+import { S3Event, SQSEvent } from 'aws-lambda';
 import { spawn } from 'child_process';
 // fs module for file system operations like reading/writing video files
 import * as fs from 'fs';
@@ -28,10 +16,10 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { DynamoDBDocumentClient, PutCommand, UpdateCommand, GetCommand } from '@aws-sdk/lib-dynamodb';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 
-const rekognition = new RekognitionClient({});
 const sqs = new SQSClient({});
 const s3 = new S3Client({});
 const bedrockRuntime = new BedrockRuntimeClient({});
+const bedrockMarengo = new BedrockRuntimeClient({ region: process.env.TWELVELABS_REGION || 'us-east-1' });
 const openSearch = new Client({
   ...AwsSigv4Signer({
     region: process.env.AWS_REGION || 'us-east-1',
@@ -60,77 +48,18 @@ const STATUS_CODES = {
   INTERNAL_SERVER_ERROR: 500
 };
 
-const BEDROCK_MULTIMODAL_MODEL_ID = process.env.BEDROCK_EMBEDDING_MODEL_ID || 'amazon.titan-embed-image-v1';
-const BEDROCK_TEXT_MODEL_ID = process.env.BEDROCK_TEXT_EMBEDDING_MODEL_ID || 'amazon.titan-embed-text-v2:0';
+const MARENGO_MODEL_ID = process.env.BEDROCK_EMBEDDING_MODEL_ID || 'us.twelvelabs.marengo-embed-3-0-v1:0';
+const TWELVELABS_MODEL_ID = process.env.TWELVELABS_MODEL_ID || 'global.twelvelabs.pegasus-1-2-v1:0';
 
-export const handler = async (event: S3Event | SNSEvent | SQSEvent, _context: LambdaContext): Promise<LambdaResponse> => {
+export const handler = async (event: S3Event | SQSEvent, _context: LambdaContext): Promise<LambdaResponse> => {
   try {
     console.log('Received event:', event);
-    // Handle S3 event for new video upload, sample format below:
-    // {
-    //   Records: [
-    //     {
-    //       eventVersion: '2.1',
-    //       eventSource: 'aws:s3',
-    //       awsRegion: 'ap-northeast-1',
-    //       eventTime: '2025-02-21T09:20:26.368Z',
-    //       eventName: 'ObjectCreated:Put',
-    //       userIdentity: [Object],
-    //       requestParameters: [Object],
-    //       responseElements: [Object],
-    //       s3: [Object]
-    //     }
-    //   ]
-    // }
+    // Handle S3 event for new video upload
     if ('Records' in event && 'eventSource' in event.Records[0] && event.Records[0].eventSource === 'aws:s3') {
       return handleS3Event(event as S3Event);
     }
 
-    // Handle SNS notification from Rekognition, sample format below:
-    // {
-    //   Records: [
-    //     {
-    //       EventSource: 'aws:sns',
-    //       EventVersion: '1.0',
-    //       EventSubscriptionArn: '',
-    //       Sns: [Object]
-    //     }
-    //   ]
-    // }
-    if ('Records' in event && 'EventSource' in event.Records[0] && event.Records[0].EventSource === 'aws:sns') {
-      return handleSNSEvent(event as SNSEvent);
-    }
-
-    // Handle SQS message for video slicing, sample format below:
-    // {
-    //  Records: [
-    //    {
-    //      messageId: '3879ceb7-5c0f-4236-ae03-814654de7b88',
-    //      receiptHandle: '',
-    //      body: '{"videoIndex":"xx",
-    //              "videoId":"yy",
-    //              "segment":{"DurationFrames":19,
-    //                        "DurationMillis":3000,
-    //                        "DurationSMPTE":"00:00:03:00",
-    //                        "EndFrameNumber":19,
-    //                        "EndTimecodeSMPTE":"00:00:03:00",
-    //                        "EndTimestampMillis":3000,
-    //                        "ShotSegment":{"Confidence":99.9995346069336,
-    //                                      "Index":0},
-    //                        "StartFrameNumber":0,
-    //                        "StartTimecodeSMPTE":"00:00:00:00",
-    //                        "StartTimestampMillis":0,
-    //                        "Type":"SHOT"},
-    //                        "originalVideoKey":"RawVideos/2025-03-02/videoIndex/videoId/videoFileNameWithExtension"}',
-    //      attributes: [Object],
-    //      messageAttributes: {},
-    //      md5OfBody: '',
-    //      eventSource: 'aws:sqs',
-    //      eventSourceARN: '',
-    //      awsRegion: ''
-    //    }
-    //  ]
-    // }
+    // Handle SQS message for video segment processing
     if ('Records' in event && 'eventSource' in event.Records[0] && event.Records[0].eventSource === 'aws:sqs') {
       return handleSQSEvent(event as unknown as SQSEvent);
     }
@@ -150,11 +79,14 @@ export const handler = async (event: S3Event | SNSEvent | SQSEvent, _context: La
   }
 };
 
+/**
+ * Handle S3 event: download video, run FFmpeg scene detection, send segments to SQS
+ */
 async function handleS3Event(event: S3Event): Promise<LambdaResponse> {
   const record = event.Records[0].s3;
   const bucket = record.bucket.name;
   const key = decodeURIComponent(record.object.key.replace(/\+/g, ' '));
-  
+
   console.log('Processing video slice for key:', key, 'bucket:', bucket);
 
   // Skip non-raw video files and non video suffix files
@@ -173,569 +105,277 @@ async function handleS3Event(event: S3Event): Promise<LambdaResponse> {
 
   if (!videoId) throw new Error('Invalid video key format');
 
-  // Initialize videoPathForRekognition outside the try block so it's accessible later
-  let videoPathForRekognition = key;
-
-  // Validate the video format and codec for Rekognition compatibility, refer to https://aws.amazon.com/rekognition/faqs/
   try {
-    // Download the video to a temporary location for validation
-    const tempVideoPath = `/tmp/${videoId}_validation.mp4`;
-    
-    // Download the video file from S3
+    // Update status to processing
+    await updateVideoStatus(videoIndex, videoId, 'processing', {
+      message: 'Starting FFmpeg scene detection'
+    });
+
+    // Download video to /tmp for FFmpeg processing
+    const tempVideoPath = `/tmp/${videoId}_input.mp4`;
+
     const downloadCommand = new GetObjectCommand({
       Bucket: bucket,
       Key: key
     });
-    
+
     const response = await s3.send(downloadCommand);
     if (response.Body) {
-      // Convert the response body to a buffer and write to file
       const buf = Buffer.from(await response.Body.transformToByteArray());
       fs.writeFileSync(tempVideoPath, buf);
-      console.log(`Downloaded video for validation, size: ${buf.length} bytes`);
+      console.log(`Downloaded video for scene detection, size: ${buf.length} bytes`);
     } else {
-      throw new Error('Empty response body from S3 during validation');
+      throw new Error('Empty response body from S3');
     }
-    
-    // Use ffprobe to check the video codec and format
-    // NOTE: Conversion is disabled to avoid triggering redundant S3 events and indexing
-    // To enable conversion, uncomment the code below and implement proper event filtering
-    const validationResult = await validateVideoForRekognition(tempVideoPath, videoId, videoIndex);
-    
-    // videoPathForRekognition is already declared outside the try block
-    let convertedVideoUploaded = false;
-    
-    /* COMMENTED OUT: Video conversion to avoid redundant S3 event triggers
-    // If video was converted, upload the converted version to S3
-    if (validationResult.convertedPath) {
-      console.log('Using converted video for Rekognition processing');
-      
-      // Create a new S3 key for the converted video
-      const convertedKey = key.replace(/\.(mp4|mov)$/i, '_h264_converted.mp4');
-      
-      try {
-        // Upload the converted video to S3
-        console.log(`Uploading converted video to S3: ${convertedKey}`);
-        const convertedVideoBuffer = fs.readFileSync(validationResult.convertedPath);
-        
-        await s3.send(new PutObjectCommand({
-          Bucket: bucket,
-          Key: convertedKey,
-          Body: convertedVideoBuffer,
-          ContentType: 'video/mp4',
-          Metadata: {
-            'original-key': key,
-            'converted-from-codec': 'hevc',
-            'conversion-date': new Date().toISOString()
-          }
-        }));
-        
-        console.log('Successfully uploaded converted video to S3');
-        videoPathForRekognition = convertedKey;
-        convertedVideoUploaded = true;
-        
-        // Update video metadata to indicate conversion
-        await updateVideoStatus(videoIndex, videoId, 'processing', {
-          message: 'Video converted to H.264 format and uploaded successfully',
-          converted_video_s3_path: convertedKey,
-          conversion_status: 'completed'
-        });
-        
-      } catch (uploadError) {
-        console.error('Failed to upload converted video to S3:', uploadError);
-        // Fall back to using the original video path
-        videoPathForRekognition = key;
-      }
-      
-      // Clean up the converted file
-      try {
-        fs.unlinkSync(validationResult.convertedPath);
-      } catch (err) {
-        console.warn('Failed to clean up converted video file:', err);
-      }
-    }
-    */
-    
-    // Clean up the original temporary file
-    try {
-      fs.unlinkSync(tempVideoPath);
-    } catch (err) {
-      console.warn('Failed to clean up temporary validation file:', err);
-    }
-    
-    if (!validationResult.isValid) {
-      // Update the video status in OpenSearch to indicate incompatibility
-      await updateVideoStatus(videoIndex, videoId, 'error', {
-        error: 'Video format not compatible with Amazon Rekognition and conversion failed.'
-      });
-      
-      return {
-        statusCode: STATUS_CODES.BAD_REQUEST,
-        headers: corsHeaders,
-        body: JSON.stringify({ 
-          error: 'Video format not compatible with Amazon Rekognition',
-          message: 'Video conversion to H.264 format failed'
-        })
-      };
-    }
-    
-    console.log(`Video validation successful, proceeding with Rekognition jobs using ${convertedVideoUploaded ? 'converted' : 'original'} video`);
-  } catch (validationError) {
-    console.error('Error validating video:', validationError);
-    
-    // Update the video status in OpenSearch
+
+    // Run FFmpeg scene detection to find segment boundaries
+    const sceneTimestamps = await detectScenes(tempVideoPath);
+    console.log(`Detected ${sceneTimestamps.length} scene changes:`, sceneTimestamps);
+
+    // Get total video duration using ffprobe
+    const totalDuration = await getVideoDuration(tempVideoPath);
+    console.log(`Total video duration: ${totalDuration}ms`);
+
+    // Build segment list from scene timestamps
+    const segments = buildSegmentsFromScenes(sceneTimestamps, totalDuration);
+    console.log(`Built ${segments.length} segments from scene detection`);
+
+    // Subdivide long segments (>20s)
+    const subdividedSegments = subdivideSegments(segments, 20000);
+    console.log(`Original segments: ${segments.length}, After subdivision: ${subdividedSegments.length}`);
+
+    // Clean up temp video file
+    try { fs.unlinkSync(tempVideoPath); } catch (err) { console.warn('Failed to clean up temp file:', err); }
+
+    // Store segment detection results in DynamoDB for preview
+    await storeSegmentDetectionResults(videoIndex, videoId, subdividedSegments);
+
+    // Send segments to SQS for per-segment processing
+    await sendSegmentSlicingRequest(videoIndex, videoId, subdividedSegments);
+
+    return {
+      statusCode: STATUS_CODES.OK,
+      headers: corsHeaders,
+      body: JSON.stringify({
+        message: 'Video scene detection completed, segments queued for processing',
+        videoId,
+        segmentCount: subdividedSegments.length
+      })
+    };
+  } catch (error) {
+    console.error('Error in scene detection:', error);
+
     await updateVideoStatus(videoIndex, videoId, 'error', {
-      error: `Video validation failed: ${validationError instanceof Error ? validationError.message : 'Unknown error'}`
+      error: `Scene detection failed: ${error instanceof Error ? error.message : 'Unknown error'}`
     });
-    
+
     return {
       statusCode: STATUS_CODES.INTERNAL_SERVER_ERROR,
       headers: corsHeaders,
-      body: JSON.stringify({ 
-        error: 'Video validation failed',
-        details: validationError instanceof Error ? validationError.message : 'Unknown error'
+      body: JSON.stringify({
+        error: 'Scene detection failed',
+        details: error instanceof Error ? error.message : 'Unknown error'
       })
     };
   }
-
-  // Start Rekognition jobs using the potentially converted video
-  const notificationChannel: NotificationChannel = {
-    SNSTopicArn: process.env.SNS_TOPIC_ARN,
-    RoleArn: process.env.REKOGNITION_ROLE_ARN
-  };
-
-  // Start shot detection
-  const shotDetectionResponse = await rekognition.send(new StartSegmentDetectionCommand({
-    Video: { S3Object: { Bucket: bucket, Name: videoPathForRekognition } },
-    NotificationChannel: notificationChannel,
-    JobTag: `${videoIndex}-${videoId}-shots`,
-    SegmentTypes: [SegmentType.SHOT]
-  }));
-
-  // Start label detection
-  const labelDetectionResponse = await rekognition.send(new StartLabelDetectionCommand({
-    Video: { S3Object: { Bucket: bucket, Name: videoPathForRekognition } },
-    NotificationChannel: notificationChannel,
-    JobTag: `${videoIndex}-${videoId}-labels`,
-    MinConfidence: 90
-  }));
-
-  // Start face detection
-  const faceDetectionResponse = await rekognition.send(new StartFaceDetectionCommand({
-    Video: { S3Object: { Bucket: bucket, Name: videoPathForRekognition } },
-    NotificationChannel: notificationChannel,
-    JobTag: `${videoIndex}-${videoId}-faces`
-  }));
-
-  return {
-    statusCode: STATUS_CODES.OK,
-    headers: corsHeaders,
-    body: JSON.stringify({
-      message: 'Video processing started',
-      videoId,
-      jobIds: {
-        shotDetection: shotDetectionResponse.JobId,
-        labelDetection: labelDetectionResponse.JobId,
-        faceDetection: faceDetectionResponse.JobId
-      }
-    })
-  };
 }
 
-/* COMMENTED OUT: Video conversion function - kept for future reference
- * This function can convert incompatible videos to H.264 format
- * Currently disabled to avoid triggering redundant S3 events
- * 
- * To enable proper conversion:
- * 1. Implement S3 event filtering to skip converted videos (e.g., check for '_h264_converted' suffix)
- * 2. Store converted videos in a separate path or bucket
- * 3. Update the original video metadata to reference the converted version
- * 4. Prevent the converted video from triggering new indexing
- */
 /**
- * Converts an incompatible video to H.264 format compatible with Amazon Rekognition
- * 
- * @param inputPath Path to the input video file
- * @param outputPath Path where the converted video will be saved
- * @returns Promise that resolves when conversion is complete
+ * Run FFmpeg scene detection on a local video file.
+ * Returns an array of timestamps (in milliseconds) where scene changes occur.
  */
-/*
-async function convertVideoToH264(inputPath: string, outputPath: string): Promise<void> {
+async function detectScenes(videoPath: string): Promise<number[]> {
   const ffmpegPath = process.env.LAMBDA_TASK_ROOT ? '/opt/bin/ffmpeg' : 'ffmpeg';
-  
-  console.log(`Converting video from ${inputPath} to H.264 format at ${outputPath}`);
-  
-  return new Promise<void>((resolve, reject) => {
-    // Use FFmpeg to convert the video to H.264
+
+  return new Promise<number[]>((resolve, reject) => {
+    const timestamps: number[] = [];
+
+    // Use FFmpeg scene detection filter
+    // The 'select' filter with gt(scene,0.3) detects scene changes
+    // The 'showinfo' filter outputs frame info including timestamps
     const ffmpegProcess = spawn(ffmpegPath, [
-      '-i', inputPath,
-      '-c:v', 'libx264',        // Use H.264 codec
-      '-preset', 'fast',        // Fast encoding preset for Lambda timeout constraints
-      '-crf', '23',            // Constant Rate Factor for quality (23 is default, good quality)
-      '-c:a', 'aac',           // Use AAC audio codec
-      '-b:a', '128k',          // Audio bitrate
-      '-movflags', '+faststart', // Optimize for streaming
-      '-y',                    // Overwrite output file
-      outputPath
+      '-i', videoPath,
+      '-filter:v', "select='gt(scene,0.3)',showinfo",
+      '-f', 'null',
+      '-'
     ]);
-    
+
     let stderr = '';
-    
+
     ffmpegProcess.stderr.on('data', (data) => {
       stderr += data.toString();
     });
-    
+
     ffmpegProcess.on('close', (code) => {
-      if (code === 0) {
-        console.log('Video conversion completed successfully');
-        resolve();
-      } else {
-        console.error(`FFmpeg conversion failed with code ${code}`);
-        console.error(`FFmpeg stderr: ${stderr}`);
-        reject(new Error(`FFmpeg conversion failed with code ${code}`));
+      // FFmpeg outputs to stderr, parse showinfo output for timestamps
+      // showinfo lines look like: [Parsed_showinfo_1 @ ...] n:   0 pts:  12345 pts_time:1.234567 ...
+      const lines = stderr.split('\n');
+      for (const line of lines) {
+        const match = line.match(/pts_time:\s*([\d.]+)/);
+        if (match) {
+          const timestampMs = Math.round(parseFloat(match[1]) * 1000);
+          timestamps.push(timestampMs);
+        }
       }
+
+      console.log(`FFmpeg scene detection completed (exit code ${code}), found ${timestamps.length} scene changes`);
+      resolve(timestamps);
     });
-    
+
     ffmpegProcess.on('error', (err) => {
-      console.error('FFmpeg process error:', err);
+      console.error('FFmpeg scene detection error:', err);
       reject(err);
     });
   });
 }
-*/
 
 /**
- * Validates if a video file is compatible with Amazon Rekognition
- * If not compatible, attempts to convert it to H.264 format
- * 
- * Requirements:
- * - Video must be encoded using the H.264 codec
- * - Supported file formats are MPEG-4 and MOV
- * 
- * @param videoPath Path to the video file
- * @param videoId ID of the video
- * @param videoIndex Index of the video
- * @returns Object containing validation result and converted video path if applicable
+ * Get video duration in milliseconds using ffprobe
  */
-async function validateVideoForRekognition(videoPath: string, videoId: string, videoIndex: string): Promise<{ isValid: boolean; convertedPath?: string }> {
-  // Define ffprobe path - it's included in the FFmpeg Lambda layer
+async function getVideoDuration(videoPath: string): Promise<number> {
   const ffprobePath = process.env.LAMBDA_TASK_ROOT ? '/opt/bin/ffprobe' : 'ffprobe';
-  
-  try {
-    // Use ffprobe to get the video codec and format information
+
+  return new Promise<number>((resolve, reject) => {
     const ffprobeProcess = spawn(ffprobePath, [
       '-v', 'error',
-      '-select_streams', 'v:0',  // Select video stream
-      '-show_entries', 'stream=codec_name,codec_type:format=format_name,format_long_name',
-      '-of', 'json',
+      '-show_entries', 'format=duration',
+      '-of', 'default=noprint_wrappers=1:nokey=1',
       videoPath
     ]);
-    
-    let ffprobeOutput = '';
-    
+
+    let output = '';
+
     ffprobeProcess.stdout.on('data', (data) => {
-      ffprobeOutput += data.toString();
+      output += data.toString();
     });
-    
-    // Wait for the process to complete
-    await new Promise<void>((resolve, reject) => {
-      ffprobeProcess.on('close', (code) => {
-        if (code === 0) {
-          resolve();
-        } else {
-          reject(new Error(`ffprobe process exited with code ${code}`));
-        }
-      });
-      
-      ffprobeProcess.stderr.on('data', (data) => {
-        console.error(`ffprobe stderr: ${data}`);
-      });
-      
-      ffprobeProcess.on('error', (err) => {
-        reject(err);
-      });
-    });
-    
-    // Parse the ffprobe output
-    const videoInfo = JSON.parse(ffprobeOutput);
-    console.log('Video information:', JSON.stringify(videoInfo, null, 2));
-    
-    // Extract codec and format information
-    const videoCodec = videoInfo.streams?.[0]?.codec_name?.toLowerCase();
-    const videoFormat = videoInfo.format?.format_name?.toLowerCase();
-    const formatLongName = videoInfo.format?.format_long_name?.toLowerCase();
-    
-    console.log(`Video codec: ${videoCodec}, format: ${videoFormat}, format long name: ${formatLongName}`);
-    
-    // Check if the video is in a supported format
-    const isH264 = videoCodec === 'h264';
-    
-    // Check for MP4 or MOV container formats
-    // ffprobe may return formats like 'mov,mp4,m4a,3gp,3g2,mj2' for MP4/MOV files
-    const isSupportedFormat = videoFormat && (
-      videoFormat.includes('mp4') || 
-      videoFormat.includes('mov') || 
-      videoFormat.includes('quicktime')
-    );
-    
-    const isValid = isH264 && isSupportedFormat;
-    
-    // Log validation result
-    if (isValid) {
-      console.log(`Video ID ${videoId} is compatible with Amazon Rekognition`);
-      return { isValid: true };
-    } else {
-      console.warn(`Video ID ${videoId} is not compatible with Amazon Rekognition:`, {
-        isH264,
-        isSupportedFormat,
-        videoCodec,
-        videoFormat
-      });
-      
-      // Update video status with incompatibility error
-      const errorMessage = !isH264 
-        ? `Unsupported video codec: ${videoCodec}. Only H.264 is supported.`
-        : `Unsupported video format: ${videoFormat}. Only MP4 and MOV containers are supported.`;
-      
-      await updateVideoStatus(videoIndex, videoId, 'error', {
-        error: errorMessage,
-        original_codec: videoCodec,
-        message: 'Video format not compatible with Amazon Rekognition. Please convert to H.264 codec in MP4 or MOV container before uploading.'
-      });
-      
-      /* COMMENTED OUT: Automatic video conversion to avoid redundant S3 event triggers
-      // Attempt to convert the video to H.264 format
-      console.log(`Attempting to convert video ${videoId} to H.264 format...`);
-      
-      const convertedPath = `/tmp/${videoId}_converted_h264.mp4`;
-      
-      try {
-        // Update status to indicate conversion is in progress
-        await updateVideoStatus(videoIndex, videoId, 'processing', {
-          message: `Converting video from ${videoCodec} to H.264 format for Rekognition compatibility...`,
-          original_codec: videoCodec,
-          conversion_status: 'in_progress'
-        });
-        
-        // Convert the video
-        await convertVideoToH264(videoPath, convertedPath);
-        
-        // Verify the converted video
-        console.log('Verifying converted video...');
-        const verifyProcess = spawn(ffprobePath, [
-          '-v', 'error',
-          '-select_streams', 'v:0',
-          '-show_entries', 'stream=codec_name',
-          '-of', 'default=noprint_wrappers=1:nokey=1',
-          convertedPath
-        ]);
-        
-        let verifyOutput = '';
-        verifyProcess.stdout.on('data', (data) => {
-          verifyOutput += data.toString();
-        });
-        
-        await new Promise<void>((resolve, reject) => {
-          verifyProcess.on('close', (code) => {
-            if (code === 0) {
-              resolve();
-            } else {
-              reject(new Error(`Verification failed with code ${code}`));
-            }
-          });
-          
-          verifyProcess.on('error', reject);
-        });
-        
-        const convertedCodec = verifyOutput.trim().toLowerCase();
-        console.log(`Converted video codec: ${convertedCodec}`);
-        
-        if (convertedCodec === 'h264') {
-          console.log(`Successfully converted video ${videoId} to H.264 format`);
-          
-          // Update status to indicate successful conversion
-          await updateVideoStatus(videoIndex, videoId, 'processing', {
-            message: 'Video successfully converted to H.264 format',
-            conversion_status: 'verified'
-          });
-          
-          return { isValid: true, convertedPath };
-        } else {
-          throw new Error(`Conversion failed - resulting codec is ${convertedCodec}, not h264`);
-        }
-      } catch (conversionError) {
-        console.error(`Failed to convert video ${videoId} to H.264:`, conversionError);
-        
-        // Update video status with conversion failure
-        await updateVideoStatus(videoIndex, videoId, 'error', {
-          error: `Failed to convert video to H.264 format: ${conversionError instanceof Error ? conversionError.message : 'Unknown error'}`,
-          original_codec: videoCodec,
-          conversion_status: 'failed'
-        });
-        
-        return { isValid: false };
+
+    ffprobeProcess.on('close', (code) => {
+      if (code === 0) {
+        const durationMs = Math.round(parseFloat(output.trim()) * 1000);
+        resolve(durationMs);
+      } else {
+        reject(new Error(`ffprobe exited with code ${code}`));
       }
-      */
-      
-      return { isValid: false };
-    }
-  } catch (error) {
-    console.error('Error validating video for Rekognition:', error);
-    throw error;
-  }
+    });
+
+    ffprobeProcess.on('error', reject);
+  });
 }
 
 /**
- * Subdivides long segments (>20s) into smaller chunks
- * @param segments Array of segment detections from Rekognition
- * @param maxDurationMs Maximum duration for each segment in milliseconds (default 20000ms = 20s)
- * @returns Array of subdivided segments
+ * Build segment definitions from scene change timestamps.
+ * Each segment spans from one scene change to the next.
  */
-function subdivideSegments(segments: SegmentDetection[], maxDurationMs: number = 20000): SegmentDetection[] {
-  const subdividedSegments: SegmentDetection[] = [];
-  
+function buildSegmentsFromScenes(sceneTimestamps: number[], totalDurationMs: number): Array<{
+  StartTimestampMillis: number;
+  EndTimestampMillis: number;
+  DurationMillis: number;
+}> {
+  const segments: Array<{
+    StartTimestampMillis: number;
+    EndTimestampMillis: number;
+    DurationMillis: number;
+  }> = [];
+
+  // If no scene changes detected, treat the whole video as one segment
+  if (sceneTimestamps.length === 0) {
+    segments.push({
+      StartTimestampMillis: 0,
+      EndTimestampMillis: totalDurationMs,
+      DurationMillis: totalDurationMs
+    });
+    return segments;
+  }
+
+  // Sort timestamps
+  const sortedTimestamps = [...sceneTimestamps].sort((a, b) => a - b);
+
+  // First segment: 0 to first scene change
+  if (sortedTimestamps[0] > 0) {
+    segments.push({
+      StartTimestampMillis: 0,
+      EndTimestampMillis: sortedTimestamps[0],
+      DurationMillis: sortedTimestamps[0]
+    });
+  }
+
+  // Middle segments: between consecutive scene changes
+  for (let i = 0; i < sortedTimestamps.length - 1; i++) {
+    const start = sortedTimestamps[i];
+    const end = sortedTimestamps[i + 1];
+    segments.push({
+      StartTimestampMillis: start,
+      EndTimestampMillis: end,
+      DurationMillis: end - start
+    });
+  }
+
+  // Last segment: last scene change to end of video
+  const lastTimestamp = sortedTimestamps[sortedTimestamps.length - 1];
+  if (lastTimestamp < totalDurationMs) {
+    segments.push({
+      StartTimestampMillis: lastTimestamp,
+      EndTimestampMillis: totalDurationMs,
+      DurationMillis: totalDurationMs - lastTimestamp
+    });
+  }
+
+  return segments;
+}
+
+/**
+ * Subdivides long segments (>maxDurationMs) into smaller chunks
+ */
+function subdivideSegments(segments: Array<{
+  StartTimestampMillis: number;
+  EndTimestampMillis: number;
+  DurationMillis: number;
+}>, maxDurationMs: number = 20000): Array<{
+  StartTimestampMillis: number;
+  EndTimestampMillis: number;
+  DurationMillis: number;
+}> {
+  const subdividedSegments: Array<{
+    StartTimestampMillis: number;
+    EndTimestampMillis: number;
+    DurationMillis: number;
+  }> = [];
+
   segments.forEach((segment, originalIndex) => {
-    const duration = segment.DurationMillis || 0;
-    const startTime = segment.StartTimestampMillis || 0;
-    const endTime = segment.EndTimestampMillis || 0;
-    
-    // If segment is shorter than max duration, keep it as is
+    const duration = segment.DurationMillis;
+    const startTime = segment.StartTimestampMillis;
+    const endTime = segment.EndTimestampMillis;
+
     if (duration <= maxDurationMs) {
       subdividedSegments.push(segment);
     } else {
-      // Calculate number of subdivisions needed
       const numSubdivisions = Math.ceil(duration / maxDurationMs);
       const subSegmentDuration = duration / numSubdivisions;
-      
+
       console.log(`Subdividing segment ${originalIndex + 1} with duration ${duration}ms into ${numSubdivisions} sub-segments of ~${Math.round(subSegmentDuration)}ms each`);
-      
-      // Create subdivided segments
+
       for (let i = 0; i < numSubdivisions; i++) {
         const subStartTime = startTime + (i * subSegmentDuration);
         const subEndTime = i === numSubdivisions - 1 ? endTime : startTime + ((i + 1) * subSegmentDuration);
         const subDuration = subEndTime - subStartTime;
-        
-        // Create new segment with subdivided time ranges
-        const subSegment: SegmentDetection = {
-          ...segment,
+
+        subdividedSegments.push({
           StartTimestampMillis: Math.round(subStartTime),
           EndTimestampMillis: Math.round(subEndTime),
-          DurationMillis: Math.round(subDuration),
-          StartFrameNumber: segment.StartFrameNumber ? 
-            Math.round(segment.StartFrameNumber + (i * (segment.EndFrameNumber! - segment.StartFrameNumber) / numSubdivisions)) : 
-            undefined,
-          EndFrameNumber: segment.EndFrameNumber ? 
-            (i === numSubdivisions - 1 ? segment.EndFrameNumber : 
-            Math.round(segment.StartFrameNumber! + ((i + 1) * (segment.EndFrameNumber - segment.StartFrameNumber!) / numSubdivisions))) : 
-            undefined,
-          // Add subdivision metadata to maintain traceability
-          ...(segment.ShotSegment ? {
-            ShotSegment: {
-              ...segment.ShotSegment,
-              Index: segment.ShotSegment.Index,
-              // Add subdivision info to maintain original segment reference
-              Confidence: segment.ShotSegment.Confidence
-            }
-          } : {}),
-          ...(segment.TechnicalCueSegment ? {
-            TechnicalCueSegment: {
-              ...segment.TechnicalCueSegment,
-              Confidence: segment.TechnicalCueSegment.Confidence
-            }
-          } : {})
-        };
-        
-        // Update SMPTE timecodes if present
-        if (segment.StartTimecodeSMPTE && segment.EndTimecodeSMPTE) {
-          const fps = 30; // Assuming 30fps, adjust if needed
-          const startFrame = Math.round(subStartTime * fps / 1000);
-          const endFrame = Math.round(subEndTime * fps / 1000);
-          subSegment.StartTimecodeSMPTE = framesToSMPTE(startFrame, fps);
-          subSegment.EndTimecodeSMPTE = framesToSMPTE(endFrame, fps);
-          subSegment.DurationSMPTE = framesToSMPTE(endFrame - startFrame, fps);
-        }
-        
-        subdividedSegments.push(subSegment);
+          DurationMillis: Math.round(subDuration)
+        });
       }
     }
   });
-  
+
   return subdividedSegments;
-}
-
-/**
- * Converts frame count to SMPTE timecode format
- * @param frames Total number of frames
- * @param fps Frames per second
- * @returns SMPTE timecode string (HH:MM:SS:FF)
- */
-function framesToSMPTE(frames: number, fps: number): string {
-  const hours = Math.floor(frames / (fps * 3600));
-  const minutes = Math.floor((frames % (fps * 3600)) / (fps * 60));
-  const seconds = Math.floor((frames % (fps * 60)) / fps);
-  const frameCount = frames % fps;
-  
-  return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}:${frameCount.toString().padStart(2, '0')}`;
-}
-
-async function handleSNSEvent(event: SNSEvent): Promise<LambdaResponse> {
-  const message = JSON.parse(event.Records[0].Sns.Message);
-  const jobId = message.JobId;
-  const status = message.Status;
-  // e.g. RawVideos/2025-02-27/indexId/videoId/videoFileName
-  const videoId = message.Video.S3ObjectName.split('/')[3];
-  const videoIndex = message.Video.S3ObjectName.split('/')[2];
-
-  console.log('Processing Rekognition notification for job type:', message.API, 'jobId:', jobId, 'status:', status, 'videoIndex:', videoIndex, 'videoId:', videoId, 'message:', message);
-
-  try {
-    if (status === 'SUCCEEDED') {
-      // Get job results based on job type
-      if (message.API === 'StartSegmentDetection') {
-        const segments = await getSegmentDetectionResults(jobId);
-        
-        // Subdivide long segments (>20s) into smaller chunks for better search granularity
-        const subdividedSegments = subdivideSegments(segments, 20000);
-        
-        console.log(`Original segments: ${segments.length}, Subdivided segments: ${subdividedSegments.length}`);
-        
-        // Store the subdivided segment detection results in DynamoDB for preview purposes
-        await storeSegmentDetectionResults(videoIndex, videoId, subdividedSegments);
-        await sendSegmentSlicingRequest(videoIndex, videoId, subdividedSegments);
-      } else if (message.API === 'StartLabelDetection') {
-        const labels = await getLabelDetectionResults(jobId);
-        await updateVideoLabels(videoIndex, videoId, labels);
-      } else if (message.API === 'StartFaceDetection') {
-        const faces = await getFaceDetectionResults(jobId);
-        await updateVideoFaces(videoIndex, videoId, faces);
-      }
-    } else if (status === 'FAILED') {
-      await updateVideoStatus(videoIndex, videoId, 'error', {
-        error: message.StatusMessage
-      });
-    }
-
-  } catch (error) {
-    console.error('Error in handle Rekognition notification for job type:', message.API, 'jobId:', jobId, 'error message:', error, 'videoId:', videoId, 'message:', message);
-    return {
-      statusCode: STATUS_CODES.INTERNAL_SERVER_ERROR,
-      headers: corsHeaders,
-      body: JSON.stringify({ error: 'Internal server error' })
-    };
-  }
-
-  return {
-    statusCode: STATUS_CODES.OK,
-    headers: corsHeaders,
-    body: JSON.stringify({ message: 'Processed Rekognition notification' })
-  };
 }
 
 async function handleSQSEvent(event: SQSEvent): Promise<LambdaResponse> {
   try {
     // Parse the SQS message body
     const { videoIndex, videoId, segment, originalVideoKey, segmentNumber } = JSON.parse(event.Records[0].body);
-    
+
     // Make sure we have the bucket name from environment variables
     const bucketName = process.env.VIDEO_BUCKET;
     if (!bucketName) {
@@ -744,14 +384,14 @@ async function handleSQSEvent(event: SQSEvent): Promise<LambdaResponse> {
 
     // Pass the bucket name and segment number explicitly to the processing function
     const slicedSegments = await processSegmentDetection(
-      videoIndex, 
-      videoId, 
-      segment, 
-      originalVideoKey, 
+      videoIndex,
+      videoId,
+      segment,
+      originalVideoKey,
       bucketName,
-      segmentNumber // Use the sequential segment number instead of messageId
+      segmentNumber
     );
-    
+
     if (slicedSegments) {
       await updateVideoSegments(videoIndex, videoId, [slicedSegments]);
       // Also update the DynamoDB record with the complete segment data
@@ -761,14 +401,14 @@ async function handleSQSEvent(event: SQSEvent): Promise<LambdaResponse> {
     // Use DynamoDB's atomic operations to decrement the pending segments counter
     try {
       console.log(`Decrementing pending_segments_count for video ${videoId} in index ${videoIndex}`);
-      
+
       // Atomically decrement the counter
       const result = await withRetry(
         async () => docClient.send(new UpdateCommand({
           TableName: process.env.INDEXES_TABLE,
-          Key: { 
+          Key: {
             indexId: videoIndex,
-            videoId 
+            videoId
           },
           UpdateExpression: "ADD pending_segments_count :decrement",
           ExpressionAttributeValues: {
@@ -779,46 +419,50 @@ async function handleSQSEvent(event: SQSEvent): Promise<LambdaResponse> {
         3,
         `Atomically decrement pending segments count`
       );
-      
+
       console.log(`Updated pending_segments_count result:`, result);
-      
+
       // Check if this was the last segment (counter reached zero or negative)
       const pendingCount = result.Attributes?.pending_segments_count;
-      // If the pending count is zero or negative, all segments have been processed and we can proceed with embedding
       if (pendingCount !== undefined && pendingCount <= 0) {
-        console.log(`All segments for video ${videoId} have been processed, setting video_embed_completed flag`);
-        
-        // Set the completion flag
+        console.log(`All segments for video ${videoId} have been processed, marking as ready`);
+
+        // Set the completion flag and mark video as ready
         await withRetry(
           async () => docClient.send(new UpdateCommand({
             TableName: process.env.INDEXES_TABLE,
-            Key: { 
+            Key: {
               indexId: videoIndex,
-              videoId 
+              videoId
             },
-            UpdateExpression: "SET video_status = :status, video_embed_completed = :completed",
+            UpdateExpression: "SET video_status = :status, video_embed_completed = :completed, video_shots_completed = :shots_completed",
             ExpressionAttributeValues: {
-              ":status": "ready_for_video_embed",
-              ":completed": true
+              ":status": "ready",
+              ":completed": true,
+              ":shots_completed": true
             }
           })),
           3,
-          `Set video embedding completion flag`
+          `Set video completion flags`
         );
-        
-        console.log(`Successfully set video_embed_completed flag for video ${videoId} in index ${videoIndex}`);
+
+        // Also update OpenSearch status to ready
+        await updateVideoStatus(videoIndex, videoId, 'ready', {
+          message: 'All segments processed and embeddings generated'
+        });
+
+        console.log(`Successfully marked video ${videoId} as ready`);
       } else {
         console.log(`Still ${pendingCount} segments remaining to process for video ${videoId}`);
       }
     } catch (err) {
       console.error(`Error updating segment counter for video ${videoId}:`, err);
-      // Continue processing - don't fail the function just because counter update failed
     }
 
     return {
       statusCode: STATUS_CODES.OK,
       headers: corsHeaders,
-      body: JSON.stringify({ 
+      body: JSON.stringify({
         message: 'Video slicing completed',
         videoId,
         videoIndex,
@@ -871,7 +515,7 @@ async function updateVideoStatus(videoIndex: string, videoId: string, status: Vi
           }
         }
       }),
-      5, // Use 5 retries to handle concurrent update conflicts
+      5,
       `Update status for video ${videoId} in index ${videoIndex}`
     );
   } catch (error) {
@@ -880,14 +524,17 @@ async function updateVideoStatus(videoIndex: string, videoId: string, status: Vi
   }
 }
 
-async function sendSegmentSlicingRequest(videoIndex: string, videoId: string, segments: SegmentDetection[]): Promise<void> {
-  // Send a message to the video slicing queue per segment
+async function sendSegmentSlicingRequest(videoIndex: string, videoId: string, segments: Array<{
+  StartTimestampMillis: number;
+  EndTimestampMillis: number;
+  DurationMillis: number;
+}>): Promise<void> {
   const queueUrl = process.env.VIDEO_SLICING_QUEUE_URL;
   if (!queueUrl) {
     throw new Error('VIDEO_SLICING_QUEUE_URL is not set');
   }
-  
-  // Search for the video by video_id instead of getting it directly by ID
+
+  // Search for the video to get its S3 path
   const { body: searchResult } = await openSearch.search({
     index: videoIndex,
     body: {
@@ -900,84 +547,69 @@ async function sendSegmentSlicingRequest(videoIndex: string, videoId: string, se
   });
 
   if (!searchResult.hits || !searchResult.hits.hits || searchResult.hits.hits.length === 0) {
-    // Waiting the index to be updated then retry the search
     await new Promise(resolve => setTimeout(resolve, 3000));
     console.log(`Waiting for the index to be updated then retry the search for video ${videoId} in index ${videoIndex}`);
     return sendSegmentSlicingRequest(videoIndex, videoId, segments);
   }
 
-  // Extract video metadata from the search result
   const videoMetadata = searchResult.hits.hits[0]._source;
-
-  // The video_s3_path is in format `RawVideos/${timestamp}/${videoIndex}/${videoId}/${sanitizedFileName}`
   const originalVideoKey = videoMetadata.video_s3_path;
   if (!originalVideoKey) {
     console.warn('Original video path not found for video:', videoId);
     return;
   }
 
-  // Sort segments by start time to ensure they're processed in chronological order
-  const sortedSegments = [...segments].sort((a, b) => 
-    (a.StartTimestampMillis || 0) - (b.StartTimestampMillis || 0)
-  );
+  // Sort segments by start time
+  const sortedSegments = [...segments].sort((a, b) => a.StartTimestampMillis - b.StartTimestampMillis);
 
-  console.log('Sorted segments: ', sortedSegments, '\nlength: ', sortedSegments.length);
-  // Initialize a counter for pending segment embeddings in DynamoDB
   const totalSegmentsCount = sortedSegments.length;
   console.log(`Initializing pending_segments_count to ${totalSegmentsCount} for video ${videoId} in index ${videoIndex}`);
-  
+
   await withRetry(
     async () => docClient.send(new UpdateCommand({
       TableName: process.env.INDEXES_TABLE,
-      Key: { 
+      Key: {
         indexId: videoIndex,
-        videoId 
+        videoId
       },
       UpdateExpression: "SET video_status = :status, video_shots_completed = :video_shots_completed, pending_segments_count = :count",
       ExpressionAttributeValues: {
-        ":status": "ready_for_shots",
-        ":video_shots_completed": true,
+        ":status": "processing",
+        ":video_shots_completed": false,
         ":count": totalSegmentsCount
       }
     })),
     3,
     `Initialize pending segments count to ${totalSegmentsCount}`
   );
-  
-  // Send a message to the video slicing queue per segment with sequential segment numbers
+
+  // Send a message to the video slicing queue per segment
   for (let i = 0; i < sortedSegments.length; i++) {
     const segment = sortedSegments[i];
-    const segmentNumber = i + 1; // Start from 1 for human readability
-    
-    // Check if we're using a FIFO queue
+    const segmentNumber = i + 1;
+
     const isFifoQueue = queueUrl.endsWith('.fifo');
-    
-    // Create the base command parameters
+
     const commandParams: any = {
       QueueUrl: queueUrl,
-      MessageBody: JSON.stringify({ 
-        videoIndex, 
-        videoId, 
-        segment, 
+      MessageBody: JSON.stringify({
+        videoIndex,
+        videoId,
+        segment,
         originalVideoKey,
         segmentNumber,
-        totalSegments: totalSegmentsCount // Include total segments count
+        totalSegments: totalSegmentsCount
       })
     };
-    
-    // Add FIFO-specific attributes if needed
+
     if (isFifoQueue) {
-      // Create multiple message groups for better parallelism
-      // This distributes processing across different message groups
-      // We'll create 10 message groups per video to allow parallel processing
-      const groupNumber = segmentNumber % 10; // Split into 10 groups (0-9)
-      
-      commandParams.MessageGroupId = `${videoId}-group-${groupNumber}`; // Distribute across groups
-      commandParams.MessageDeduplicationId = `${videoId}-segment-${segmentNumber}-${Date.now()}`; // Ensure uniqueness with timestamp
+      const groupNumber = segmentNumber % 10;
+      commandParams.MessageGroupId = `${videoId}-group-${groupNumber}`;
+      commandParams.MessageDeduplicationId = `${videoId}-segment-${segmentNumber}-${Date.now()}`;
     }
-    
+
     const command = new SendMessageCommand(commandParams);
-    
+
     try {
       await sqs.send(command);
     } catch (error) {
@@ -989,14 +621,14 @@ async function sendSegmentSlicingRequest(videoIndex: string, videoId: string, se
 async function processSegmentDetection(
   videoIndex: string,
   videoId: string,
-  segment: SegmentDetection,
+  segment: { StartTimestampMillis: number; EndTimestampMillis: number; DurationMillis: number },
   originalVideoKey: string,
   bucketName: string,
   segmentNumber: number
 ): Promise<VideoSegment | null> {
   try {
     console.log(`Processing segment detection for video ${videoId} in index ${videoIndex}, segment number: ${segmentNumber}, segment: ${JSON.stringify(segment)}, originalVideoKey: ${originalVideoKey} and bucketName: ${bucketName}`);
-    // Check if the segments are already processed
+
     if (!segment) {
       console.warn('No segments detected for video:', videoId);
       return null;
@@ -1015,40 +647,30 @@ async function processSegmentDetection(
       console.warn(`Skipping short segment ${slicedSegment.segment_id} with duration ${slicedSegment.duration}ms`);
       return null;
     }
-    
-    // Create the output path for the sliced video, use the sanitized file name from the original video, in format `ProcessedVideos/${timestamp}/${videoIndex}/${videoId}/segments/sanitizedFileNameWithIndex`, e.g. the originalVideoKey is `RawVideos/2025-02-27/kyiamzn/bc4d6c51-0238-484c-9c8a-81a605e08774/VoC05.mp4`, the segmentVideoS3Path is `ProcessedVideos/2025-02-27/kyiamzn/bc4d6c51-0238-484c-9c8a-81a605e08774/segments/VoC05_001.mp4` and the keyframe is `ProcessedVideos/2025-02-27/kyiamzn/bc4d6c51-0238-484c-9c8a-81a605e08774/segments/VoC05_001.jpg`
+
+    // Create the output path for the sliced video
     const segmentVideoS3Path = (() => {
-      // Extract components from original key
       const [_, timestamp, indexId, vidId, filename] = originalVideoKey.split('/');
-      
-      // Split filename into name and extension
       const [name, ext] = filename.split('.');
-      
-      // Create segment number with padding (001, 002, etc.)
       const paddedSegmentNum = String(segmentNumber).padStart(3, '0');
-      
-      // Construct new key with same structure but under ProcessedVideos
-      return [`ProcessedVideos/${timestamp}/${indexId}/${vidId}/segments/${name}_${paddedSegmentNum}.${ext}`, 
+      return [`ProcessedVideos/${timestamp}/${indexId}/${vidId}/segments/${name}_${paddedSegmentNum}.${ext}`,
               `ProcessedVideos/${timestamp}/${indexId}/${vidId}/segments/${name}_${paddedSegmentNum}.jpg`];
     })();
-    
+
     // Use FFmpeg to slice the video and extract keyframes
     const localInputPath = `/tmp/${videoId}_input.mp4`;
     const localOutputPath = `/tmp/${videoId}_segment_${segmentNumber}.mp4`;
     const localKeyframePath = `/tmp/${videoId}_keyframe_${segmentNumber}.jpg`;
 
-    // Define ffmpeg path explicitly - it's in the Lambda layer
     const ffmpegPath = process.env.LAMBDA_TASK_ROOT ? '/opt/bin/ffmpeg' : 'ffmpeg';
-    
+
     // Ensure ffmpeg exists and has execute permissions
     try {
-      // Use child_process.exec to check if ffmpeg is executable
       const { exec } = require('child_process');
       await new Promise((resolve, reject) => {
         exec(`${ffmpegPath} -version`, (error: any, stdout: any, stderr: any) => {
           if (error) {
             console.error(`Error checking ffmpeg: ${error}`);
-            console.error(`stderr: ${stderr}`);
             reject(error);
             return;
           }
@@ -1061,58 +683,41 @@ async function processSegmentDetection(
       throw new Error('FFmpeg not accessible or not executable');
     }
 
-    // Use FFmpeg to download, slice the video, and extract keyframe
     try {
-      // First, download the original video to a local file
+      // Download the original video to a local file
       console.log(`Downloading video from S3 to ${localInputPath}`);
       const response = await s3.send(new GetObjectCommand({
         Bucket: bucketName,
         Key: originalVideoKey
       }));
-      
+
       if (response.Body) {
-        // Convert the response body to a buffer and write to file
         const buf = Buffer.from(await response.Body.transformToByteArray());
         fs.writeFileSync(localInputPath, buf);
-        // console.log(`Downloaded video file, size: ${buf.length} bytes`);
       } else {
         throw new Error('Empty response body from S3');
       }
 
-      // Now slice the video using the downloaded file
+      // Slice the video using FFmpeg
       await new Promise<void>((resolve, reject) => {
         const startTimeSeconds = slicedSegment.start_time / 1000;
         const durationSeconds = slicedSegment.duration / 1000;
-        
-        // Choose preset based on segment duration
-        // For longer segments, use a faster preset to prevent Lambda timeouts
-        // For shorter segments, we can afford better quality
         const preset = durationSeconds > 20 ? 'veryfast' : 'medium';
-        
-        console.log(`Running ffmpeg to slice video and re-encode to H.264 (preset: ${preset}): ${ffmpegPath} -ss ${startTimeSeconds} -i ${localInputPath} -t ${durationSeconds} -c:v libx264 -preset ${preset} -crf 23 -c:a aac -b:a 128k -y ${localOutputPath}`);
-        
-        // Use FFmpeg to slice the video from local file and re-encode to H.264
+
+        console.log(`Running ffmpeg to slice video (preset: ${preset}): -ss ${startTimeSeconds} -t ${durationSeconds}`);
+
         const ffmpegProcess = spawn(ffmpegPath, [
           '-ss', startTimeSeconds.toString(),
           '-i', localInputPath,
           '-t', durationSeconds.toString(),
-          '-c:v', 'libx264',  // Encode to H.264
-          '-preset', preset,  // Dynamic preset based on segment duration
-          '-crf', '23',       // Constant Rate Factor for quality control (lower is better quality, 23 is default)
-          '-c:a', 'aac',      // Re-encode audio to AAC
-          '-b:a', '128k',     // Audio bitrate
-          '-y',               // Overwrite output file
+          '-c:v', 'libx264',
+          '-preset', preset,
+          '-crf', '23',
+          '-c:a', 'aac',
+          '-b:a', '128k',
+          '-y',
           localOutputPath
         ]);
-
-        // Capture and log ffmpeg output
-        // ffmpegProcess.stdout.on('data', (data) => {
-        //   console.log(`ffmpeg stdout: ${data}`);
-        // });
-
-        // ffmpegProcess.stderr.on('data', (data) => {
-        //   console.log(`ffmpeg stderr: ${data}`);
-        // });
 
         ffmpegProcess.on('close', (code) => {
           if (code === 0) {
@@ -1123,35 +728,25 @@ async function processSegmentDetection(
             reject(new Error(`FFmpeg slicing failed with code ${code}`));
           }
         });
-        
+
         ffmpegProcess.on('error', (err) => {
           console.error('FFmpeg process error:', err);
           reject(err);
         });
       });
 
-      // Then extract a keyframe from the middle of the segment
+      // Extract a keyframe from the segment
       await new Promise<void>((resolve, reject) => {
-        console.log(`Extracting keyframe: ${ffmpegPath} -i ${localOutputPath} -ss 0 -frames:v 1 -q:v 2 -y ${localKeyframePath}`);
-        
-        // Extract a keyframe from the beginning of the slice
+        console.log(`Extracting keyframe from segment ${segmentNumber}`);
+
         const keyframeProcess = spawn(ffmpegPath, [
           '-i', localOutputPath,
-          '-ss', '0',  // Start from the beginning of the slice
-          '-frames:v', '1',  // Extract just one frame
-          '-q:v', '2',  // High quality
+          '-ss', '0',
+          '-frames:v', '1',
+          '-q:v', '2',
           '-y',
           localKeyframePath
         ]);
-
-        // Capture and log ffmpeg output
-        // keyframeProcess.stdout.on('data', (data) => {
-        //   console.log(`keyframe ffmpeg stdout: ${data}`);
-        // });
-
-        // keyframeProcess.stderr.on('data', (data) => {
-        //   console.log(`keyframe ffmpeg stderr: ${data}`);
-        // });
 
         keyframeProcess.on('close', (code) => {
           if (code === 0) {
@@ -1162,7 +757,7 @@ async function processSegmentDetection(
             reject(new Error(`FFmpeg keyframe extraction failed with code ${code}`));
           }
         });
-        
+
         keyframeProcess.on('error', (err) => {
           console.error('FFmpeg keyframe process error:', err);
           reject(err);
@@ -1173,7 +768,7 @@ async function processSegmentDetection(
       if (!fs.existsSync(localOutputPath)) {
         throw new Error(`Output video file was not created: ${localOutputPath}`);
       }
-      
+
       if (!fs.existsSync(localKeyframePath)) {
         throw new Error(`Keyframe file was not created: ${localKeyframePath}`);
       }
@@ -1195,15 +790,14 @@ async function processSegmentDetection(
           ContentType: 'image/jpeg'
         }))
       ]);
-      
-      // Get a signed URL for the keyframe
+
+      // Get signed URLs
       const keyframeCommand = new GetObjectCommand({
         Bucket: bucketName,
         Key: segmentVideoS3Path[1]
       });
       const keyframeSignedUrl = await getSignedUrl(s3 as any, keyframeCommand as any, { expiresIn: 3600 });
 
-      // Get a signed URL for the segment
       const segmentCommand = new GetObjectCommand({
         Bucket: bucketName,
         Key: segmentVideoS3Path[0]
@@ -1212,18 +806,17 @@ async function processSegmentDetection(
 
       console.log(`Successfully uploaded segment ${segmentNumber} and keyframe to S3`);
 
-      // Add the segment to our results
       slicedSegment.segment_video_s3_path = segmentVideoS3Path[0];
       slicedSegment.segment_video_thumbnail_s3_path = segmentVideoS3Path[1];
       slicedSegment.segment_video_preview_url = segmentSignedUrl;
       slicedSegment.segment_video_thumbnail_url = keyframeSignedUrl;
       slicedSegment.segment_visual = {
-        segment_visual_description: segment.ShotSegment ? 'Shot boundary detected' : 'Technical cue detected',
+        segment_visual_description: 'Scene detected by FFmpeg',
       };
 
-      // Generate embeddings using Bedrock Titan (before cleaning up local files)
+      // Generate embeddings using TwelveLabs Marengo Embed 3.0
       try {
-        console.log('Generating embeddings via Bedrock Titan for segment', segmentVideoS3Path[0]);
+        console.log('Generating embeddings for segment', segmentVideoS3Path[0]);
 
         const segmentDescription = slicedSegment.segment_visual?.segment_visual_description || '';
         const embeddings = await generateEmbedding(localKeyframePath, segmentDescription);
@@ -1260,7 +853,6 @@ async function processSegmentDetection(
       return slicedSegment;
     } catch (error) {
       console.error(`Error processing video segment ${segmentNumber}:`, error);
-      // Continue with the next segment even if this one fails, but note since we set the batch size to 1, there is only one message in the batch
       return null;
     }
   } catch (error) {
@@ -1270,97 +862,83 @@ async function processSegmentDetection(
 }
 
 /**
- * Generate a visual embedding for a keyframe image using Amazon Bedrock Titan Multimodal Embeddings.
- * Reads the keyframe from the local filesystem and sends the base64-encoded image to Bedrock.
- *
- * @param keyframePath Local path to the keyframe JPEG file
- * @returns 1024-dimensional embedding vector, or null on failure
+ * Generate a visual embedding for a keyframe image using TwelveLabs Marengo Embed 3.0.
+ * Returns a 512-dimensional embedding vector, or null on failure.
  */
 async function generateVisualEmbedding(keyframePath: string): Promise<number[] | null> {
   try {
     const imageBuffer = fs.readFileSync(keyframePath);
     const base64Image = imageBuffer.toString('base64');
 
-    const response = await bedrockRuntime.send(new InvokeModelCommand({
-      modelId: BEDROCK_MULTIMODAL_MODEL_ID,
+    const response = await bedrockMarengo.send(new InvokeModelCommand({
+      modelId: MARENGO_MODEL_ID,
       contentType: 'application/json',
       accept: 'application/json',
       body: JSON.stringify({
-        inputImage: base64Image,
-        embeddingConfig: { outputEmbeddingLength: 1024 }
+        inputType: 'image',
+        image: { mediaSource: { base64String: base64Image } }
       })
     }));
 
     const result = JSON.parse(new TextDecoder().decode(response.body));
-    if (result.embedding && Array.isArray(result.embedding)) {
-      console.log(`Generated visual embedding via Bedrock Titan, length: ${result.embedding.length}`);
-      return result.embedding as number[];
+    if (result.data?.[0]?.embedding && Array.isArray(result.data[0].embedding)) {
+      const embedding = result.data[0].embedding as number[];
+      console.log(`Generated visual embedding via Marengo Embed 3.0, length: ${embedding.length}`);
+      return embedding;
     }
-    console.warn('Unexpected response format from Bedrock Titan Multimodal');
+    console.warn('Unexpected response format from Marengo Embed 3.0:', JSON.stringify(result).substring(0, 200));
     return null;
   } catch (error) {
-    console.error('Error generating visual embedding via Bedrock:', error);
+    console.error('Error generating visual embedding via Marengo Embed 3.0:', error);
     return null;
   }
 }
 
 /**
- * Generate an audio/text embedding using Amazon Bedrock Titan Text Embeddings.
- * Extracts audio from the video segment, transcribes it using Amazon Transcribe
- * (placeholder: currently uses a description-based fallback), then embeds the text.
- *
- * For now, we generate a text embedding from the segment description as a placeholder.
- * A full Transcribe integration can be added later for richer audio embeddings.
- *
- * @param segmentDescription Text description of the segment (used as transcript placeholder)
- * @returns 1024-dimensional embedding vector, or null on failure
+ * Generate a text embedding using TwelveLabs Marengo Embed 3.0.
+ * Returns a 512-dimensional embedding vector, or null on failure.
  */
 async function generateTextEmbedding(text: string): Promise<number[] | null> {
   if (!text || text.trim().length === 0) return null;
 
   try {
-    const response = await bedrockRuntime.send(new InvokeModelCommand({
-      modelId: BEDROCK_TEXT_MODEL_ID,
+    const response = await bedrockMarengo.send(new InvokeModelCommand({
+      modelId: MARENGO_MODEL_ID,
       contentType: 'application/json',
       accept: 'application/json',
       body: JSON.stringify({
-        inputText: text,
-        dimensions: 1024,
-        normalize: true
+        inputType: 'text',
+        text: { inputText: text }
       })
     }));
 
     const result = JSON.parse(new TextDecoder().decode(response.body));
-    if (result.embedding && Array.isArray(result.embedding)) {
-      console.log(`Generated text embedding via Bedrock Titan Text, length: ${result.embedding.length}`);
-      return result.embedding as number[];
+    if (result.data?.[0]?.embedding && Array.isArray(result.data[0].embedding)) {
+      console.log(`Generated text embedding via Marengo Embed 3.0, length: ${result.data[0].embedding.length}`);
+      return result.data[0].embedding as number[];
     }
-    console.warn('Unexpected response format from Bedrock Titan Text');
+    console.warn('Unexpected response format from Marengo Embed 3.0');
     return null;
   } catch (error) {
-    console.error('Error generating text embedding via Bedrock:', error);
+    console.error('Error generating text embedding via Marengo Embed 3.0:', error);
     return null;
   }
 }
 
 /**
- * Generate embeddings for a video segment using Amazon Bedrock Titan.
- * - Visual embedding: from the keyframe image via Titan Multimodal Embeddings
- * - Audio embedding: from segment description text via Titan Text Embeddings (placeholder for Transcribe)
- *
- * @param keyframePath Local path to the keyframe JPEG
- * @param segmentDescription Description text for audio/text embedding
- * @returns Object containing vision and audio embeddings
+ * Generate embeddings for a video segment using TwelveLabs Marengo Embed 3.0.
+ * Both visual and audio embeddings are 512-dim in the Marengo unified embedding space.
+ * - Visual embedding: from keyframe image via Marengo (512-dim)
+ * - Audio embedding: from segment description text via Marengo (512-dim)
  */
 async function generateEmbedding(keyframePath: string, segmentDescription: string): Promise<{
   vision_embedding: number[] | null;
   audio_embedding: number[] | null;
 }> {
-  console.log('Generating embeddings via Bedrock Titan for keyframe:', keyframePath);
+  console.log('Generating embeddings for keyframe:', keyframePath);
   const defaultResponse = { vision_embedding: null, audio_embedding: null };
 
   try {
-    // Generate visual and text embeddings in parallel
     const [visionEmbedding, audioEmbedding] = await Promise.all([
       generateVisualEmbedding(keyframePath),
       generateTextEmbedding(segmentDescription)
@@ -1373,63 +951,38 @@ async function generateEmbedding(keyframePath: string, segmentDescription: strin
       audio_embedding: audioEmbedding
     };
   } catch (error) {
-    console.error('Error generating embeddings via Bedrock:', error);
+    console.error('Error generating embeddings:', error);
     return defaultResponse;
   }
 }
 
-async function getSegmentDetectionResults(jobId: string): Promise<SegmentDetection[]> {
-  // Refer to https://docs.aws.amazon.com/rekognition/latest/dg/segment-api.html for the response format
-  const segments: SegmentDetection[] = [];
-  let nextToken: string | undefined;
-
-  do {
-    const response = await rekognition.send(new GetSegmentDetectionCommand({
-      JobId: jobId,
-      NextToken: nextToken
-    }));
-
-    if (response.Segments) {
-      segments.push(...response.Segments);
-    }
-    nextToken = response.NextToken;
-  } while (nextToken);
-
-  return segments;
-}
-
 /**
  * Store segment detection results in DynamoDB for preview purposes
- * This allows the UI to show segment previews before the actual video slicing is complete
  */
-async function storeSegmentDetectionResults(videoIndex: string, videoId: string, segments: SegmentDetection[]): Promise<void> {
+async function storeSegmentDetectionResults(videoIndex: string, videoId: string, segments: Array<{
+  StartTimestampMillis: number;
+  EndTimestampMillis: number;
+  DurationMillis: number;
+}>): Promise<void> {
   try {
-    // Convert Rekognition SegmentDetection to VideoSegment format for consistent storage
     const videoSegments: VideoSegment[] = segments.map((segment, index) => ({
       segment_id: `${videoId}_segment_${index + 1}`,
       video_id: videoId,
       start_time: segment.StartTimestampMillis || 0,
       end_time: segment.EndTimestampMillis || 0,
       duration: segment.DurationMillis || 0,
-      confidence: segment.ShotSegment?.Confidence || segment.TechnicalCueSegment?.Confidence || 0,
       segment_name: `Segment ${index + 1}`,
-      // Add basic visual description based on segment type
       segment_visual: {
-        segment_visual_description: segment.ShotSegment 
-          ? `Shot boundary detected (confidence: ${Math.round(segment.ShotSegment.Confidence || 0)}%)` 
-          : segment.TechnicalCueSegment 
-            ? `Technical cue detected: ${segment.TechnicalCueSegment.Type || 'Unknown'} (confidence: ${Math.round(segment.TechnicalCueSegment.Confidence || 0)}%)`
-            : 'Segment boundary detected'
+        segment_visual_description: 'Scene detected by FFmpeg'
       }
     }));
 
-    // Store in DynamoDB INDEXES_TABLE
     await withRetry(
       async () => docClient.send(new UpdateCommand({
         TableName: process.env.INDEXES_TABLE,
-        Key: { 
+        Key: {
           indexId: videoIndex,
-          videoId 
+          videoId
         },
         UpdateExpression: "SET video_segments = :segments, segment_count = :count, video_status = :status, updated_at = :updated_at",
         ExpressionAttributeValues: {
@@ -1452,42 +1005,38 @@ async function storeSegmentDetectionResults(videoIndex: string, videoId: string,
 
 /**
  * Update a single segment in the DynamoDB video_segments array
- * This is called after segment processing is complete to add S3 paths and thumbnails
  */
 async function updateDynamoDBSegment(videoIndex: string, videoId: string, processedSegment: VideoSegment): Promise<void> {
   try {
     console.log(`Updating DynamoDB segment ${processedSegment.segment_id} for video ${videoId} in index ${videoIndex}`);
-    
-    // Get current record to find the segment index
+
     const getResult = await docClient.send(new GetCommand({
       TableName: process.env.INDEXES_TABLE,
-      Key: { 
+      Key: {
         indexId: videoIndex,
-        videoId 
+        videoId
       }
     }));
-    
+
     if (!getResult.Item || !getResult.Item.video_segments) {
       console.warn(`No video segments found in DynamoDB for video ${videoId}`);
       return;
     }
-    
-    // Find the segment index in the array
+
     const segments = getResult.Item.video_segments as VideoSegment[];
     const segmentIndex = segments.findIndex(s => s.segment_id === processedSegment.segment_id);
-    
+
     if (segmentIndex === -1) {
       console.warn(`Segment ${processedSegment.segment_id} not found in DynamoDB array`);
       return;
     }
-    
-    // Update the specific segment in the array
+
     await withRetry(
       async () => docClient.send(new UpdateCommand({
         TableName: process.env.INDEXES_TABLE,
-        Key: { 
+        Key: {
           indexId: videoIndex,
-          videoId 
+          videoId
         },
         UpdateExpression: `SET video_segments[${segmentIndex}].segment_video_s3_path = :video_path, video_segments[${segmentIndex}].segment_video_thumbnail_s3_path = :thumbnail_path, video_segments[${segmentIndex}].segment_video_preview_url = :preview_url, video_segments[${segmentIndex}].segment_video_thumbnail_url = :thumbnail_url`,
         ExpressionAttributeValues: {
@@ -1500,56 +1049,36 @@ async function updateDynamoDBSegment(videoIndex: string, videoId: string, proces
       3,
       `Update DynamoDB segment ${processedSegment.segment_id}`
     );
-    
+
     console.log(`Successfully updated DynamoDB segment ${processedSegment.segment_id} for video ${videoId}`);
   } catch (error) {
     console.error(`Error updating DynamoDB segment ${processedSegment.segment_id}:`, error);
-    // Don't throw error - segment processing should continue even if DynamoDB update fails
   }
 }
 
 /**
- * Utility function to perform OpenSearch operations with retry logic
- *
- * This function is critical for handling version conflicts in OpenSearch/AOSS,
- * especially when multiple Lambda instances try to update the same document concurrently.
- * It implements exponential backoff to allow conflicting operations to resolve over time.
- *
- * The version conflict error occurs when:
- * 1. Process A reads a document (with sequence number N)
- * 2. Process B updates the same document (incrementing sequence number to N+1)
- * 3. Process A tries to update with original sequence number N, causing a conflict
- *
- * By retrying the operation, we give Process A a chance to fetch the latest document
- * state with the updated sequence number and make its changes on top of that.
- *
- * @param operation Function that performs the OpenSearch operation
- * @param maxRetries Maximum number of retry attempts
- * @param operationName Name of the operation for logging
- * @returns Result of the operation
+ * Utility function to perform operations with retry logic and exponential backoff
  */
 async function withRetry<T>(
   operation: () => Promise<T>,
-  // increase maxRetries to 6 since we're using OpenSearch Serverless which the refresh: true is not supported, refer to https://repost.aws/community/users/USiotOGJ78So2L1_DskJDcgQ
-  maxRetries: number = 6, 
+  maxRetries: number = 6,
   operationName: string = 'OpenSearch operation'
 ): Promise<T> {
   let retries = 0;
-  
+
   while (true) {
     try {
       return await operation();
     } catch (error) {
       retries++;
-      
+
       if (retries >= maxRetries) {
         console.error(`Failed ${operationName} after ${maxRetries} retries:`, error);
         throw error;
       }
-      
+
       console.warn(`${operationName} failed (retry ${retries}/${maxRetries}):`, error);
-      
-      // Exponential backoff: 4s, 16s, 64s, 256s, 1024s, 4096s, 16384s
+
       const delay = Math.pow(4, retries) * 1000;
       await new Promise(resolve => setTimeout(resolve, delay));
     }
@@ -1558,9 +1087,8 @@ async function withRetry<T>(
 
 async function updateVideoSegments(videoIndex: string, videoId: string, segments: VideoSegment[]): Promise<void> {
   console.log('Segments to update: ', segments, '\nwith visual embedding length: ', segments.map(s => s.segment_visual?.segment_visual_embedding?.length), '\nwith audio embedding length: ', segments.map(s => s.segment_audio?.segment_audio_embedding?.length));
-  
+
   try {
-    // First search for the document to get the OpenSearch document ID and existing segments
     const { body: searchResult } = await openSearch.search({
       index: videoIndex,
       body: {
@@ -1573,7 +1101,6 @@ async function updateVideoSegments(videoIndex: string, videoId: string, segments
     });
 
     if (!searchResult.hits || !searchResult.hits.hits || searchResult.hits.hits.length === 0) {
-      // Waiting the index to be updated then retry the search
       await new Promise(resolve => setTimeout(resolve, 3000));
       console.log(`Waiting for the index to be updated then retry the search for video ${videoId} in index ${videoIndex}`);
       return updateVideoSegments(videoIndex, videoId, segments);
@@ -1581,19 +1108,15 @@ async function updateVideoSegments(videoIndex: string, videoId: string, segments
 
     console.log(`video segments updated search result for video ${videoId} in index ${videoIndex}:`, searchResult.hits.hits[0]);
 
-    // Get the OpenSearch document ID
     const documentId = searchResult.hits.hits[0]._id;
-    
-    // Format new segments for addition
+
     const formattedSegments = segments.map(segment => ({
       ...segment,
       segment_id: segment.segment_id || `unassigned_segment_id`,
-      // Update the embedding field if it exists
       segment_visual: {
         ...segment.segment_visual,
         segment_visual_embedding: segment.segment_visual?.segment_visual_embedding || []
       },
-      // Only include segment_audio if it has a valid embedding
       ...(segment.segment_audio?.segment_audio_embedding &&
            Array.isArray(segment.segment_audio.segment_audio_embedding) &&
            segment.segment_audio.segment_audio_embedding.length > 0
@@ -1605,7 +1128,6 @@ async function updateVideoSegments(videoIndex: string, videoId: string, segments
         : {})
     }));
 
-    // Use withRetry for the OpenSearch update operation to handle version conflicts
     try {
       await withRetry(
         async () => openSearch.update({
@@ -1618,12 +1140,12 @@ async function updateVideoSegments(videoIndex: string, videoId: string, segments
                 if (ctx._source.video_segments == null) {
                   ctx._source.video_segments = [];
                 }
-                
+
                 // Update existing segments with new data or add new ones
                 for (int i = 0; i < params.newSegments.length; i++) {
                   def newSegment = params.newSegments[i];
                   def found = false;
-                  
+
                   // Try to find existing segment with same segment_id
                   for (int j = 0; j < ctx._source.video_segments.length; j++) {
                     if (ctx._source.video_segments[j].segment_id == newSegment.segment_id) {
@@ -1633,13 +1155,13 @@ async function updateVideoSegments(videoIndex: string, videoId: string, segments
                       break;
                     }
                   }
-                  
+
                   // If not found, add as new segment
                   if (!found) {
                     ctx._source.video_segments.add(newSegment);
                   }
                 }
-                
+
                 // Update the segment count and status
                 ctx._source.segment_count = ctx._source.video_segments.length;
                 ctx._source.video_status = params.video_status;
@@ -1647,18 +1169,15 @@ async function updateVideoSegments(videoIndex: string, videoId: string, segments
               `,
               params: {
                 newSegments: formattedSegments.map(segment => {
-                  // Create a clean segment object with all the required fields
                   const formattedSegment = {
                     ...segment,
                     segment_id: segment.segment_id || `unassigned_segment_id`,
-                    // Ensure the visual embedding is included
                     segment_visual: {
                       ...segment.segment_visual,
                       segment_visual_embedding: segment.segment_visual?.segment_visual_embedding || []
                     }
                   };
-                  
-                  // Only include audio embedding if it exists and is not empty
+
                   if (segment.segment_audio &&
                       Array.isArray(segment.segment_audio.segment_audio_embedding) &&
                       segment.segment_audio.segment_audio_embedding.length > 0) {
@@ -1666,17 +1185,16 @@ async function updateVideoSegments(videoIndex: string, videoId: string, segments
                       segment_audio_embedding: segment.segment_audio.segment_audio_embedding
                     };
                   }
-                  // Don't include segment_audio at all if there's no valid embedding
-                  
+
                   return formattedSegment;
                 }),
-                video_status: 'ready_for_shots',
+                video_status: 'processing',
                 updated_at: new Date().toISOString(),
               }
             }
           }
         }),
-        6, // Use 6 retries to handle concurrent update conflicts
+        6,
         `Update segments for video ${videoId} in index ${videoIndex}`
       );
       console.log(`Successfully updated segments for video ${videoId} in index ${videoIndex}`);
@@ -1685,274 +1203,6 @@ async function updateVideoSegments(videoIndex: string, videoId: string, segments
     }
   } catch (error) {
     console.error(`Error updating video segments for video ${videoId} in index ${videoIndex}:`, error);
-    throw error;
-  }
-}
-
-async function getLabelDetectionResults(jobId: string): Promise<any[]> {
-  // Refer to https://docs.aws.amazon.com/rekognition/latest/dg/labels-detecting-labels-video.html for the response format
-  const labels: any[] = [];
-  let nextToken: string | undefined;
-
-  do {
-    const response = await rekognition.send(new GetLabelDetectionCommand({
-      JobId: jobId,
-      NextToken: nextToken,
-      SortBy: 'TIMESTAMP'
-    }));
-
-    if (response.Labels) {
-      labels.push(...response.Labels);
-    }
-    nextToken = response.NextToken;
-  } while (nextToken);
-
-  return labels;
-}
-
-async function updateVideoLabels(videoIndex: string, videoId: string, labels: any[]): Promise<void> {
-  try {
-    // First get existing video metadata using search instead of direct ID get
-    const { body: searchResult } = await openSearch.search({
-      index: videoIndex,
-      body: {
-        query: {
-          term: {
-            video_id: videoId
-          }
-        }
-      }
-    });
-
-    if (!searchResult.hits || !searchResult.hits.hits || searchResult.hits.hits.length === 0) {
-      // Waiting the index to be updated then retry the search
-      await new Promise(resolve => setTimeout(resolve, 3000));
-      console.log(`Waiting for the index to be updated then retry the search for video ${videoId} in index ${videoIndex}`);
-      return updateVideoLabels(videoIndex, videoId, labels);
-    }
-
-    console.log(`video labels updated search result for video ${videoId} in index ${videoIndex}:`, searchResult.hits.hits[0]);
-    const documentId = searchResult.hits.hits[0]._id;
-    
-    // Define types for better TypeScript support
-    interface LabelInfo {
-      name: string;
-      categories: any[];
-      aliases: any[];
-      parents: any[];
-      confidence: number;
-      instances: Array<{
-        boundingBox: any;
-        confidence: number;
-      }>;
-    }
-    
-    interface TimestampedLabels {
-      [timestamp: string]: LabelInfo[];
-    }
-
-    // Organize labels by timestamp to match the Rekognition structure
-    const labelsByTimestamp: TimestampedLabels = {};
-    labels.forEach(label => {
-      const timestamp = label.Timestamp.toString();
-      if (!labelsByTimestamp[timestamp]) {
-        labelsByTimestamp[timestamp] = [];
-      }
-      labelsByTimestamp[timestamp].push({
-        name: label.Label.Name,
-        categories: label.Label.Categories || [],
-        aliases: label.Label.Aliases || [],
-        parents: label.Label.Parents || [],
-        // Confidence is a float, convert to integer for OpenSearch
-        confidence: Math.round(label.Label.Confidence),
-        instances: label.Label.Instances?.map((instance: any) => ({
-          boundingBox: {
-            Left: Math.round(instance.BoundingBox.Left || 0),
-            Top: Math.round(instance.BoundingBox.Top || 0),
-            Width: Math.round(instance.BoundingBox.Width || 0),
-            Height: Math.round(instance.BoundingBox.Height || 0)
-          },
-          confidence: Math.round(instance.Confidence)
-        })) || []
-      });
-    });
-
-    // Convert to array structure for easier processing in OpenSearch
-    const formattedLabels = Object.entries(labelsByTimestamp).map(([timestamp, labelArray]: [string, LabelInfo[]]) => ({
-      timestamp: parseInt(timestamp),
-      labels: labelArray
-    }));
-
-    // Use withRetry with script-based update for AOSS compatibility and version conflict handling
-    await withRetry(
-      async () => openSearch.update({
-        index: videoIndex,
-        id: documentId,
-        body: {
-          script: {
-            source: `
-              // Set video_objects with our formatted label structure
-              ctx._source.video_objects = params.formattedLabels;
-              ctx._source.video_status = params.video_status;
-              ctx._source.updated_at = params.updated_at;
-            `,
-            params: {
-              formattedLabels: formattedLabels,
-              video_status: "ready_for_object",
-              updated_at: new Date().toISOString()
-            }
-          }
-        }
-      }),
-      5, // Use 5 retries to handle concurrent update conflicts
-      `Update labels for video ${videoId} in index ${videoIndex}`
-    );
-    console.log(`Successfully updated video labels for video ${videoId} in index ${videoIndex}`);
-
-    // Use UpdateCommand to update only specific attributes, also update video_objects_completed flag to true
-    await withRetry(
-      async () => docClient.send(new UpdateCommand({
-        TableName: process.env.INDEXES_TABLE,
-        Key: { 
-          indexId: videoIndex,
-          videoId 
-        },
-        UpdateExpression: "SET video_status = :status, video_objects_completed = :video_objects_completed",
-        ExpressionAttributeValues: {
-          ":status": "ready_for_object",
-          ":video_objects_completed": true
-        }
-      })),
-      3,
-      `Update indexes table with status ready_for_object`
-    );
-
-  } catch (error) {
-    console.error(`Error updating video labels for video ${videoId}:`, error);
-    throw error;
-  }
-}
-
-async function getFaceDetectionResults(jobId: string): Promise<any[]> {
-  // Refer to https://docs.aws.amazon.com/rekognition/latest/dg/faces-sqs-video.html for the response format
-  const faces: any[] = [];
-  let nextToken: string | undefined;
-
-  do {
-    const response = await rekognition.send(new GetFaceDetectionCommand({
-      JobId: jobId,
-      NextToken: nextToken
-    }));
-
-    if (response.Faces) {
-      faces.push(...response.Faces);
-    }
-    nextToken = response.NextToken;
-  } while (nextToken);
-
-  return faces;
-}
-
-async function updateVideoFaces(videoIndex: string, videoId: string, faces: any[]): Promise<void> {
-  try {
-    // First get existing video metadata using search instead of direct ID get
-    const { body: searchResult } = await openSearch.search({
-      index: videoIndex,
-      body: {
-        query: {
-          term: {
-            video_id: videoId
-          }
-        }
-      }
-    });
-
-    if (!searchResult.hits || !searchResult.hits.hits || searchResult.hits.hits.length === 0) {
-      // Waiting the index to be updated then retry the search
-      await new Promise(resolve => setTimeout(resolve, 3000));
-      console.log(`Waiting for the index to be updated then retry the search for video ${videoId} in index ${videoIndex}`);
-      return updateVideoFaces(videoIndex, videoId, faces);
-    }
-
-    console.log(`video faces updated search result for video ${videoId} in index ${videoIndex}:`, searchResult.hits.hits[0]);
-    const documentId = searchResult.hits.hits[0]._id;
-    const existingVideo = searchResult.hits.hits[0]._source;
-
-    // Update the video_faces field with enhanced face data
-    existingVideo.video_faces = faces.map(face => {
-      // Map bounding box with appropriate casing
-      const boundingBox = {
-        left: face.Face.BoundingBox?.Left || 0,
-        top: face.Face.BoundingBox?.Top || 0,
-        width: face.Face.BoundingBox?.Width || 0,
-        height: face.Face.BoundingBox?.Height || 0
-      };
-
-      // Map landmarks if present
-      const landmarks = face.Face.Landmarks?.map((landmark: any) => ({
-        type: landmark.Type.toLowerCase(),
-        x: landmark.X,
-        y: landmark.Y
-      }));
-
-      // Map pose if present
-      const pose = face.Face.Pose ? {
-        pitch: face.Face.Pose.Pitch,
-        roll: face.Face.Pose.Roll,
-        yaw: face.Face.Pose.Yaw
-      } : undefined;
-
-      // Map quality if present
-      const quality = face.Face.Quality ? {
-        brightness: face.Face.Quality.Brightness,
-        sharpness: face.Face.Quality.Sharpness
-      } : undefined;
-
-      // Return complete face detection object
-      return {
-        confidence: face.Face.Confidence,
-        bounding_box: boundingBox,
-        landmarks: landmarks,
-        pose: pose,
-        quality: quality,
-        timestamp: face.Timestamp
-      };
-    });
-
-    // Use withRetry for the OpenSearch update operation to handle version conflicts
-    await withRetry(
-      async () => openSearch.update({
-        index: videoIndex,
-        id: documentId,
-        body: {
-          doc: existingVideo
-        }
-      }),
-      5, // Use 5 retries to handle concurrent update conflicts
-      `Update faces for video ${videoId} in index ${videoIndex}`
-    );
-    console.log(`Successfully updated video faces for video ${videoId} in index ${videoIndex}`);
-
-    // Use UpdateCommand to update only specific attributes, also update video_faces_completed flag to true
-    await withRetry(
-      async () => docClient.send(new UpdateCommand({
-        TableName: process.env.INDEXES_TABLE,
-        Key: { 
-          indexId: videoIndex,
-          videoId 
-        },
-        UpdateExpression: "SET video_status = :status, video_faces_completed = :video_faces_completed",
-        ExpressionAttributeValues: {
-          ":status": "ready_for_face",
-          ":video_faces_completed": true
-        }
-      })),
-      3,
-      `Update indexes table with status ready_for_face`
-    );
-
-  } catch (error) {
-    console.error(`Error updating video faces for video ${videoId}:`, error);
     throw error;
   }
 }

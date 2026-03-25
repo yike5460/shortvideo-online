@@ -96,6 +96,7 @@ const openSearch = new Client({
 });
 
 const bedrock = new BedrockRuntimeClient({});
+const bedrockMarengo = new BedrockRuntimeClient({ region: process.env.TWELVELABS_REGION || 'us-east-1' });
 const s3 = new S3Client({});
 let redisClient: RedisClientType | null = null;
 const dynamoClient = new DynamoDBClient({endpoint: process.env.INDEXES_TABLE_DYNAMODB_DNS_NAME});
@@ -103,8 +104,7 @@ const docClient = DynamoDBDocumentClient.from(dynamoClient);
 
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY || '';
 const VALIDATION_MODEL = process.env.VALIDATION_MODEL || 'gemini'; // 'gemini' or 'nova'
-const BEDROCK_MULTIMODAL_MODEL_ID = process.env.BEDROCK_EMBEDDING_MODEL_ID || 'amazon.titan-embed-image-v1';
-const BEDROCK_TEXT_MODEL_ID = process.env.BEDROCK_TEXT_EMBEDDING_MODEL_ID || 'amazon.titan-embed-text-v2:0';
+const MARENGO_MODEL_ID = process.env.BEDROCK_EMBEDDING_MODEL_ID || 'us.twelvelabs.marengo-embed-3-0-v1:0';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -122,11 +122,9 @@ const STATUS_CODES = {
 };
 
 /**
- * Generate embeddings for a search query using Amazon Bedrock Titan.
- * For text search queries, we generate both:
- * - A multimodal embedding (via Titan Multimodal) for visual similarity search
- * - A text embedding (via Titan Text) for audio/transcript similarity search
- * Both use the same text input, producing 1024-dimensional vectors.
+ * Generate embeddings for a search query using TwelveLabs Marengo Embed 3.0.
+ * Single Marengo call produces a 512-dim embedding in a unified space that works
+ * for both visual and audio similarity search.
  */
 async function generateEmbedding(text: string): Promise<{
   vision_embedding: number[] | undefined;
@@ -140,46 +138,31 @@ async function generateEmbedding(text: string): Promise<{
   }
 
   try {
-    console.log(`Generating embeddings via Bedrock Titan for query: ${text}`);
+    console.log(`Generating embedding for query via Marengo Embed 3.0: ${text}`);
 
-    // Generate both embeddings in parallel
-    const [multimodalResult, textResult] = await Promise.all([
-      // Titan Multimodal Embeddings - text input for cross-modal visual search
-      bedrock.send(new InvokeModelCommand({
-        modelId: BEDROCK_MULTIMODAL_MODEL_ID,
-        contentType: 'application/json',
-        accept: 'application/json',
-        body: JSON.stringify({
-          inputText: text,
-          embeddingConfig: { outputEmbeddingLength: 1024 }
-        })
-      })),
-      // Titan Text Embeddings - for audio/transcript search
-      bedrock.send(new InvokeModelCommand({
-        modelId: BEDROCK_TEXT_MODEL_ID,
-        contentType: 'application/json',
-        accept: 'application/json',
-        body: JSON.stringify({
-          inputText: text,
-          dimensions: 1024,
-          normalize: true
-        })
-      }))
-    ]);
+    const response = await bedrockMarengo.send(new InvokeModelCommand({
+      modelId: MARENGO_MODEL_ID,
+      contentType: 'application/json',
+      accept: 'application/json',
+      body: JSON.stringify({
+        inputType: 'text',
+        text: { inputText: text }
+      })
+    }));
 
-    const multimodalParsed = JSON.parse(new TextDecoder().decode(multimodalResult.body));
-    const textParsed = JSON.parse(new TextDecoder().decode(textResult.body));
+    const result = JSON.parse(new TextDecoder().decode(response.body));
 
-    const visionEmbedding = multimodalParsed.embedding && Array.isArray(multimodalParsed.embedding)
-      ? multimodalParsed.embedding as number[] : undefined;
-    const audioEmbedding = textParsed.embedding && Array.isArray(textParsed.embedding)
-      ? textParsed.embedding as number[] : undefined;
+    if (result.data?.[0]?.embedding && Array.isArray(result.data[0].embedding)) {
+      const embedding = result.data[0].embedding as number[];
+      console.log(`Successfully generated Marengo embedding, length: ${embedding.length}`);
+      // Reuse same embedding for both vision and audio search (unified embedding space)
+      return { vision_embedding: embedding, audio_embedding: embedding };
+    }
 
-    console.log(`Successfully generated embeddings: Vision embedding length: ${visionEmbedding?.length || 0}, Audio embedding length: ${audioEmbedding?.length || 0}`);
-
-    return { vision_embedding: visionEmbedding, audio_embedding: audioEmbedding };
+    console.warn('Unexpected response format from Marengo Embed 3.0:', JSON.stringify(result).substring(0, 200));
+    return defaultResponse;
   } catch (error) {
-    console.error('Error generating embeddings via Bedrock Titan:', error);
+    console.error('Error generating embedding via Marengo Embed 3.0:', error);
     return defaultResponse;
   }
 }
