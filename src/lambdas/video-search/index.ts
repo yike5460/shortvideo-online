@@ -652,16 +652,14 @@ const transformSearchResults = async (hits: any[], selectedIndex?: string): Prom
             // 2. Segments that score highly in both functions can appear multiple times
             //    when OpenSearch ranks segments and returns top N inner hits
             
-            // Normalize the score relative to the highest score within this video, not used for now
+            // Normalize the score relative to the highest score within this video
             const normalizedScore = maxInnerScore > 0 ? score / maxInnerScore : 0;
-            // segmentScores.set(segment.segment_id, normalizedScore);
-            segmentScores.set(segment.segment_id, score);
-            
-            // Add to matched segments with score
+            segmentScores.set(segment.segment_id, normalizedScore);
+
+            // Add to matched segments with normalized score
             matchedSegments.push({
               ...segment,
-              // confidence: normalizedScore,
-              confidence: score,
+              confidence: normalizedScore,
               _offset: offset,
               _raw_score: score
             });
