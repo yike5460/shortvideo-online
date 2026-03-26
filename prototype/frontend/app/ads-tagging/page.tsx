@@ -401,8 +401,7 @@ interface TagStatistics {
 
 // Define AI models
 const AVAILABLE_MODELS = [
-  { id: 'gemini-2.5-flash', name: 'Google Gemini 2.5 Flash' },
-  { id: 'nova', name: 'Amazon Nova' }
+  { id: 'pegasus-1.2', name: 'TwelveLabs Pegasus v1.2' }
 ];
 
 // Analysis types for enhanced video content analysis
@@ -691,7 +690,7 @@ export default function AdsTaggingPage() {
   const [errorMessage, setErrorMessage] = useState<string>('')
   const [isDropdownOpen, setIsDropdownOpen] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
-  const [selectedModel, setSelectedModel] = useState<string>('gemini-2.5-flash')
+  const [selectedModel, setSelectedModel] = useState<string>('pegasus-1.2')
   const videoRef = useRef<HTMLVideoElement>(null)
   const [isVideoModalOpen, setIsVideoModalOpen] = useState(false)
   const [tags, setTags] = useState<VideoTag[]>([])
