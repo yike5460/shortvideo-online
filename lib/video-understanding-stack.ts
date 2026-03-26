@@ -93,10 +93,10 @@ export class VideoUnderstandingStack extends Construct {
         INDEXES_TABLE: props.indexesTable.tableName,
         INDEXES_TABLE_DYNAMODB_DNS_NAME: dynamoDbEndpointDnsHttp,
         SESSIONS_TABLE: sessionsTable.tableName,
-        // Make sure the model ID is aligned with the inference profile
         NOVA_MODEL_ID: 'apac.amazon.nova-pro-v1:0',
-        // Google API key for Gemini
-        GOOGLE_API_KEY: props.googleApiKey || '',
+        CLAUDE_MODEL_ID: 'anthropic.claude-sonnet-4-6',
+        PEGASUS_MODEL_ID: 'global.twelvelabs.pegasus-1-2-v1:0',
+        AWS_ACCOUNT_ID: '705247044519',
         // SQS queue URL for async processing
         PROCESSING_QUEUE_URL: processingQueue.queueUrl,
       },

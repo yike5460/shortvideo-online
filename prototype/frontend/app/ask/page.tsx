@@ -63,7 +63,8 @@ const SAMPLE_QUESTIONS = [
 
 // Available AI models for video understanding
 const AVAILABLE_MODELS: AIModel[] = [
-  { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash' },
+  { id: 'claude-sonnet-4.6', name: 'Claude Sonnet 4.6' },
+  { id: 'pegasus-1.2', name: 'TwelveLabs Pegasus' },
   { id: 'nova', name: 'Amazon Nova' }
 ];
 

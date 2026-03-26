@@ -11,7 +11,6 @@ import { defaultProvider } from '@aws-sdk/credential-provider-node';
 import { AwsSigv4Signer } from '@opensearch-project/opensearch/aws';
 import { v4 as uuidv4 } from 'uuid';
 import * as crypto from 'crypto';
-import { GoogleGenAI } from '@google/genai';
 import * as fs from 'fs-extra';
 import * as os from 'os';
 import * as path from 'path';
@@ -32,8 +31,9 @@ const SESSIONS_TABLE = process.env.SESSIONS_TABLE || 'VideoUnderstandingSessions
 const SESSION_TTL = 60 * 60; // 1 hour in seconds
 // Make sure the region is aligned with the inference profile
 const NOVA_MODEL_ID = process.env.NOVA_MODEL_ID || 'apac.amazon.nova-pro-v1:0';
-// Google API key for Gemini
-const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY || '';
+const CLAUDE_MODEL_ID = process.env.CLAUDE_MODEL_ID || 'anthropic.claude-sonnet-4-6';
+const PEGASUS_MODEL_ID = process.env.PEGASUS_MODEL_ID || 'global.twelvelabs.pegasus-1-2-v1:0';
+const AWS_ACCOUNT_ID = process.env.AWS_ACCOUNT_ID || '705247044519';
 // SQS queue for async processing
 const PROCESSING_QUEUE_URL = process.env.PROCESSING_QUEUE_URL || '';
 
@@ -312,24 +312,14 @@ interface ModelProcessor {
 function getModelProcessor(model?: string): ModelProcessor {
   switch (model) {
     case 'nova':
-      return {
-        processVideo: processVideoWithNova
-      };
-    case 'gemini-2.5-flash':
-      return {
-        processVideo: processVideoWithGemini
-      };
+      return { processVideo: processVideoWithNova };
+    case 'claude-sonnet-4.6':
+      return { processVideo: processVideoWithClaude };
+    case 'pegasus-1.2':
+      return { processVideo: processVideoWithPegasus };
     default:
-      // Default behavior: use Google Gemini if API key exists, otherwise Nova
-      return {
-        processVideo: async (s3Path: string, question: string, videoMetadata?: any, bypassPromptEnhancement?: boolean) => {
-          if (GOOGLE_API_KEY) {
-            return processVideoWithGemini(s3Path, question, videoMetadata, bypassPromptEnhancement);
-          } else {
-            return processVideoWithNova(s3Path, question, videoMetadata, bypassPromptEnhancement);
-          }
-        }
-      };
+      // Default: Claude Sonnet 4.6 (best quality), fallback to Nova
+      return { processVideo: processVideoWithClaude };
   }
 }
 
@@ -573,206 +563,110 @@ async function downloadVideoFromS3(s3Path: string): Promise<string> {
   }
 }
 
-// Helper function to process video with Google Gemini
-async function processVideoWithGemini(s3Path: string, question: string, videoMetadata?: any, bypassPromptEnhancement?: boolean): Promise<string> {
-  if (!GOOGLE_API_KEY) {
-    throw new Error('Google API key not configured');
-  }
-  
-  // Get video metadata if not provided
-  videoMetadata = videoMetadata || {
-    duration: 0,
-    fps: 1,
-    startTime: '00:00:00'
-  };
-  
-  // Enhance the prompt based on question type, unless bypassing enhancement
+// Helper function to process video with TwelveLabs Pegasus v1.2
+async function processVideoWithPegasus(s3Path: string, question: string, videoMetadata?: any, bypassPromptEnhancement?: boolean): Promise<string> {
+  videoMetadata = videoMetadata || { duration: 0, fps: 1, startTime: '00:00:00' };
   const shouldBypass = bypassPromptEnhancement === true;
   const enhancedPrompt = shouldBypass ? question : enhancePrompt(question, videoMetadata);
-  
-  // Log the bypass status for debugging
-  console.log(`Gemini processing - bypassPromptEnhancement: ${bypassPromptEnhancement} (${typeof bypassPromptEnhancement})`);
-  console.log(`shouldBypass: ${shouldBypass}`);
-  console.log(`Original question: ${question}`);
-  console.log(`Enhanced prompt: ${enhancedPrompt.substring(0, 200)}...`);
-  
-  let tempVideoPath: string | null = null;
-  
+
   try {
-    // Download video from S3 to temporary file
-    tempVideoPath = await downloadVideoFromS3(s3Path);
-    
-    const ai = new GoogleGenAI({
-      apiKey: GOOGLE_API_KEY
-    });
-    
-    // Check if temporary file exists before we read and invoke the API
-    if (!fs.existsSync(tempVideoPath)) {
-      throw new Error('Temporary video file does not exist');
+    let bucket = VIDEO_BUCKET;
+    let key = s3Path;
+    if (s3Path.startsWith('s3://')) {
+      const parts = s3Path.replace('s3://', '').split('/');
+      bucket = parts[0];
+      key = parts.slice(1).join('/');
     }
 
-    // Read video file as base64
-    const base64VideoFile = fs.readFileSync(tempVideoPath, {
-      encoding: 'base64'
-    });
-    
-    // Prepare the content for Google GenAI API
-    const contents = [
-      {
-        inlineData: {
-          mimeType: 'video/mp4',
-          data: base64VideoFile
+    console.log(`Pegasus processing video: s3://${bucket}/${key}`);
+    const response = await bedrock.send(new InvokeModelCommand({
+      modelId: PEGASUS_MODEL_ID,
+      contentType: 'application/json',
+      accept: 'application/json',
+      body: JSON.stringify({
+        inputPrompt: enhancedPrompt,
+        mediaSource: {
+          s3Location: {
+            uri: `s3://${bucket}/${key}`,
+            bucketOwner: AWS_ACCOUNT_ID
+          }
         }
-      },
-      {
-        text: enhancedPrompt
-      }
-    ];
-    
-    // Call the Google GenAI API
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: contents,
-      config: {
-        thinkingConfig: {
-          thinkingBudget: 128
-        },
-      },
-    });
+      })
+    }));
 
-    console.log('Gemini response:', response);
-    
-    // Log detailed response structure for debugging
-    console.log('Gemini response structure:', {
-      promptFeedback: response.promptFeedback,
-      candidates: response.candidates?.map(c => ({
-        finishReason: c.finishReason,
-        safetyRatings: c.safetyRatings,
-        hasContent: !!c.content
-      })),
-      usageMetadata: response.usageMetadata
-    });
-    
-    // Check for prohibited content or other safety issues
-    if (response.promptFeedback?.blockReason) {
-      const blockReason = response.promptFeedback.blockReason;
-      console.warn(`Gemini content blocked due to: ${blockReason}`);
-      
-      // Provide detailed error messages based on block reason
-      // Convert blockReason to string for comparison since it might be an enum
-      const blockReasonStr = String(blockReason);
-      
-      switch (blockReasonStr) {
-        case 'PROHIBITED_CONTENT':
-          throw new Error('Video content violates Gemini safety policies (prohibited content detected). Please use a different video or try with a different AI model.');
-        case 'SAFETY':
-          throw new Error('Video content flagged by Gemini safety filters. Please review the content and try again with a different video.');
-        case 'VIOLENCE':
-          throw new Error('Video content contains violence that violates Gemini safety policies. Please use a different video.');
-        case 'HARASSMENT':
-          throw new Error('Video content contains harassment that violates Gemini safety policies. Please use a different video.');
-        case 'HATE_SPEECH':
-          throw new Error('Video content contains hate speech that violates Gemini safety policies. Please use a different video.');
-        case 'SEXUALLY_EXPLICIT':
-          throw new Error('Video content contains sexually explicit material that violates Gemini safety policies. Please use a different video.');
-        case 'DANGEROUS_CONTENT':
-          throw new Error('Video content contains dangerous content that violates Gemini safety policies. Please use a different video.');
-        default:
-          throw new Error(`Video content blocked by Gemini safety filters: ${blockReasonStr}. Please try with a different video or use a different AI model.`);
-      }
+    const result = JSON.parse(new TextDecoder().decode(response.body));
+    const text = result.message || result.text || '';
+    if (!text.trim()) {
+      throw new Error('Pegasus returned an empty response');
     }
-    
-    // Check if response has candidates (successful generation)
-    if (!response.candidates || response.candidates.length === 0) {
-      console.warn('Gemini response has no candidates');
-      throw new Error('Gemini failed to generate content for this video. This may be due to content safety policies or technical issues. Please try with a different video or AI model.');
-    }
-    
-    // Check if the first candidate has a finish reason indicating issues
-    const firstCandidate = response.candidates[0];
-    if (firstCandidate.finishReason && firstCandidate.finishReason !== 'STOP') {
-      console.warn(`Gemini generation stopped due to: ${firstCandidate.finishReason}`);
-      
-      // Convert finishReason to string for comparison since it might be an enum
-      const finishReasonStr = String(firstCandidate.finishReason);
-      
-      switch (finishReasonStr) {
-        case 'SAFETY':
-          throw new Error('Gemini stopped generation due to safety concerns. Please try with a different video or use a different AI model.');
-        case 'RECITATION':
-          throw new Error('Gemini stopped generation due to potential copyright concerns. Please try with a different video.');
-        case 'MAX_TOKENS':
-          throw new Error('Gemini response was truncated due to length limits. The analysis may be incomplete.');
-        case 'OTHER':
-          throw new Error('Gemini stopped generation due to an unspecified reason. Please try again or use a different AI model.');
-        default:
-          throw new Error(`Gemini generation stopped unexpectedly: ${finishReasonStr}. Please try again.`);
-      }
-    }
-    
-    // Parse the response text
-    const analysisText = response.text || '';
-    
-    // If we still don't have any text, something went wrong
-    if (!analysisText.trim()) {
-      throw new Error('Gemini returned an empty response. This may indicate content safety issues or technical problems. Please try with a different video or AI model.');
-    }
-    
-    return analysisText;
-    
+    return text;
   } catch (error) {
-    console.error('Error processing video with Gemini:', error);
-    
-    // Handle specific error types
-    if (error instanceof Error) {
-      // If it's already our custom error message, re-throw as-is
-      if (error.message.includes('Gemini') || error.message.includes('safety policies') || error.message.includes('content blocked')) {
-        throw error;
-      }
-      
-      // Handle API-related errors
-      if (error.message.includes('API key') || error.message.includes('authentication')) {
-        throw new Error('Google API key is invalid or not properly configured. Please check your API key configuration.');
-      }
-      
-      if (error.message.includes('quota') || error.message.includes('rate limit')) {
-        throw new Error('Google API quota exceeded or rate limit reached. Please try again later or contact your administrator.');
-      }
-      
-      if (error.message.includes('network') || error.message.includes('timeout')) {
-        throw new Error('Network error occurred while communicating with Google Gemini API. Please try again.');
-      }
-      
-      if (error.message.includes('invalid request') || error.message.includes('bad request')) {
-        throw new Error('Invalid request sent to Google Gemini API. This may be due to video format issues or corrupted content.');
-      }
-      
-      // Handle file system errors
-      if (error.message.includes('ENOENT') || error.message.includes('file does not exist')) {
-        throw new Error('Video file could not be accessed or processed. Please try uploading the video again.');
-      }
-      
-      if (error.message.includes('EACCES') || error.message.includes('permission denied')) {
-        throw new Error('Permission denied while processing video file. Please contact your administrator.');
-      }
-      
-      // Generic error with more context
-      throw new Error(`Gemini video processing failed: ${error.message}. Please try with a different video or use a different AI model.`);
+    console.error('Error processing video with Pegasus:', error);
+    throw new Error(`Pegasus video processing failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
+
+// Helper function to process video with Claude Sonnet 4.6
+async function processVideoWithClaude(s3Path: string, question: string, videoMetadata?: any, bypassPromptEnhancement?: boolean): Promise<string> {
+  videoMetadata = videoMetadata || { duration: 0, fps: 1, startTime: '00:00:00' };
+  const shouldBypass = bypassPromptEnhancement === true;
+  const enhancedPrompt = shouldBypass ? question : enhancePrompt(question, videoMetadata);
+  let tempVideoPath: string | null = null;
+
+  try {
+    // Download video from S3 and encode as base64
+    tempVideoPath = await downloadVideoFromS3(s3Path);
+    const videoBase64 = fs.readFileSync(tempVideoPath, { encoding: 'base64' });
+    const format = s3Path.split('.').pop()?.toLowerCase() || 'mp4';
+
+    console.log(`Claude processing video: ${s3Path} (${(videoBase64.length * 0.75 / 1024 / 1024).toFixed(1)}MB)`);
+
+    const response = await bedrock.send(new InvokeModelCommand({
+      modelId: CLAUDE_MODEL_ID,
+      contentType: 'application/json',
+      accept: 'application/json',
+      body: JSON.stringify({
+        anthropic_version: 'bedrock-2023-05-31',
+        max_tokens: 4096,
+        messages: [{
+          role: 'user',
+          content: [
+            {
+              type: 'video',
+              source: {
+                type: 'base64',
+                media_type: `video/${format}`,
+                data: videoBase64
+              }
+            },
+            {
+              type: 'text',
+              text: enhancedPrompt
+            }
+          ]
+        }]
+      })
+    }));
+
+    const result = JSON.parse(new TextDecoder().decode(response.body));
+    const text = result.content?.[0]?.text || '';
+    if (!text.trim()) {
+      throw new Error('Claude returned an empty response');
     }
-    
-    // Handle unknown error types
-    throw new Error('An unknown error occurred while processing the video with Gemini. Please try again or use a different AI model.');
+    return text;
+  } catch (error) {
+    console.error('Error processing video with Claude:', error);
+    throw new Error(`Claude video processing failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
   } finally {
-    // Clean up temporary file
     if (tempVideoPath) {
-      try {
-        fs.unlinkSync(tempVideoPath);
-        console.log(`Cleaned up temporary file: ${tempVideoPath}`);
-      } catch (cleanupError) {
-        console.warn(`Failed to clean up temporary file ${tempVideoPath}:`, cleanupError);
-      }
+      try { fs.unlinkSync(tempVideoPath); } catch (_) {}
     }
   }
+}
+
+// Legacy Gemini stub - redirects to Claude
+async function processVideoWithGemini(s3Path: string, question: string, videoMetadata?: any, bypassPromptEnhancement?: boolean): Promise<string> {
+  return processVideoWithClaude(s3Path, question, videoMetadata, bypassPromptEnhancement);
 }
 
 // Handler for initializing an async processing session
