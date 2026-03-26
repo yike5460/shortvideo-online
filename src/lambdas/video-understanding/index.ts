@@ -310,17 +310,8 @@ interface ModelProcessor {
 
 // Factory function to get the appropriate model processor
 function getModelProcessor(model?: string): ModelProcessor {
-  switch (model) {
-    case 'nova':
-      return { processVideo: processVideoWithNova };
-    case 'claude-sonnet-4.6':
-      return { processVideo: processVideoWithClaude };
-    case 'pegasus-1.2':
-      return { processVideo: processVideoWithPegasus };
-    default:
-      // Default: Claude Sonnet 4.6 (best quality), fallback to Nova
-      return { processVideo: processVideoWithClaude };
-  }
+  // TwelveLabs Pegasus v1.2 is the only model — best video understanding quality
+  return { processVideo: processVideoWithPegasus };
 }
 
 // Helper function to get video details from DynamoDB
